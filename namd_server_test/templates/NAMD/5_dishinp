@@ -1,0 +1,22 @@
+&NAMDPARA
+BMIN       = 176
+BMAX       = 179
+
+NSAMPLE    = 100
+NTRAJ      = 1000
+NSW        = 999
+NELM       = 10
+
+TEMP       = 300
+NAMDTIME   = 10000000
+POTIM      = 1.0
+
+ALGO       = "DISH"
+ALGO_INT   = 0
+LHOLE      = .FALSE.
+LSHP       = .TRUE.
+LCPTXT     = .TRUE.
+LBINOUT    = .TRUE.  ! binary output, speed up after processing
+
+DEBUGLEVEL = "I"
+/

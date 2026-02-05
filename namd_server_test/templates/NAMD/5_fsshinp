@@ -1,0 +1,22 @@
+&NAMDPARA
+BMIN       = 310
+BMAX       = 324
+
+NSAMPLE    = 100
+NTRAJ      = 10000
+NSW        = 1999
+NELM       = 1000
+
+TEMP       = 300
+NAMDTIME   = 1000
+POTIM      = 1.0
+
+ALGO       = "FSSH"
+ALGO_INT   = 0
+LHOLE      = .TRUE.
+LSHP       = .TRUE.
+LCPTXT     = .TRUE.
+! LBINOUT    = .FALSE.
+
+DEBUGLEVEL = "I"
+/

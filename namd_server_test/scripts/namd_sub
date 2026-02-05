@@ -1,0 +1,46 @@
+#!/bin/bash
+#SBATCH -J job111_step5
+#SBATCH -N 2
+#SBATCH --ntasks-per-node=64
+#SBATCH -p queue1-1
+#SBATCH -t 10-00:00:00
+#SBATCH --exclusive
+
+module purge 
+module load compiler/intel/2021.3.0
+module load mpi/intelmpi/2021.3.0
+source /public/home/yaodongqi/anaconda3/bin/activate
+conda activate ML_DFT
+
+BMIN=105
+BMAX=113
+METHOD=FSSH
+
+if [ "$METHOD" == "DISH" ]; then
+    python input.py
+
+    cp "CAeig_${BMIN}_${BMAX}_ispin1_k1_ps_real.txt" EIGTXT
+    cp "CAnac_${BMIN}_${BMAX}_ispin1_k1_ps_real_re.txt" NATXT
+
+    python Dephase.py
+
+    EXEC=/public/home/yaodongqi/softwares/Hefei-NAMD-DEV
+
+    mpirun -np $SLURM_NTASKS $EXEC/hfnamd
+
+    python population.py
+elif [ "$METHOD" == "FSSH" ]; then
+    python input.py
+
+    cp "CAeig_${BMIN}_${BMAX}_ispin1_k1_ps_real.txt" EIGTXT
+    cp "CAnac_${BMIN}_${BMAX}_ispin1_k1_ps_real_re.txt" NATXT
+
+    EXEC=/public/home/yaodongqi/softwares/Hefei-NAMD-DEV
+
+    mpirun -np $SLURM_NTASKS $EXEC/hfnamd
+
+    python poen_fssh.py
+else
+    echo "Unsupported METHOD: $METHOD"
+    exit 1
+fi

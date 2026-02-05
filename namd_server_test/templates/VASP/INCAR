@@ -1,0 +1,23 @@
+Global Parameters
+ISTART =  0
+ISPIN  =  1
+# MAGMOM =  
+# ICHARG =  11
+LREAL  = .FALSE.
+ENCUT  =  
+PREC   =  Accurate
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+# ADDGRID= .FALSE.
+# LVTOT  = .TRUE.
+# LVHAR  = .TRUE.
+# NELECT =
+# LPLANE = .TRUE.
+NWRITE = 1
+KPAR   = 2
+# NGXF    = 300
+# NGYF    = 300
+# NGZF    = 300
+NCORE  = 8
+ISMEAR =  0
+SIGMA  =  0.1
