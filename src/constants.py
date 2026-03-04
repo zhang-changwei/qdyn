@@ -1,0 +1,1 @@
+JOB_MANAGER_POLL_INTERVAL = 30  # seconds
