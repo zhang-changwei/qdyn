@@ -4,75 +4,69 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-QDYN is a Python toolkit that automates **non-adiabatic quasiparticle dynamics** workflows on HPC clusters. It orchestrates a 5-step pipeline combining VASP (DFT) calculations with Hefei-NAMD simulations, submitted via SLURM.
+QDYN is a Python toolkit for automating **non-adiabatic quasiparticle dynamics** workflows on HPC clusters. It is being rewritten under `src/` to support task management, multiple quantum chemistry backends, and a REST API for remote job control.
 
-## Running the Workflow
-
-There is no traditional build step. Run the test workflow directly:
+## Running the Server
 
 ```bash
-cd namd_server_test
-python run_workflow_test.py
+python main.py --server        # start the job-manager API on 0.0.0.0:8000
+python main.py                 # run the standalone workflow entry point
 ```
 
-**Prerequisites for full execution:**
+**Prerequisites:**
 - SLURM cluster with `sbatch` and `sacct`
-- VASP, vaspkit, and Hefei-NAMD executables
-- Python environment with `ase`, `numpy`, `matplotlib`
-- Intel compiler + MPI modules and `ML_DFT` conda environment
-- A `POSCAR` file placed at `./jobs/POSCAR`
-
-The test script creates a workflow with job ID `"111"`, polls status every 30 seconds, and logs to `workflow_test.log`.
+- Python environment with `fastapi`, `uvicorn[standard]`
+- Quantum chemistry executables as required by the workflow (VASP, Hefei-NAMD, etc.)
 
 ## Architecture
 
-### 5-Step Computational Pipeline
-
-```
-Step 1: Structure Optimization (SR/VASP)
-   ↓
-Step 2: NVT Equilibration (constant-temperature MD/VASP)
-   ↓
-Step 3: NVE Trajectory (microcanonical MD/VASP)
-   ↓
-Step 4: WAVECAR Calculation (SCF along trajectory/VASP)
-   ↓
-Step 5: Hefei-NAMD Simulation (DISH or FSSH method)
-```
-
-### Core Modules (`namd_server_test/`)
+### `src/` — New Core Package
 
 | File | Role |
 |------|------|
-| `workflow_manager.py` | Central orchestrator; manages all 5 steps sequentially, handles retries and failures |
-| `slurm_manager.py` | SLURM interface: `submit_job()`, `job_completed()`, `job_successful()` via `sacct` |
-| `prepare.py` | Generates input files for each step; uses vaspkit for POTCAR/KPOINTS; templates from `templates/` |
-| `postprocess.py` | Validates results after each step; checks convergence (±10% temperature for NVT); generates plots |
-| `utils.py` | `run_command()`, `check_status()`, `update_queue()` (selects SLURM queue with most idle nodes) |
-| `config.py` | All parameters: paths, SLURM scripts, defaults (300K, 1000 NVT steps, 1000 NVE steps, DISH method) |
+| `job_manager.py` | SLURM task/job management + FastAPI server (`app`). Runs a background poll loop that submits queued jobs and updates their status via `sacct`. |
+| `main_workflow.py` | Workflow orchestration (in progress). |
+| `constants.py` | Shared constants (e.g. `JOB_MANAGER_POLL_INTERVAL = 30`). |
+| `__init__.py` | Package marker. |
 
-### Job Status Tracking
+### Job Manager (`src/job_manager.py`)
 
-Status is file-based within each step directory:
-- `RUNNING` → calculation in progress
-- `ENDED` → calculation completed (pending validation)
-- `SUCCESSFUL` → passed validation checks
-- `FAILED` → error encountered
+**Domain models:**
+- `Task` — a quota-bounded resource pool (`quota` = max nodes in use at once, `used` = currently occupied nodes).
+- `Job` — a single SLURM submission bound to a `Task`. Statuses: `waiting → pending → running → <terminal>` (SLURM states lowercased: `completed`, `failed`, `cancelled`, …).
 
-`WorkflowManager` reads/writes these files; `check_status()` in `utils.py` handles all status transitions.
+**`SlurmManager`** (singleton `manager`):
+- `add_task(quota, config)` — create a `Task`; on the very first call, also registers a bootstrap job that runs `src/main.py`.
+- `delete_task(task_id)` — remove a task by UUID.
+- `register_job(task_id, command, working_dir, partition, nodes, ntasks_per_node, cpus_per_task, [dependency, mem, exclusive])` — write a `submit.sh` SLURM script and enqueue the job. Returns the job UUID.
+- `submit_jobs()` — called each poll cycle; submits `waiting` jobs that fit within their task's quota using `sbatch --parsable`.
+- `check_job_status()` — called each poll cycle; queries `sacct` and updates job statuses; decrements `task.used` when a job leaves the active state.
+- `start_polling()` / `stop_polling()` — manage the asyncio background loop (started/stopped via FastAPI `lifespan`).
 
-### Configuration
+### REST API (FastAPI, default port 8000)
 
-All parameters are in `config.py`:
-- `DEFAULT_PARAMETERS`: temperature (300K), NVT/NVE step counts, WAVECAR sampling (500 steps), simulation method (DISH/FSSH), INIBAND
-- `NAMD_INP`: band range (0–8), sampling points (50), hole vs. electron simulation
-- `SLURM_SCRIPTS`: maps step names to submission scripts in `scripts/`
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/tasks` | Create a task `{"quota": N}` → returns `TaskInfo` |
+| `GET` | `/tasks` | List all tasks |
+| `DELETE` | `/tasks/{task_id}` | Delete a task |
+| `POST` | `/jobs` | Register a job (see `JobRegister` schema) → returns `JobInfo` |
+| `GET` | `/jobs` | List all jobs |
+| `GET` | `/jobs/{job_uuid}` | Get a single job |
 
-INCAR templates live in `templates/VASP/` (one per step). NAMD input templates in `templates/NAMD/`.
+Interactive docs available at `http://localhost:8000/docs` when the server is running.
 
-### Key Patterns
+### Entry Point (`main.py`)
 
-- `prepare.py::genescf()` extracts POSCAR snapshots from NVE trajectory for batch SCF
-- NVT re-runs automatically if convergence criteria fail (recursive retry in `WorkflowManager`)
-- `update_queue()` dynamically selects the least-loaded SLURM partition at submission time
-- The deprecated `namd.py` (Flask server) is not used; `run_workflow_test.py` is the entry point
+- `python main.py --server` → calls `serve()`, which starts uvicorn with `src.job_manager:app`.
+- `python main.py` → calls `main()` (standalone workflow, placeholder).
+
+### Legacy Code (`namd_server_test/`)
+
+The original 5-step pipeline (SR → NVT → NVE → WAVECAR → Hefei-NAMD) lives here. It is **not** integrated with the new `src/` package yet and is kept for reference. Entry point: `namd_server_test/run_workflow_test.py`.
+
+## Key Patterns
+
+- Job quota enforcement is in-memory; `task.used` is decremented as soon as `sacct` reports a non-active state.
+- SLURM scripts are written to `<working_dir>/submit.sh` before submission; `--parsable` ensures a clean numeric job ID is returned.
+- The poll interval is controlled by `JOB_MANAGER_POLL_INTERVAL` in `src/constants.py`.
