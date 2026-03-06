@@ -6,9 +6,10 @@ import subprocess
 import uuid
 import logging
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict
-import yaml
+import shutil
+from typing import List, Optional, Dict, Literal
 
+import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -43,17 +44,35 @@ class Job:
 
 class SlurmManager:
 
-    def __init__(self):
+    def __init__(self, config_path: Optional[str] = None):
         self.tasks: List[Task] = []
         self.jobs: List[Job] = []
         self._poll_task: Optional[asyncio.Task] = None
+        self.config = self._load_config(config_path)
+
+    # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_config(config_path: Optional[str]) -> Dict:
+        path = config_path or os.environ.get('QDYN_CONFIG') or 'config/qdyn.yaml'
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"QDYN config file not found: {path}\n"
+                f"Create config/qdyn.yaml or set the QDYN_CONFIG environment variable."
+            )
+        with open(path) as f:
+            cfg = yaml.safe_load(f)
+        logging.info(f"Loaded config from {path}.")
+        return cfg
 
     # ------------------------------------------------------------------
     # Background poll loop
     # ------------------------------------------------------------------
 
     def start_polling(self) -> None:
-        """Schedule the poll loop as an asyncio background task."""
         self._poll_task = asyncio.create_task(self._poll_loop())
         logging.info("SlurmManager poll loop started.")
 
@@ -138,8 +157,9 @@ class SlurmManager:
     # Task management
     # ------------------------------------------------------------------
 
-    def add_task(self, quota: int, config: Dict) -> str:
+    def add_task(self, quota: int, input: Dict) -> str:
         if not self.tasks:
+            # First task: running the main workflow for each user tasks.
             logging.info("Creating first task with quota=1.")
             quota = 1
             task = Task(quota=quota)
@@ -150,21 +170,28 @@ class SlurmManager:
             
             self.register_job(
                 task.uuid, 
-                command=(
-                    f'export OMP_NUM_THREADS={config['scheduler']['cpus_per_node']}\n'
-                    f'python {main_path}'
-                ),
-                working_dir=str(main_path.parent),
-                partition=config['scheduler']['partition'],
+                command=f'python {main_path}',
+                working_dir=self.config['machine']['working_dir'],
+                partition=self.config['machine']['partition'],
                 nodes=1,
                 ntasks_per_node=1,
-                cpus_per_task=config['scheduler']['cpus_per_node'],
+                cpus_per_task='all',
                 exclusive=True,
             )
-        else:
-            task = Task(quota=quota)
-            self.tasks.append(task)
-            logging.info(f"Created task {task.uuid} with quota={quota}.")
+        # Add an ordinary task.
+        task = Task(quota=quota)
+        self.tasks.append(task)
+        
+        working_dir = pjoin(self.config['machine']['working_dir'], f'task_{task.uuid}')
+        os.makedirs(working_dir, exist_ok=True)
+
+        with open(pjoin(working_dir, 'input.yaml'), 'w') as f:
+            yaml.safe_dump(input, f)
+
+        with open(pjoin(working_dir, 'READY'), 'w') as f:
+            pass
+
+        logging.info(f"Created task {task.uuid} with quota={quota}.")
         return task.uuid
 
     def delete_task(self, task_id: str) -> None:
@@ -184,27 +211,41 @@ class SlurmManager:
         task_id: str,
         command: str,
         working_dir: str,
-        partition: str,
         nodes: int,
-        ntasks_per_node: int,
-        cpus_per_task: int,
-        dependency: str = '',
+        ntasks_per_node: Literal['all'] | int | None = 'all',
+        cpus_per_task: Literal['all'] | int | None = 1,
+        partition: Optional[str] = None,
         mem: str = '0',
         exclusive: bool = False,
+        ext_libs: str = '',
     ) -> str:
-        """Write a SLURM batch script and enqueue the job."""
-
+        """Write a SLURM batch script and enqueue the job.
+        """
         for task in self.tasks:
             if task.uuid == task_id:
                 break
         else:
             raise ValueError(f"Task {task_id} not found.")
 
-        working_dir = os.path.abspath(working_dir)
-        os.makedirs(working_dir, exist_ok=True)
+        ncpus: int = self.config['machine']['cpus_per_node']
+        partition = partition if partition is not None else self.config['machine']['partition']
+        assert not(ntasks_per_node is None and cpus_per_task is None), "At least one of ntasks_per_node or cpus_per_task must be specified."
+        if ntasks_per_node == 'all':
+            ntasks_per_node = ncpus
+        if cpus_per_task == 'all':
+            cpus_per_task = ncpus
+        if ntasks_per_node is None:
+            ntasks_per_node = ncpus // cpus_per_task # type: ignore
+        if cpus_per_task is None:
+            cpus_per_task = ncpus // ntasks_per_node
+        assert nodes <= task.quota, f"Job requires {nodes} nodes but task {task_id} has only {task.quota} quota."
+        assert 0 < ntasks_per_node * cpus_per_task <= ncpus, f"Invalid combination of ntasks_per_node={ntasks_per_node} and cpus_per_task={cpus_per_task} for {ncpus} CPUs per node."
 
-        exclusive_line = '#SBATCH --exclusive\n' if exclusive else ''
-        dependency_line = f'#SBATCH --dependency={dependency}\n' if dependency else ''
+        working_dir = os.path.abspath(working_dir)
+
+        ext_libs = ext_libs + '\n' + f'export OMP_NUM_THREADS={cpus_per_task}'
+
+        exclusive_line = '#SBATCH --exclusive' if exclusive  else ''
 
         slurm_script = (
             f'#!/bin/sh\n'
@@ -214,9 +255,9 @@ class SlurmManager:
             f'#SBATCH --ntasks-per-node={ntasks_per_node}\n'
             f'#SBATCH --cpus-per-task={cpus_per_task}\n'
             f'#SBATCH --mem={mem}\n'
-            f'#SBATCH --output=slurm-%j.out\n'
-            f'{exclusive_line}'
-            f'{dependency_line}'
+            f'{exclusive_line}\n'
+            f'\n'
+            f'{ext_libs}\n'
             f'\n'
             f'cd {working_dir}\n'
             f'{command}\n'
@@ -236,17 +277,26 @@ class SlurmManager:
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-manager = SlurmManager()
+manager: Optional[SlurmManager] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global manager
+    config_path = app.state.config_path if hasattr(app.state, 'config_path') else None
+    manager = SlurmManager(config_path)
     manager.start_polling()
     yield
     manager.stop_polling()
 
 
 app = FastAPI(title="QDYN Job Manager", lifespan=lifespan)
+
+
+def _manager() -> SlurmManager:
+    if manager is None:
+        raise RuntimeError("SlurmManager not initialised yet.")
+    return manager
 
 
 # --- Request / response schemas ---
@@ -265,13 +315,14 @@ class JobRegister(BaseModel):
     task_id: str
     command: str
     working_dir: str
-    partition: str
-    nodes: int
-    ntasks_per_node: int
-    cpus_per_task: int
+    # Scheduler fields are optional; config defaults are used when omitted.
+    partition: Optional[str] = None
+    nodes: Optional[int] = None
+    ntasks_per_node: Optional[int] = None
+    cpus_per_task: Optional[int] = None
     dependency: str = ''
-    mem: str = '0'
-    exclusive: bool = False
+    mem: Optional[str] = None
+    exclusive: Optional[bool] = None
 
 
 class JobInfo(BaseModel):
@@ -286,20 +337,21 @@ class JobInfo(BaseModel):
 
 @app.post("/tasks", response_model=TaskInfo, status_code=201)
 def create_task(body: TaskCreate):
-    task_id = manager.add_task(body.quota)
-    task = next(t for t in manager.tasks if t.uuid == task_id)
+    m = _manager()
+    task_id = m.add_task(body.quota)
+    task = next(t for t in m.tasks if t.uuid == task_id)
     return TaskInfo(uuid=task.uuid, quota=task.quota, used=task.used)
 
 
 @app.get("/tasks", response_model=List[TaskInfo])
 def list_tasks():
-    return [TaskInfo(uuid=t.uuid, quota=t.quota, used=t.used) for t in manager.tasks]
+    return [TaskInfo(uuid=t.uuid, quota=t.quota, used=t.used) for t in _manager().tasks]
 
 
 @app.delete("/tasks/{task_id}", status_code=204)
 def delete_task(task_id: str):
     try:
-        manager.delete_task(task_id)
+        _manager().delete_task(task_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -308,11 +360,12 @@ def delete_task(task_id: str):
 
 @app.post("/jobs", response_model=JobInfo, status_code=201)
 def register_job(body: JobRegister):
+    m = _manager()
     try:
-        job_id = manager.register_job(**body.model_dump())
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    job = next(j for j in manager.jobs if j.uuid == job_id)
+        job_uuid = m.register_job(**body.model_dump())
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    job = next(j for j in m.jobs if j.uuid == job_uuid)
     return JobInfo(uuid=job.uuid, job_id=job.job_id, status=job.status,
                    nodes=job.nodes, task_id=job.task.uuid)
 
@@ -322,16 +375,14 @@ def list_jobs():
     return [
         JobInfo(uuid=j.uuid, job_id=j.job_id, status=j.status,
                 nodes=j.nodes, task_id=j.task.uuid)
-        for j in manager.jobs
+        for j in _manager().jobs
     ]
 
 
 @app.get("/jobs/{job_uuid}", response_model=JobInfo)
 def get_job(job_uuid: str):
-    for j in manager.jobs:
+    for j in _manager().jobs:
         if j.uuid == job_uuid:
             return JobInfo(uuid=j.uuid, job_id=j.job_id, status=j.status,
                            nodes=j.nodes, task_id=j.task.uuid)
     raise HTTPException(status_code=404, detail=f"Job {job_uuid} not found.")
-
-

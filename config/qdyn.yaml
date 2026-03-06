@@ -1,0 +1,14 @@
+# qdyn.yaml — QDYN job manager configuration
+# Place this file in the working directory or point to it with:
+#   python main.py --server --config /path/to/qdyn.yaml
+#   QDYN_CONFIG=/path/to/qdyn.yaml python main.py --server
+
+machine:
+  # SLURM partition (queue) to submit jobs to
+  partition: queue1-1
+
+  # CPU cores per node
+  cpus_per_node: 32
+
+  # The place you run the tasks
+  working_dir: /public/home/wbchu/cwzhang/qdyn_work
