@@ -3,12 +3,32 @@
 #   python main.py --server --config /path/to/qdyn.yaml
 #   QDYN_CONFIG=/path/to/qdyn.yaml python main.py --server
 
+basic:
+  workflow_poll_interval: 10
+
 machine:
   # SLURM partition (queue) to submit jobs to
   partition: queue1-1
 
   # CPU cores per node
-  cpus_per_node: 32
+  cpus_per_node: 64
 
-  # The place you run the tasks
-  working_dir: /public/home/wbchu/cwzhang/qdyn_work
+module: 
+  vasp: ['compiler/intel/2021.3.0', 'mpi/intelmpi/2021.3.0']
+
+export: 
+  vasp:
+    PATH: 'balabala'
+    LD_LIBRARY_PATH: 'balabala'
+
+pp_path:
+  vasp: ''
+
+orb_path:
+  vasp: ''
+  
+nvt:
+  vasp:
+    nodes: 2
+    ntasks_per_node: 64
+    cpus_per_task: 1

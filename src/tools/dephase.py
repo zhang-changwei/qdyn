@@ -7,6 +7,7 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.fftpack import fft
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from jobflow import job
 
 from typing import Tuple, Dict
 from .output import Output
@@ -14,7 +15,7 @@ from .output import Output
 # mpl.use('agg')
 # mpl.rcParams['axes.unicode_minus'] = False
 
-
+@job
 def calculate_dephasing_time(
     working_dir: str,
     energies_path: str = 'EIGTXT',
