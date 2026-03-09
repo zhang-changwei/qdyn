@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 class BasicInputT(BaseModel):
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
@@ -9,6 +9,7 @@ class SchedulerConfigT(BaseModel):
     pass
 
 class NVTInputT(BaseModel):
+    nodes: Optional[int] = None
     kspacing: float = 0.04
     encut: float = 500
     scf_thr: float = 1e-6
@@ -17,9 +18,10 @@ class NVTInputT(BaseModel):
 
     paramters: str = ''
 
+
 class InputT(BaseModel):
     basic_input: BasicInputT
     scheduler_config: SchedulerConfigT
     nvt_input: NVTInputT
 
-    steps: List[Literal['NVT', 'NVE']]
+    steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']]
