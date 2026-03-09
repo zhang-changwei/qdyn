@@ -1,12 +1,15 @@
 from pydantic import BaseModel
 from typing import Literal, List, Optional
 
+
 class BasicInputT(BaseModel):
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
     plot: bool = False
 
+
 class SchedulerConfigT(BaseModel):
     pass
+
 
 class NVTInputT(BaseModel):
     nodes: Optional[int] = None
@@ -16,7 +19,8 @@ class NVTInputT(BaseModel):
     temp_begin: float = 300
     temp_end: float = 300
 
-    paramters: str = ''
+    parameters: str = ''
+
 
 
 class InputT(BaseModel):

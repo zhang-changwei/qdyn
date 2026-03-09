@@ -22,6 +22,7 @@ from jobflow_remote import get_jobstore
 from .input import InputT
 from .tools.nvt import run_nvt
 
+
 class ValidationError(Exception):
     pass
 
@@ -36,7 +37,6 @@ class MainWorkflow:
 
         self.js = get_jobstore()
         self.js.connect()
-
 
     # ------------------------------------------------------------------
     # Config
@@ -81,17 +81,16 @@ class MainWorkflow:
         task_id = str(uuid.uuid4())
         self.task_ids.append(task_id)
         jobs: Dict[str, List[Job | Flow]] = {}
-        
 
         # validate steps
         def is_continuous_steps(steps: List[int]) -> bool:
             if len(steps) <= 1:
                 return True
             for i in range(1, len(steps)):
-                if steps[i] != steps[i-1] + 1:
+                if steps[i] != steps[i - 1] + 1:
                     return False
             return True
-        
+
         if method == 'namd':
             key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
             try:
@@ -104,7 +103,7 @@ class MainWorkflow:
                 )
         else:
             raise NotImplementedError(f"Method {method} is not supported yet.")
-        
+
         # step 1: NVT
         if 'nvt' in input.steps or flag == 'gen_input_nvt':
             prev_step = ''
@@ -113,13 +112,19 @@ class MainWorkflow:
                 structure = jobs[prev_step][0].output['stru']
             elif first_step == 'nvt' and resume:
                 prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                structure = self.js.get_output(prev_job_uuid)['stru'] # type: ignore
+                structure = self.js.get_output(prev_job_uuid)['stru']  # type: ignore
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format)
             else:
-                raise ValidationError("No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid.")
+                raise ValidationError(
+                    "No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid."
+                )
 
-            nodes = input.nvt_input.nodes if input.nvt_input.nodes is not None else self.config['nvt'][software]['nodes']
+            nodes = (
+                input.nvt_input.nodes
+                if input.nvt_input.nodes is not None
+                else self.config['nvt'][software]['nodes']
+            )
             ntasks_per_node = self.config['nvt'][software]['ntasks_per_node']
             cpus_per_task = self.config['nvt'][software]['cpus_per_task']
 
@@ -147,13 +152,13 @@ class MainWorkflow:
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
-                }
+                },
             )
             jobs['nvt'] = [job_nvt]
 
             # update flag
             is_last_step = True if next_step not in input.steps else False
-            if is_last_step: 
+            if is_last_step:
                 flag = f'gen_input_{next_step}'
 
         # step 2: NVE
@@ -164,13 +169,19 @@ class MainWorkflow:
                 structure = jobs[prev_step][0].output['stru']
             elif first_step == 'nve' and resume:
                 prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                structure = self.js.get_output()['stru'] # type: ignore
+                structure = self.js.get_output()['stru']  # type: ignore
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format)
             else:
-                raise ValidationError("No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid.")
-            
-            nodes = input.nve_input.nodes if input.nve_input.nodes is not None else self.config['nve'][software]['nodes']
+                raise ValidationError(
+                    "No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid."
+                )
+
+            nodes = (
+                input.nve_input.nodes
+                if input.nve_input.nodes is not None
+                else self.config['nve'][software]['nodes']
+            )
             ntasks_per_node = self.config['nve'][software]['ntasks_per_node']
             cpus_per_task = self.config['nve'][software]['cpus_per_task']
 
@@ -198,13 +209,13 @@ class MainWorkflow:
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
-                }
+                },
             )
             jobs['nve'] = [job_nve]
 
             # update flag
             is_last_step = True if next_step not in input.steps else False
-            if is_last_step: 
+            if is_last_step:
                 flag = f'gen_input_{next_step}'
 
         # step 3: SCF
@@ -219,11 +230,15 @@ class MainWorkflow:
                     structures = jobs[prev_step][0].output['strus']
                 elif first_step == 'scf' and resume:
                     prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    structures = self.js.get_output(prev_job_uuid)['strus'] # type: ignore
+                    structures = self.js.get_output(prev_job_uuid)['strus']  # type: ignore
                 else:
                     raise ValidationError()
-        
-                nodes = input.scf_input.nodes if input.scf_input.nodes is not None else self.config['scf'][software]['nodes']
+
+                nodes = (
+                    input.scf_input.nodes
+                    if input.scf_input.nodes is not None
+                    else self.config['scf'][software]['nodes']
+                )
                 ntasks_per_node = self.config['scf'][software]['ntasks_per_node']
                 cpus_per_task = self.config['scf'][software]['cpus_per_task']
 
@@ -252,13 +267,13 @@ class MainWorkflow:
                             'nodes': nodes,
                             'ntasks_per_node': ntasks_per_node,
                             'cpus_per_task': cpus_per_task,
-                        }
+                        },
                     )
                 jobs['scf'] = jobs_scf
 
                 # update flag
                 is_last_step = True if next_step not in input.steps else False
-                if is_last_step: 
+                if is_last_step:
                     flag = f'gen_input_{next_step}'
 
         # step 4: PRE_NAMD
@@ -267,10 +282,14 @@ class MainWorkflow:
             next_step = 'namd'
             if prev_step in input.steps:
                 wfcs = 0
-            
+
             if software == 'abacus':
                 pass
-            nodes = input.pre_namd_input.nodes if input.pre_namd_input.nodes is not None else self.config['pre_namd'][software]['nodes']
+            nodes = (
+                input.pre_namd_input.nodes
+                if input.pre_namd_input.nodes is not None
+                else self.config['pre_namd'][software]['nodes']
+            )
             ntasks_per_node = self.config['pre_namd'][software]['ntasks_per_node']
             cpus_per_task = self.config['pre_namd'][software]['cpus_per_task']
 
@@ -298,17 +317,16 @@ class MainWorkflow:
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
-                }
+                },
             )
             jobs['pre_namd'] = [job_pre_namd]
 
             # update flag
             is_last_step = True if next_step not in input.steps else False
-            if is_last_step: 
+            if is_last_step:
                 flag = f'gen_input_{next_step}'
-        
-        return task_id, jobs
 
+        return task_id, jobs
 
     def submit(
         self,
@@ -319,7 +337,7 @@ class MainWorkflow:
         resume: bool = False,
         prev_task_id: str = '',
     ) -> str:
-    
+
         task_id, jobs = self.main_workflow(
             input=input,
             method=method,
@@ -332,8 +350,8 @@ class MainWorkflow:
         for job_list in jobs.values():
             jobs_flatten.extend(job_list)
         job_ids = submit_flow(
-            jobs_flatten, 
-            worker = 'local_slurm',
+            jobs_flatten,
+            worker='local_slurm',
         )
 
         jobs_ids = {}
@@ -342,13 +360,13 @@ class MainWorkflow:
         self.job_ids[task_id] = job_ids
 
         return task_id
-    
+
     def remove_task(self, task_id: str):
         pass
 
     def list_tasks(self) -> List[str]:
         return self.task_ids
-    
+
     def list_jobs(self, task_id: str):
         pass
 
