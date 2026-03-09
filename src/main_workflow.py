@@ -79,7 +79,6 @@ class MainWorkflow:
             assert prev_task_id, "prev_job_id must be provided when resume=True."
 
         task_id = str(uuid.uuid4())
-        self.task_ids.append(task_id)
         jobs: Dict[str, List[Job | Flow]] = {}
 
         # validate steps
@@ -358,6 +357,8 @@ class MainWorkflow:
         for key, value in jobs.items():
             job_ids[key] = [v.uuid for v in value]
         self.job_ids[task_id] = job_ids
+
+        self.task_ids.append(task_id)
 
         return task_id
 
