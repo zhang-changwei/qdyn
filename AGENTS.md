@@ -70,25 +70,28 @@ qdyn/
   - `prepare_poscar()`: 写入 POSCAR 结构文件
   - `prepare_kpoints()`: 根据 kspacing 生成 KPOINTS
   - `prepare_potcar()`: 拼接赝势文件
-  - `prepare_incar()`: 生成 INCAR (支持 sr/nvt/nve/scf 四种步骤类型)
+  - `prepare_incar()`: 生成 INCAR (参数优先级: base → step_input.to_vasp_incar() → incar_params → parameters string)
+
+- **INCAR 工具函数**:
+  - `write_incar()`: 写入 INCAR 文件
+  - `format_incar_value()`: 格式化值 (bool→.TRUE./.FALSE., list→空格分隔)
+  - `parse_incar_string()`: 解析 KEY=VALUE 格式参数字符串
+  - `parse_incar_value()`: 解析单个值到 Python 类型
 
 ### input.py
-- **InputT**: 主输入模型
-  - `basic_input: BasicInputT`: 软件选择、绘图开关
-  - `scheduler_config: SchedulerConfigT`: 调度器配置
-  - `nvt_input: NVTInputT`: NVT 参数
-  - `steps: List[Literal['NVT', 'NVE']]`: 执行步骤列表
+- **步骤输入模型** (每个模型包含默认参数和 `to_vasp_incar()` 方法):
+  - `SRInputT`: 结构优化参数 (encut, kspacing, nsw, ibrion, isif, ediffg 等)
+  - `NVTInputT`: NVT 分子动力学参数 (potim, nsw, temp_begin, temp_end, smass 等)
+  - `NVEInputT`: NVE 分子动力学参数 (potim, nsw, smass=-3 等)
+  - `SCFInputT`: 静态 SCF 计算参数 (lorbit, nedos 等)
+  - 每个模型都有 `parameters: str` 字段用于额外参数 (KEY=VALUE 格式)
 
-- **BasicInputT**: 基础输入
-  - `software`: 软件选择 (vasp/cp2k/siesta/abacus/openmx)
-  - `plot`: 是否绘图
+- **常量**:
+  - `VASP_BASE_INCAR`: 基础 INCAR 参数 (ISTART, ISPIN, PREC, ISMEAR 等)
 
-- **NVTInputT**: NVT 参数
-  - `kspacing`: k 点间距
-  - `encut`: 截断能
-  - `scf_thr`: SCF 收敛阈值
-  - `temp_begin/temp_end`: 温度范围
-  - `parameters`: 其他参数字符串
+- **主输入模型**:
+  - `InputT`: 主输入模型，包含 basic_input, scheduler_config, steps
+  - `BasicInputT`: 软件选择、绘图开关
 
 ### tools/
 - **nvt.py**: NVT 分子动力学运行 (`@job` 装饰器)
@@ -98,13 +101,12 @@ qdyn/
     - **收敛检查 1**: SCF 收敛性检查，不收敛则直接报错
     - **收敛检查 2**: 温度收敛性检查，不收敛则重试
     - **文件备份**: 每轮计算文件备份到 `nvt_attempt_{n}/` 目录
-  - `_prepare_nvt_input_vasp()`: 准备 VASP NVT 输入文件
+  - `_prepare_nvt_input_vasp()`: 调用 prepare_vasp_inputs 准备输入文件
   - `_process_nvt_output_vasp()`: 处理输出，返回 (scf_converged, temp_converged, avg_temp, max_deviation)
   - `extract_md_data_from_oszicar()`: 从 OSZICAR 提取 MD 数据
   - `save_md_data()`: 保存 MD 数据到文件
   - `check_md_convergence()`: 检查 SCF 收敛性（检测 self-consistency 错误）
   - `plot_nvt_results()`: 绘制 NVT 结果图 (温度、势能、总能量)
-  - `_parse_parameters_string()`: 解析用户额外参数字符串
 - **dephase.py**: 计算退相位时间
   - 读取 `EIGTXT` 能量文件
   - 计算 ACF、退相位函数、声子影响谱

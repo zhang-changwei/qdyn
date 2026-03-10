@@ -20,6 +20,7 @@ from .constants import JOB_MANAGER_POLL_INTERVAL
 # Domain models
 # ---------------------------------------------------------------------------
 
+
 class Task:
     def __init__(self, quota: int):
         self.uuid = str(uuid.uuid4())
@@ -41,6 +42,7 @@ class Job:
 # ---------------------------------------------------------------------------
 # SLURM manager
 # ---------------------------------------------------------------------------
+
 
 class SlurmManager:
 
@@ -103,7 +105,9 @@ class SlurmManager:
                     text=True,
                 )
                 if result.returncode != 0:
-                    logging.error(f"Slurm submission failed for job {job.uuid}: {result.stderr}")
+                    logging.error(
+                        f"Slurm submission failed for job {job.uuid}: {result.stderr}"
+                    )
                     job.status = 'failed'
                     continue
 
@@ -114,7 +118,9 @@ class SlurmManager:
                     job.task.used += job.nodes
                     logging.info(f"Submitted job {job.uuid} → Slurm ID {job.job_id}.")
                 except ValueError:
-                    logging.error(f"Cannot parse Slurm job ID from output: {result.stdout!r}")
+                    logging.error(
+                        f"Cannot parse Slurm job ID from output: {result.stdout!r}"
+                    )
                     job.status = 'failed'
 
     def check_job_status(self) -> None:
@@ -124,8 +130,14 @@ class SlurmManager:
 
         job_ids = [str(j.job_id) for j in running_jobs]
         result = subprocess.run(
-            ['sacct', '-j', ','.join(job_ids),
-             '--format=JobID,State', '--noheader', '-X'],
+            [
+                'sacct',
+                '-j',
+                ','.join(job_ids),
+                '--format=JobID,State',
+                '--noheader',
+                '-X',
+            ],
             capture_output=True,
             text=True,
         )
@@ -151,7 +163,9 @@ class SlurmManager:
             job.status = state
             if state not in ('pending', 'running'):
                 job.task.used -= job.nodes
-                logging.info(f"Job {job.uuid} (Slurm {slurm_id}) finished with state '{state}'.")
+                logging.info(
+                    f"Job {job.uuid} (Slurm {slurm_id}) finished with state '{state}'."
+                )
 
     # ------------------------------------------------------------------
     # Task management
@@ -167,9 +181,9 @@ class SlurmManager:
 
             file_path = os.path.abspath(__file__)
             main_path = pathlib.Path(file_path).parent / 'main.py'
-            
+
             self.register_job(
-                task.uuid, 
+                task.uuid,
                 command=f'python {main_path}',
                 working_dir=self.config['machine']['working_dir'],
                 partition=self.config['machine']['partition'],
@@ -181,7 +195,7 @@ class SlurmManager:
         # Add an ordinary task.
         task = Task(quota=quota)
         self.tasks.append(task)
-        
+
         working_dir = pjoin(self.config['machine']['working_dir'], f'task_{task.uuid}')
         os.makedirs(working_dir, exist_ok=True)
 
@@ -219,8 +233,7 @@ class SlurmManager:
         exclusive: bool = False,
         ext_libs: str = '',
     ) -> str:
-        """Write a SLURM batch script and enqueue the job.
-        """
+        """Write a SLURM batch script and enqueue the job."""
         for task in self.tasks:
             if task.uuid == task_id:
                 break
@@ -228,24 +241,32 @@ class SlurmManager:
             raise ValueError(f"Task {task_id} not found.")
 
         ncpus: int = self.config['machine']['cpus_per_node']
-        partition = partition if partition is not None else self.config['machine']['partition']
-        assert not(ntasks_per_node is None and cpus_per_task is None), "At least one of ntasks_per_node or cpus_per_task must be specified."
+        partition = (
+            partition if partition is not None else self.config['machine']['partition']
+        )
+        assert not (
+            ntasks_per_node is None and cpus_per_task is None
+        ), "At least one of ntasks_per_node or cpus_per_task must be specified."
         if ntasks_per_node == 'all':
             ntasks_per_node = ncpus
         if cpus_per_task == 'all':
             cpus_per_task = ncpus
         if ntasks_per_node is None:
-            ntasks_per_node = ncpus // cpus_per_task # type: ignore
+            ntasks_per_node = ncpus // cpus_per_task  # type: ignore
         if cpus_per_task is None:
             cpus_per_task = ncpus // ntasks_per_node
-        assert nodes <= task.quota, f"Job requires {nodes} nodes but task {task_id} has only {task.quota} quota."
-        assert 0 < ntasks_per_node * cpus_per_task <= ncpus, f"Invalid combination of ntasks_per_node={ntasks_per_node} and cpus_per_task={cpus_per_task} for {ncpus} CPUs per node."
+        assert (
+            nodes <= task.quota
+        ), f"Job requires {nodes} nodes but task {task_id} has only {task.quota} quota."
+        assert (
+            0 < ntasks_per_node * cpus_per_task <= ncpus
+        ), f"Invalid combination of ntasks_per_node={ntasks_per_node} and cpus_per_task={cpus_per_task} for {ncpus} CPUs per node."
 
         working_dir = os.path.abspath(working_dir)
 
         ext_libs = ext_libs + '\n' + f'export OMP_NUM_THREADS={cpus_per_task}'
 
-        exclusive_line = '#SBATCH --exclusive' if exclusive  else ''
+        exclusive_line = '#SBATCH --exclusive' if exclusive else ''
 
         slurm_script = (
             f'#!/bin/sh\n'
@@ -301,6 +322,7 @@ def _manager() -> SlurmManager:
 
 # --- Request / response schemas ---
 
+
 class TaskCreate(BaseModel):
     quota: int
 
@@ -335,6 +357,7 @@ class JobInfo(BaseModel):
 
 # --- Task endpoints ---
 
+
 @app.post("/tasks", response_model=TaskInfo, status_code=201)
 def create_task(body: TaskCreate):
     m = _manager()
@@ -358,6 +381,7 @@ def delete_task(task_id: str):
 
 # --- Job endpoints ---
 
+
 @app.post("/jobs", response_model=JobInfo, status_code=201)
 def register_job(body: JobRegister):
     m = _manager()
@@ -366,15 +390,25 @@ def register_job(body: JobRegister):
     except (ValueError, KeyError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     job = next(j for j in m.jobs if j.uuid == job_uuid)
-    return JobInfo(uuid=job.uuid, job_id=job.job_id, status=job.status,
-                   nodes=job.nodes, task_id=job.task.uuid)
+    return JobInfo(
+        uuid=job.uuid,
+        job_id=job.job_id,
+        status=job.status,
+        nodes=job.nodes,
+        task_id=job.task.uuid,
+    )
 
 
 @app.get("/jobs", response_model=List[JobInfo])
 def list_jobs():
     return [
-        JobInfo(uuid=j.uuid, job_id=j.job_id, status=j.status,
-                nodes=j.nodes, task_id=j.task.uuid)
+        JobInfo(
+            uuid=j.uuid,
+            job_id=j.job_id,
+            status=j.status,
+            nodes=j.nodes,
+            task_id=j.task.uuid,
+        )
         for j in _manager().jobs
     ]
 
@@ -383,6 +417,11 @@ def list_jobs():
 def get_job(job_uuid: str):
     for j in _manager().jobs:
         if j.uuid == job_uuid:
-            return JobInfo(uuid=j.uuid, job_id=j.job_id, status=j.status,
-                           nodes=j.nodes, task_id=j.task.uuid)
+            return JobInfo(
+                uuid=j.uuid,
+                job_id=j.job_id,
+                status=j.status,
+                nodes=j.nodes,
+                task_id=j.task.uuid,
+            )
     raise HTTPException(status_code=404, detail=f"Job {job_uuid} not found.")

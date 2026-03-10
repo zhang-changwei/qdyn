@@ -193,26 +193,12 @@ def _prepare_nvt_input_vasp(
     orb_path : str
         Path to orbital files (not used for VASP).
     """
-    # Parse additional parameters from the parameters string
-    extra_params = _parse_parameters_string(parameters.parameters)
-
-    # Set temperature parameters
-    incar_params = {
-        'TEBEG': parameters.temp_begin,
-        'TEEND': parameters.temp_end,
-    }
-
-    # Merge with extra parameters (extra_params take precedence)
-    incar_params.update(extra_params)
-
     # Use the generic VASP input preparation function
     prepare_vasp_inputs(
         structure=structure,
         pp_path=pp_path,
         kspacing=parameters.kspacing,
-        encut=parameters.encut,
-        incar_params=incar_params,
-        step_type='nvt',
+        step_input=parameters,
     )
 
 
@@ -560,62 +546,3 @@ def plot_nvt_results(
     plt.close()
 
     return os.path.abspath(filename)
-
-
-def _parse_parameters_string(params_str: str) -> Dict:
-    """Parse a parameter string into a dictionary.
-
-    The parameter string should be in the format:
-    'KEY1=VALUE1; KEY2=VALUE2; ...'
-    or
-    'KEY1=VALUE1\nKEY2=VALUE2\n...'
-
-    Parameters
-    ----------
-    params_str : str
-        Parameter string.
-
-    Returns
-    -------
-    Dict
-        Parsed parameters as dictionary.
-    """
-    params = {}
-    if not params_str or not params_str.strip():
-        return params
-
-    # Support both semicolon and newline as separators
-    separators = [';', '\n']
-    items = [params_str]
-    for sep in separators:
-        new_items = []
-        for item in items:
-            new_items.extend(item.split(sep))
-        items = new_items
-
-    for item in items:
-        item = item.strip()
-        if not item:
-            continue
-        if '=' in item:
-            key, value = item.split('=', 1)
-            key = key.strip().upper()
-            value = value.strip()
-
-            # Try to convert value to appropriate type
-            if value.lower() in ('.true.', 'true', 'yes'):
-                value = True
-            elif value.lower() in ('.false.', 'false', 'no'):
-                value = False
-            else:
-                try:
-                    if '.' in value or 'e' in value.lower():
-                        value = float(value)
-                    else:
-                        value = int(value)
-                except ValueError:
-                    pass  # Keep as string
-
-            params[key] = value
-
-    return params
