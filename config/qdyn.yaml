@@ -15,11 +15,15 @@ machine:
 
 module: 
   vasp: ['compiler/intel/2021.3.0', 'mpi/intelmpi/2021.3.0']
+  python: []
 
 export: 
   vasp:
     PATH: 'balabala'
     LD_LIBRARY_PATH: 'balabala'
+  python:
+    PATH: 'balabala'
+
 
 pp_path:
   vasp: ''

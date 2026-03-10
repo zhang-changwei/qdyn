@@ -21,6 +21,7 @@ from jobflow_remote import get_jobstore
 
 from .input import InputT
 from .tools.nvt import run_nvt
+from .tools.prepare_namd import run_pre_namd
 
 
 class ValidationError(Exception):
@@ -280,42 +281,38 @@ class MainWorkflow:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
-                wfcs = 0
+                run_dirs = [
+                    jobs[prev_step][idx].output['run_dir'] 
+                    for idx in range(len(jobs[prev_step]))
+                ]
+            elif first_step == 'pre_namd' and resume:
+                prev_jobs = self.job_ids[prev_task_id][prev_step]
+                run_dirs = [self.js.get_output(prev_job_uuid)['run_dir'] for prev_job_uuid in prev_jobs]  # type: ignore
+            else:
+                raise ValidationError()
 
-            if software == 'abacus':
-                pass
-            nodes = (
-                input.pre_namd_input.nodes
-                if input.pre_namd_input.nodes is not None
-                else self.config['pre_namd'][software]['nodes']
-            )
-            ntasks_per_node = self.config['pre_namd'][software]['ntasks_per_node']
-            cpus_per_task = self.config['pre_namd'][software]['cpus_per_task']
-
+            ncpus = self.config['machine']['cpus_per_node']
             job_pre_namd = run_pre_namd(
                 software=software,
-                parameters=input.pre_namd_input,
-                pp_path=self.config['pp_path'][software],
-                orb_path=self.config['orb_path'][software],
-                structure=structure,
-                nodes=nodes,
-                ntasks_per_node=ntasks_per_node,
-                cpus_per_task=cpus_per_task,
+                parameters=input.prenamd_input,
+                run_dirs=run_dirs,
+                nproc=ncpus // 4,
                 plot=input.basic_input.plot,
                 prepare_input_only=bool(flag),
             )
             job_pre_namd = set_run_config(
                 job_pre_namd,
                 exec_config=ExecutionConfig(
-                    modules=self.config['module'][software],
-                    export=self.config['export'][software],
+                    modules=self.config['module']['python'],
+                    export={**self.config['export']['python'], 
+                            'OMP_NUM_THREADS': '4'},
                     pre_run=None,
                     post_run=None,
                 ),
                 resources={
-                    'nodes': nodes,
-                    'ntasks_per_node': ntasks_per_node,
-                    'cpus_per_task': cpus_per_task,
+                    'nodes': 1,
+                    'ntasks_per_node': 1,
+                    'cpus_per_task': ncpus,
                 },
             )
             jobs['pre_namd'] = [job_pre_namd]
@@ -348,12 +345,12 @@ class MainWorkflow:
         jobs_flatten = []
         for job_list in jobs.values():
             jobs_flatten.extend(job_list)
-        job_ids = submit_flow(
+        db_ids = submit_flow(
             jobs_flatten,
             worker='local_slurm',
         )
 
-        jobs_ids = {}
+        job_ids = {}
         for key, value in jobs.items():
             job_ids[key] = [v.uuid for v in value]
         self.job_ids[task_id] = job_ids

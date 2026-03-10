@@ -37,7 +37,14 @@ class SCFInputT(BaseModel):
     scf_thr: float = 1e-6
 
 class PreNAMDInputT(BaseModel):
-    pass
+    is_reorder: bool = False
+    is_alle: bool = False
+    bmin: int | str = 'vbm'
+    bmax: int | str = 'cbm'
+    ikpt: int = 1
+    ispin: int = 1
+    md_dt: float = 1.0
+    nsample: int = 200
 
 class InputT(BaseModel):
     basic_input: BasicInputT
@@ -45,5 +52,6 @@ class InputT(BaseModel):
     nvt_input: NVTInputT
     nve_input: NVEInputT
     scf_input: SCFInputT
+    prenamd_input: PreNAMDInputT
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']]

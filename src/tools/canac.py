@@ -2,12 +2,12 @@ import logging
 import multiprocessing
 import numpy
 
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 def extract_eigvals_and_nacs(
-    working_dir: str,
+    run_dirs: List[str],
     software: Literal['VASP', 'CP2K', 'SIESTA', 'ABACUS', 'OPENMX', 'HAMGNN'] = 'VASP',
-    is_gamma: bool = False,
+    is_gamma_ver: bool = False,
     is_reorder: bool = False,
     is_alle: bool = False,
     bmin: int = 0,
