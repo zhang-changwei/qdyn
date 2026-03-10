@@ -1,6 +1,15 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Any
 
+## Important!
+# InputT: should contain minimal parameters exposed to users, 
+#         universal for all DFT codes
+# paramters: str, in DFT code vanilla input format (for advanced users)
+
+## load order:
+# Default param template 
+# -> predefined params in InputT 
+# -> parameters string (overrides previous ones)
 
 class BasicInputT(BaseModel):
     """Basic input parameters for QDYN calculations."""
@@ -19,7 +28,7 @@ class BasicCalInputT(BaseModel):
     """Basic calculation input parameters."""
 
     # Kpoints
-    kspacing: float = 0.04
+    kspacing: float = Field()
 
     # Common parameters
     encut: float = 500.0
@@ -82,46 +91,20 @@ class SRInputT(BasicCalInputT):
         }
 
 
-class NVTInputT(BasicCalInputT):
+class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
 
     nodes: Optional[int] = None
 
-    # MD parameters
-    ibrion: int = 0
-    isym: int = 0
-    smass: float = 0.0  # 0 for NVT
-    potim: float = 1.0
-    nsw: int = 1000
-    nblock: int = 4
-    temp_begin: float = 300.0  # TEBEG
-    temp_end: float = 300.0  # TEEND
-
-    # Electronic
-    algo: str = 'Normal'
-    nelm: int = 120
-    nelmin: int = 4
+    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
+    md_thermostat: Literal['nhc', 'rescale_v'] = 'rescale_v'
+    md_dt: float = Field(1.0, description="MD time step in fs")
+    md_step: int = Field(1000, description="Number of MD steps")
+    temp_begin: float = Field(300.0, description="Initial temperature in K")
+    temp_end: float = Field(300.0, description="Final temperature in K")
     scf_thr: float = 1e-6
 
-    def to_vasp_incar(self) -> dict:
-        """Convert to VASP INCAR parameters."""
-        return {
-            'ENCUT': self.encut,
-            'EDIFF': self.scf_thr,
-            'POTIM': self.potim,
-            'NSW': self.nsw,
-            'NBLOCK': self.nblock,
-            'TEBEG': self.temp_begin,
-            'TEEND': self.temp_end,
-            'SMASS': self.smass,
-            'ALGO': self.algo,
-            'NELM': self.nelm,
-            'NELMIN': self.nelmin,
-            'ISYM': self.isym,
-            'IBRION': self.ibrion,
-            'NCORE': self.ncore,
-            'KPAR': self.kpar,
-        }
+    parameters: str = ''  
 
 
 class NVEInputT(BasicCalInputT):

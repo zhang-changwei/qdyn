@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Union
 import ase.io
 import numpy as np
 from ase import Atoms
+from pymatgen.io.vasp import Incar
 
 from .input import (
     InputT,
@@ -72,8 +73,8 @@ def prepare_vasp_inputs(
     structure: Atoms,
     pp_path: str,
     kspacing: Optional[float] = None,
-    incar_params: Optional[Dict] = None,
-    step_input: Optional[Union[SRInputT, NVTInputT, NVEInputT, SCFInputT]] = None,
+    incar: Optional[Incar] = None,
+    incar_params: str = '',
 ):
     """Prepare VASP input files (POSCAR, KPOINTS, POTCAR, INCAR) in current directory.
 
@@ -102,7 +103,7 @@ def prepare_vasp_inputs(
         prepare_potcar(structure, pp_path)
 
     # Write INCAR
-    prepare_incar(incar_params=incar_params, step_input=step_input)
+    prepare_incar(incar=incar, incar_params=incar_params)
 
 
 def prepare_poscar(structure: Atoms):
@@ -183,8 +184,8 @@ def prepare_potcar(structure: Atoms, pp_path: str):
 
 
 def prepare_incar(
-    incar_params: Optional[Dict] = None,
-    step_input: Optional[Union[SRInputT, NVTInputT, NVEInputT, SCFInputT]] = None,
+    incar: Optional[Incar] = None,
+    incar_params: str = '',
 ):
     """Generate INCAR file for VASP calculation.
 
@@ -201,24 +202,12 @@ def prepare_incar(
     step_input : SRInputT | NVTInputT | NVEInputT | SCFInputT, optional
         Step-specific input parameters.
     """
-    # Start with base parameters
-    incar = VASP_BASE_INCAR.copy()
-
-    # Apply step-specific parameters
-    if step_input is not None:
-        incar.update(step_input.to_vasp_incar())
-
-        # Parse and apply extra parameters string
-        if hasattr(step_input, 'parameters') and step_input.parameters:
-            extra = parse_incar_string(step_input.parameters)
-            incar.update(extra)
-
-    # Override with user-provided parameters
     if incar_params:
-        incar.update(incar_params)
+        incar_append = Incar.from_str(incar_params)
+        incar.update(incar_append)
 
-    # Write INCAR file
-    write_incar(incar)
+    incar.write_file('INCAR')
+
 
 
 def write_incar(incar: Dict[str, Any], filename: str = 'INCAR'):

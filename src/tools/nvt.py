@@ -10,9 +10,11 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
+from pymatgen.io.vasp import Incar
 from jobflow import job
 
 from ..input import NVTInputT
+from ..params import params_default
 from ..job_initialize import prepare_vasp_inputs
 from ..output import Output
 
@@ -193,12 +195,25 @@ def _prepare_nvt_input_vasp(
     orb_path : str
         Path to orbital files (not used for VASP).
     """
-    # Use the generic VASP input preparation function
+    incar = Incar.from_dict(params_default['nvt']['vasp'])
+    # Handle predefined parameters in InputT
+    # 检查这些参数！！！！！
+    if parameters.md_thermostat == 'nhc':
+        incar['MDALGO'] = 2
+        incar['ISIF'] = 2
+        incar['SMASS'] = 0
+    elif parameters.md_thermostat == 'rescale_v':
+        incar['MDALGO'] = 0
+        incar['ISIF'] = 2
+        incar['SMASS'] = -1
+        incar['NBLOCK'] = 4
+    
     prepare_vasp_inputs(
         structure=structure,
         pp_path=pp_path,
         kspacing=parameters.kspacing,
-        step_input=parameters,
+        incar=incar,
+        incar_params=parameters.parameters,
     )
 
 
