@@ -363,16 +363,33 @@ class MainWorkflow:
         return task_id
 
     def remove_task(self, task_id: str):
+        """Remove a task from local tracking.
+
+        TODO: Clarify scope — should this only drop the in-memory record, or
+        also cancel running remote jobs and/or purge outputs from the
+        jobstore?  Different cleanup levels may warrant separate methods.
+        """
         pass
 
     def list_tasks(self) -> List[str]:
-        return self.task_ids
+        """Return all task IDs known to this instance (local-memory view)."""
+        return list(self.task_ids)
 
-    def list_jobs(self, task_id: str):
-        pass
+    def list_jobs(self, task_id: str) -> Dict[str, List[str]]:
+        """Return job UUIDs grouped by step for a given task."""
+        if task_id not in self.job_ids:
+            raise KeyError(f"Task '{task_id}' not found. Known: {self.task_ids}")
+        return self.job_ids[task_id]
 
-    def get_jobs_status(self, job_uuid: List[str]):
+    def get_jobs_status(self, job_uuids: List[str]):
+        """Query job statuses.
+
+        TODO: Decide whether to query by jobflow UUID (via JobController) or
+        by SLURM job ID (via sacct).  The former requires a running MongoDB
+        instance; the latter is lighter but loses jobflow-level state info.
+        """
         pass
 
     def get_job_output(self, job_uuid: str):
-        pass
+        """Retrieve a completed job's output from the jobstore."""
+        return self.js.get_output(job_uuid)
