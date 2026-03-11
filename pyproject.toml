@@ -11,5 +11,6 @@ dependencies = [
     "jobflow-remote>=1.0.0",
     "jupyter>=1.1.1",
     "natsort>=8.4.0",
+    "pymatgen>=2025.10.7",
     "uvicorn>=0.41.0",
 ]
