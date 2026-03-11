@@ -36,15 +36,20 @@ class SCFInputT(BaseModel):
     encut: float = 500
     scf_thr: float = 1e-6
 
-class PreNAMDInputT(BaseModel):
-    is_reorder: bool = False
-    is_alle: bool = False
-    bmin: int | str = 'vbm'
-    bmax: int | str = 'cbm'
+class _PreNAMDInputAdvT(BaseModel):
+    reorder: bool = False
+    alle: bool = False
     ikpt: int = 1
     ispin: int = 1
+
+class PreNAMDInputT(BaseModel):
+    bmin: int | str = 'VBM'
+    bmax: int | str = 'CBM'
     md_dt: float = 1.0
-    nsample: int = 200
+    adiabatic_rep: bool = True
+    surface_hopping: Literal['FSSH', 'DISH'] = 'FSSH'
+
+    adv: _PreNAMDInputAdvT = _PreNAMDInputAdvT()
 
 class InputT(BaseModel):
     basic_input: BasicInputT

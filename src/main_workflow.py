@@ -285,9 +285,11 @@ class MainWorkflow:
                     jobs[prev_step][idx].output['run_dir'] 
                     for idx in range(len(jobs[prev_step]))
                 ]
+                prev_output = jobs[prev_step][0].output
             elif first_step == 'pre_namd' and resume:
                 prev_jobs = self.job_ids[prev_task_id][prev_step]
                 run_dirs = [self.js.get_output(prev_job_uuid)['run_dir'] for prev_job_uuid in prev_jobs]  # type: ignore
+                prev_output = self.js.get_output(prev_jobs[0])
             else:
                 raise ValidationError()
 
@@ -296,6 +298,7 @@ class MainWorkflow:
                 software=software,
                 parameters=input.prenamd_input,
                 run_dirs=run_dirs,
+                prev_output=prev_output,
                 nproc=ncpus // 4,
                 plot=input.basic_input.plot,
                 prepare_input_only=bool(flag),

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 from scipy.optimize import curve_fit
@@ -7,22 +8,19 @@ from scipy.integrate import cumulative_trapezoid
 from scipy.fftpack import fft
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from jobflow import job
 
-from typing import Tuple, Dict
-from ..output import Output
+from typing import Tuple, Dict, Any
 
 # mpl.use('agg')
 # mpl.rcParams['axes.unicode_minus'] = False
 
 
-@job
 def calculate_dephasing_time(
-    working_dir: str,
-    energies_path: str = 'EIGTXT',
+    working_dir: str | Path,
+    energies_path: str | Path = 'EIGTXT',
     md_dt: float = 1.0,
     plot: bool = False,
-) -> Output:
+) -> Dict[str, Any]:
     r"""Calculate pairwise dephasing times from KS energy eigenvalue trajectories.
 
     Parameters
@@ -41,16 +39,13 @@ def calculate_dephasing_time(
     Returns
     -------
     Output
-        An :class:`~.output.Output` object whose ``files`` list contains the
-        path to ``DEPHTIME`` (an ``nbasis × nbasis`` plain-text matrix of
-        dephasing times in fs, symmetric with zeros on the diagonal) and whose
-        ``images`` list contains the paths to any plots that were generated.
+        A dict with 'DEPHTIME' and 'images' keys. 
     """
 
     energy = np.loadtxt(energies_path)  # shape (nstep, nbasis)
     nbasis = energy.shape[1]
     matrix = np.zeros((nbasis, nbasis), dtype=np.float64)
-    output = Output()
+    output = {'images': []}
 
     for ii in range(nbasis):
         for jj in range(ii):
@@ -71,7 +66,7 @@ def calculate_dephasing_time(
                 img_path = f'{working_dir}/dephasing_{ii}_{jj}.png'
                 plt.savefig(img_path, dpi=300)
 
-                output.images.append(img_path)
+                output['images'].append(img_path)
 
             popt, pcov = curve_fit(gaussian, T, Dt)
             Dt_fit = gaussian(T, *popt)
@@ -81,7 +76,7 @@ def calculate_dephasing_time(
     # output
     deph_path = f'{working_dir}/DEPHTIME'
     np.savetxt(deph_path, matrix, fmt='%10.4f')
-    output.files.append(deph_path)
+    output['DEPHTIME'] = deph_path # type: ignore
 
     return output
 
