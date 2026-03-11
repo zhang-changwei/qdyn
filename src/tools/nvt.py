@@ -13,7 +13,7 @@ from ase import Atoms
 from jobflow import job
 
 from ..input import NVTInputT
-from ..job_initialize import prepare_vasp_inputs
+from ..input_prepare import prepare_vasp_inputs
 from ..output import Output
 
 

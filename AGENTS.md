@@ -25,7 +25,7 @@ qdyn/
 │   ├── constants.py        # 全局常量定义 (轮询间隔等)
 │   ├── input.py            # Pydantic 输入模型定义
 │   ├── output.py           # 输出数据结构
-│   ├── job_initialize.py   # 作业初始化逻辑 (结构文件、势函数准备)
+│   ├── input_prepare.py    # 作业初始化逻辑 (结构文件、势函数准备)
 │   ├── job_manager.py      # FastAPI 服务器 + SLURM 作业管理
 │   ├── main_workflow.py    # 主工作流逻辑
 │   └── tools/
@@ -59,8 +59,8 @@ qdyn/
   - 根据 `steps` 参数执行 NVT/NVE 分子动力学步骤
   - 与 jobflow-remote 集成提交作业到 `local_slurm` worker
 
-### job_initialize.py
-- **job_initialize()**: 作业初始化函数
+### input_prepare.py
+- **input_prepare()**: 作业初始化函数
   - 读取结构文件 (通过 ASE)
   - 根据软件类型准备输入文件 (目前支持 VASP)
   - 输入文件直接写入当前目录 (jobflow 自动管理工作目录)
@@ -195,7 +195,7 @@ python main.py
 ### 添加新软件支持
 1. 在 `input.py` 的 `Literal` 类型中添加软件名称
 2. 在 `config/qdyn.yaml` 中添加软件配置 (module, export, pp_path, orb_path, nvt)
-3. 在 `job_initialize.py` 中添加 `prepare_{software}_inputs()` 函数，实现输入文件准备逻辑
+3. 在 `input_prepare.py` 中添加 `prepare_{software}_inputs()` 函数，实现输入文件准备逻辑
 4. 在 `tools/nvt.py` 中添加 `_prepare_nvt_input_{software}()` 函数，调用步骤 3 中的函数
 
 ### Git 工作流
@@ -231,7 +231,7 @@ git push
 |------|------|
 | job_manager.py | ✅ 已实现 |
 | main_workflow.py | ✅ 基本实现 |
-| job_initialize.py | ✅ VASP 已实现 |
+| input_prepare.py | ✅ VASP 已实现 |
 | tools/nvt.py | ✅ VASP 已实现 |
 | tools/dephase.py | ✅ 已实现 |
 | tools/canac.py | ⏳ 待实现 |

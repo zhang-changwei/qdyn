@@ -16,7 +16,7 @@ from .input import (
 )
 
 
-def job_initialize(
+def input_prepare(
     input: InputT,
     stru: str,
     pp_path: str,
@@ -91,7 +91,7 @@ def prepare_vasp_inputs(
         Step-specific input parameters.
     """
     # Write POSCAR
-    prepare_poscar(structure)
+    ase.io.write('POSCAR', structure, format='vasp')
 
     # Write KPOINTS
     if kspacing is not None:
@@ -103,11 +103,6 @@ def prepare_vasp_inputs(
 
     # Write INCAR
     prepare_incar(incar_params=incar_params, step_input=step_input)
-
-
-def prepare_poscar(structure: Atoms):
-    """Write POSCAR file from ASE Atoms object in current directory."""
-    ase.io.write('POSCAR', structure, format='vasp')
 
 
 def prepare_kpoints(structure: Atoms, kspacing: float):
@@ -182,157 +177,5 @@ def prepare_potcar(structure: Atoms, pp_path: str):
                 shutil.copyfileobj(inf, outf)
 
 
-def prepare_incar(
-    incar_params: Optional[Dict] = None,
-    step_input: Optional[Union[SRInputT, NVTInputT, NVEInputT, SCFInputT]] = None,
-):
-    """Generate INCAR file for VASP calculation.
-
-    Parameters are applied in the following order (later overrides earlier):
-    1. VASP_BASE_INCAR (always applied)
-    2. step_input.to_vasp_incar() (from step-specific input model)
-    3. incar_params argument
-    4. Parsed parameters string from step_input
-
-    Parameters
-    ----------
-    incar_params : dict, optional
-        Additional INCAR parameters.
-    step_input : SRInputT | NVTInputT | NVEInputT | SCFInputT, optional
-        Step-specific input parameters.
-    """
-    # Start with base parameters
-    incar = VASP_BASE_INCAR.copy()
-
-    # Apply step-specific parameters
-    if step_input is not None:
-        incar.update(step_input.to_vasp_incar())
-
-        # Parse and apply extra parameters string
-        if hasattr(step_input, 'parameters') and step_input.parameters:
-            extra = parse_incar_string(step_input.parameters)
-            incar.update(extra)
-
-    # Override with user-provided parameters
-    if incar_params:
-        incar.update(incar_params)
-
-    # Write INCAR file
-    write_incar(incar)
-
-
-def write_incar(incar: Dict[str, Any], filename: str = 'INCAR'):
-    """Write INCAR file.
-
-    Parameters
-    ----------
-    incar : Dict[str, Any]
-        Dictionary of INCAR parameters.
-    filename : str
-        Output filename (default: 'INCAR').
-    """
-    with open(filename, 'w') as f:
-        for key, value in incar.items():
-            formatted_value = format_incar_value(value)
-            f.write(f'{key:<12} = {formatted_value}\n')
-
-
-def format_incar_value(value: Any) -> str:
-    """Format a value for VASP INCAR file.
-
-    Parameters
-    ----------
-    value : Any
-        The value to format.
-
-    Returns
-    -------
-    str
-        Formatted value string.
-    """
-    if isinstance(value, bool):
-        return '.TRUE.' if value else '.FALSE.'
-    elif isinstance(value, (list, tuple)):
-        return ' '.join(str(v) for v in value)
-    else:
-        return str(value)
-
-
-def parse_incar_string(params_str: str) -> Dict[str, Any]:
-    """Parse an INCAR-style parameter string into a dictionary.
-
-    Supports formats:
-    - 'KEY=VALUE; KEY2=VALUE2; ...'
-    - 'KEY=VALUE\\nKEY2=VALUE2\\n...'
-    - Values: bool (.TRUE./.FALSE.), int, float, string, space-separated list
-
-    Parameters
-    ----------
-    params_str : str
-        Parameter string.
-
-    Returns
-    -------
-    Dict[str, Any]
-        Parsed parameters.
-    """
-    params: Dict[str, Any] = {}
-    if not params_str or not params_str.strip():
-        return params
-
-    # Split by semicolons and newlines
-    items = params_str.replace(';', '\n').split('\n')
-
-    for item in items:
-        item = item.strip()
-        if not item or '=' not in item:
-            continue
-
-        key, value_str = item.split('=', 1)
-        key = key.strip().upper()
-        value_str = value_str.strip()
-
-        params[key] = parse_incar_value(value_str)
-
-    return params
-
-
-def parse_incar_value(value_str: str) -> Any:
-    """Parse a single INCAR value string to appropriate Python type.
-
-    Parameters
-    ----------
-    value_str : str
-        Value string from INCAR.
-
-    Returns
-    -------
-    Any
-        Parsed value.
-    """
-    value_str = value_str.strip()
-    lower_val = value_str.lower()
-
-    # Boolean
-    if lower_val in ('.true.', 'true', 't', 'yes'):
-        return True
-    if lower_val in ('.false.', 'false', 'f', 'no'):
-        return False
-
-    # Space-separated list
-    parts = value_str.split()
-    if len(parts) > 1:
-        return [parse_incar_value(p) for p in parts]
-
-    # Single value: try int, then float, then string
-    try:
-        if '.' in value_str or 'e' in lower_val:
-            return float(value_str)
-        return int(value_str)
-    except ValueError:
-        return value_str
-
-
-def job_initialize_vasp(structure, pp_path, orb_path):
-    """Legacy function - use prepare_vasp_inputs instead."""
-    prepare_vasp_inputs(structure, pp_path)
+def prepare_incar():
+    pass
