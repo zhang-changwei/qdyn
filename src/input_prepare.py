@@ -16,54 +16,6 @@ from .input import (
     SRInputT,
 )
 
-
-# def input_prepare(
-#     input: InputT,
-#     stru: str,
-#     pp_path: str,
-#     orb_path: str,
-#     stru_format: str = 'vasp',
-# ):
-#     """Initialize job: prepare input files in current working directory.
-
-#     Parameters
-#     ----------
-#     input : InputT
-#         Input parameters.
-#     stru : str
-#         Structure file content as string.
-#     pp_path : str
-#         Path to pseudopotential files.
-#     orb_path : str
-#         Path to orbital files (for SIESTA/ABACUS/OpenMX).
-#     stru_format : str
-#         Format of structure file (default: 'vasp').
-
-#     Returns
-#     -------
-#     tuple
-#         (software, structure)
-#     """
-#     software = input.basic_input.software
-#     structure = ase.io.read(io.StringIO(stru), format=stru_format)
-
-#     match software:
-#         case 'vasp':
-#             prepare_vasp_inputs(structure, pp_path)
-#         case 'cp2k':
-#             raise NotImplementedError("CP2K input preparation not implemented yet.")
-#         case 'siesta':
-#             raise NotImplementedError("SIESTA input preparation not implemented yet.")
-#         case 'abacus':
-#             raise NotImplementedError("ABACUS input preparation not implemented yet.")
-#         case 'openmx':
-#             raise NotImplementedError("OpenMX input preparation not implemented yet.")
-#         case _:
-#             raise ValueError(f"Unknown software: {software}")
-
-#     return software, structure
-
-
 # ===========================================================================
 # VASP specific functions
 # ===========================================================================
@@ -73,7 +25,7 @@ def prepare_vasp_inputs(
     structure: Atoms,
     pp_path: str,
     kspacing: float,
-    incar: Optional[Incar] = None,
+    incar_dict: dict,
     incar_params: str = '',
 ):
     """Prepare VASP input files (POSCAR, KPOINTS, POTCAR, INCAR) in current directory.
@@ -84,12 +36,12 @@ def prepare_vasp_inputs(
         Atomic structure.
     pp_path : str
         Path to VASP pseudopotential directory.
-    kspacing : float, optional
+    kspacing : float
         K-point spacing in 1/Å. Used to generate KPOINTS.
-    incar_params : dict, optional
-        Additional INCAR parameters (will override defaults).
-    step_input : SRInputT | NVTInputT | NVEInputT | SCFInputT, optional
-        Step-specific input parameters.
+    incar_dict : dict
+        Base INCAR parameters dictionary.
+    incar_params : str, optional
+        Additional INCAR parameters in KEY=VALUE format string (will override defaults).
     """
     # Write POSCAR
     ase.io.write('POSCAR', structure, format='vasp')
@@ -103,7 +55,7 @@ def prepare_vasp_inputs(
         prepare_potcar(structure, pp_path)
 
     # Write INCAR
-    prepare_incar(incar=incar, incar_params=incar_params)
+    prepare_incar(incar_dict=incar_dict, incar_params=incar_params)
 
 
 def prepare_kpoints(structure: Atoms, kspacing: float):
@@ -179,24 +131,23 @@ def prepare_potcar(structure: Atoms, pp_path: str):
 
 
 def prepare_incar(
-    incar: Incar,
+    incar_dict: dict,
     incar_params: str = '',
 ):
     """Generate INCAR file for VASP calculation.
 
     Parameters are applied in the following order (later overrides earlier):
-    1. VASP_BASE_INCAR (always applied)
-    2. step_input.to_vasp_incar() (from step-specific input model)
-    3. incar_params argument
-    4. Parsed parameters string from step_input
+    1. incar_dict (base parameters)
+    2. incar_params (additional parameters in KEY=VALUE format string)
 
     Parameters
     ----------
-    incar_params : dict, optional
-        Additional INCAR parameters.
-    step_input : SRInputT | NVTInputT | NVEInputT | SCFInputT, optional
-        Step-specific input parameters.
+    incar_dict : dict
+        Base INCAR parameters dictionary.
+    incar_params : str, optional
+        Additional INCAR parameters in KEY=VALUE format string.
     """
+    incar = Incar.from_dict(incar_dict)
     if incar_params:
         incar_append = Incar.from_str(incar_params)
         incar.update(incar_append)
