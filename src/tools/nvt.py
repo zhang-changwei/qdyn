@@ -15,7 +15,7 @@ from jobflow import job
 
 from ..input import NVTInputT
 from ..params import params_default
-from ..job_initialize import prepare_vasp_inputs
+from ..input_prepare import prepare_vasp_inputs
 from ..output import Output
 
 
@@ -24,15 +24,16 @@ MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergenc
 
 @job
 def run_nvt(
-    structure: Atoms,
     software: str,
     parameters: NVTInputT,
-    pp_path: str = '',
-    orb_path: str = '',
+    pp_path: str,
+    orb_path: str,
+    structure: Atoms,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
     plot: bool = False,
+    prepare_input_only: bool = False,
 ) -> Output:
     """Run NVT molecular dynamics simulation with automatic retry on temperature divergence.
 
@@ -45,8 +46,6 @@ def run_nvt(
 
     Parameters
     ----------
-    structure : Atoms
-        Atomic structure.
     software : str
         Software name ('vasp', 'cp2k', etc.).
     parameters : NVTInputT
@@ -55,6 +54,8 @@ def run_nvt(
         Path to pseudopotential files.
     orb_path : str
         Path to orbital files (for SIESTA/ABACUS/OpenMX).
+    structure : Atoms
+        Atomic structure.
     nodes : int
         Number of nodes for parallel calculation.
     ntasks_per_node : int
@@ -107,11 +108,13 @@ def run_nvt(
         )
 
         # Process output and check convergence
-        scf_converged, temp_converged, avg_temp, max_deviation = _process_nvt_output_vasp(
-            target_temp=parameters.temp_end,
-            plot=plot,
-            output=output,
-            attempt=attempt,
+        scf_converged, temp_converged, avg_temp, max_deviation = (
+            _process_nvt_output_vasp(
+                target_temp=parameters.temp_end,
+                plot=plot,
+                output=output,
+                attempt=attempt,
+            )
         )
 
         # Check 1: SCF convergence - if failed, raise error immediately
@@ -157,11 +160,21 @@ def run_nvt(
             # Backup current round files
             backup_dir = f"nvt_attempt_{attempt}"
             os.makedirs(backup_dir, exist_ok=True)
-            for f in ['POSCAR', 'CONTCAR', 'OSZICAR', 'OUTCAR', 'INCAR', 'KPOINTS', 'POTCAR']:
+            for f in [
+                'POSCAR',
+                'CONTCAR',
+                'OSZICAR',
+                'OUTCAR',
+                'INCAR',
+                'KPOINTS',
+                'POTCAR',
+            ]:
                 if os.path.isfile(f):
                     shutil.copy(f, os.path.join(backup_dir, f))
             if os.path.isfile('nvt_results.png'):
-                shutil.move('nvt_results.png', os.path.join(backup_dir, 'nvt_results.png'))
+                shutil.move(
+                    'nvt_results.png', os.path.join(backup_dir, 'nvt_results.png')
+                )
             if os.path.isfile('md_vasp.dat'):
                 shutil.move('md_vasp.dat', os.path.join(backup_dir, 'md_vasp.dat'))
             output.stdout.append(f"Backup files saved to {backup_dir}/")
@@ -200,14 +213,14 @@ def _prepare_nvt_input_vasp(
     # 检查这些参数！！！！！
     if parameters.md_thermostat == 'nhc':
         incar['MDALGO'] = 2
-        incar['ISIF'] = 2
+        # incar['ISIF'] = 0
         incar['SMASS'] = 0
     elif parameters.md_thermostat == 'rescale_v':
         incar['MDALGO'] = 0
-        incar['ISIF'] = 2
+        # incar['ISIF'] = 0
         incar['SMASS'] = -1
         incar['NBLOCK'] = 4
-    
+
     prepare_vasp_inputs(
         structure=structure,
         pp_path=pp_path,
