@@ -351,61 +351,6 @@ def _process_nvt_output(
     return scf_converged, temp_converged, avg_temp, max_deviation
 
 
-def save_md_data(md_data: Dict, filename: str = 'md.dat') -> str:
-    """Save MD data to a file in unified format.
-
-    This function saves MD data in a unified format that works for all
-    supported software (VASP, CP2K, SIESTA, ABACUS, OpenMX, etc.).
-
-    Parameters
-    ----------
-    md_data : dict
-        MD data dictionary with unified format:
-        - 'steps': list of step numbers
-        - 'temperatures': list of temperatures (K)
-        - 'total_energies': list of total energies (eV)
-        - 'potential_energies': list of potential energies (eV)
-        - 'kinetic_energies': list of kinetic energies (eV)
-        - 'converged': list of bool, SCF convergence status for each step
-        - 'potim': time step (fs)
-    filename : str
-        Output filename (default: 'md.dat').
-
-    Returns
-    -------
-    str
-        Path to the saved file.
-    """
-    with open(filename, 'w') as f:
-        f.write(f"# Time step (fs): {md_data['potim']}\n")
-        f.write(
-            "# Step  Temperature(K)  Total_Energy(eV)  E_pot(eV)  E_kin(eV)  Converged\n"
-        )
-
-        for i in range(len(md_data['steps'])):
-            conv_flag = 1 if md_data['converged'][i] else 0
-            f.write(
-                f"{md_data['steps'][i]:6d} "
-                f"{md_data['temperatures'][i]:12.2f} "
-                f"{md_data['total_energies'][i]:16.8f} "
-                f"{md_data['potential_energies'][i]:14.8f} "
-                f"{md_data['kinetic_energies'][i]:14.8f} "
-                f"{conv_flag}\n"
-            )
-
-        # Summary lines
-        temps = np.array(md_data['temperatures'])
-        converged_list = md_data['converged']
-        n_converged = sum(converged_list)
-        n_total = len(converged_list)
-
-        f.write(f"# Total steps: {n_total}\n")
-        f.write(f"# Converged steps: {n_converged}/{n_total}\n")
-        f.write(f"# Average T (K): {np.mean(temps):.2f}\n")
-
-    return os.path.abspath(filename)
-
-
 def check_scf_convergence(
     md_data: Dict,
     check_nsw: Optional[int] = None,
@@ -489,7 +434,7 @@ def check_temperature_convergence(
     n_steps = len(temps)
 
     if n_steps == 0:
-        return False, 0.0, float('inf')
+        return False, 0.0, float('inf'), 0.0
 
     # Use last n_last steps (or all if fewer)
     n_check = min(n_steps, n_last)
@@ -566,5 +511,60 @@ def plot_nvt_results(
     fig.tight_layout()
     plt.savefig(filename, dpi=300)
     plt.close()
+
+    return os.path.abspath(filename)
+
+
+def save_md_data(md_data: Dict, filename: str = 'md.dat') -> str:
+    """Save MD data to a file in unified format.
+
+    This function saves MD data in a unified format that works for all
+    supported software (VASP, CP2K, SIESTA, ABACUS, OpenMX, etc.).
+
+    Parameters
+    ----------
+    md_data : dict
+        MD data dictionary with unified format:
+        - 'steps': list of step numbers
+        - 'temperatures': list of temperatures (K)
+        - 'total_energies': list of total energies (eV)
+        - 'potential_energies': list of potential energies (eV)
+        - 'kinetic_energies': list of kinetic energies (eV)
+        - 'converged': list of bool, SCF convergence status for each step
+        - 'potim': time step (fs)
+    filename : str
+        Output filename (default: 'md.dat').
+
+    Returns
+    -------
+    str
+        Path to the saved file.
+    """
+    with open(filename, 'w') as f:
+        f.write(f"# Time step (fs): {md_data['potim']}\n")
+        f.write(
+            "# Step  Temperature(K)  Total_Energy(eV)  E_pot(eV)  E_kin(eV)  Converged\n"
+        )
+
+        for i in range(len(md_data['steps'])):
+            conv_flag = 1 if md_data['converged'][i] else 0
+            f.write(
+                f"{md_data['steps'][i]:6d} "
+                f"{md_data['temperatures'][i]:12.2f} "
+                f"{md_data['total_energies'][i]:16.8f} "
+                f"{md_data['potential_energies'][i]:14.8f} "
+                f"{md_data['kinetic_energies'][i]:14.8f} "
+                f"{conv_flag}\n"
+            )
+
+        # Summary lines
+        temps = np.array(md_data['temperatures'])
+        converged_list = md_data['converged']
+        n_converged = sum(converged_list)
+        n_total = len(converged_list)
+
+        f.write(f"# Total steps: {n_total}\n")
+        f.write(f"# Converged steps: {n_converged}/{n_total}\n")
+        f.write(f"# Average T (K): {np.mean(temps):.2f}\n")
 
     return os.path.abspath(filename)
