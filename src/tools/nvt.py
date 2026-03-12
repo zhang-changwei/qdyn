@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
 
@@ -11,14 +12,13 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
-from pymatgen.io.vasp import Incar
 from jobflow import job
 
 from ..input import NVTInputT
 from ..params import params_default
 from ..input_prepare import prepare_vasp_inputs
 from ..output_postprocess import extract_md_data_from_oszicar
-from ..output import Output
+from .run_vasp import run_vasp
 
 
 MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergence
@@ -36,7 +36,7 @@ def run_nvt(
     cpus_per_task: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> Output:
+) -> Dict:
     """Run NVT molecular dynamics simulation with automatic retry on temperature divergence.
 
     Jobflow automatically manages the working directory, so all input files
@@ -71,8 +71,12 @@ def run_nvt(
 
     Returns
     -------
-    Output
-        Output object containing files and images.
+    Dict
+        Dictionary containing:
+        - run_dir: Current working directory path
+        - software: Software name used
+        - images: List of paths to generated plot files
+        - contcar: Final atomic structure (from CONTCAR)
 
     Raises
     ------
@@ -80,16 +84,15 @@ def run_nvt(
         If SCF convergence fails or temperature does not converge after
         MAX_NVT_RETRIES attempts.
     """
-    output = Output()
+
     software_lower = software.lower()
 
     current_structure = structure
     nprocs = nodes * ntasks_per_node
+    images = []
+    md_files = []
 
     for attempt in range(1, MAX_NVT_RETRIES + 1):
-        output.stdout.append(f"\n{'=' * 50}")
-        output.stdout.append(f"NVT Attempt {attempt}/{MAX_NVT_RETRIES}")
-        output.stdout.append(f"{'=' * 50}")
 
         # Prepare input files
         _prepare_nvt_input(
@@ -101,20 +104,23 @@ def run_nvt(
         )
 
         # Run VASP
-        result = subprocess.run(
-            ['mpirun', '-np', str(nprocs), 'vasp'],
-            capture_output=True,
-            text=True,
-        )
+        run_vasp(nprocs=nprocs, is_alle=parameters.is_alle)
 
         # Process output and check convergence
-        scf_converged, temp_converged, avg_temp, max_deviation = _process_nvt_output(
+        (
+            scf_converged,
+            temp_converged,
+            max_deviation,
+            attempt_mdfile,
+            attempt_image,
+        ) = _process_nvt_output(
             software=software_lower,
             target_temp=parameters.temp_end,
             plot=plot,
-            output=output,
             attempt=attempt,
         )
+        md_files.append(attempt_mdfile)
+        images.append(attempt_image)
 
         # Check 1: SCF convergence - if failed, raise error immediately
         if not scf_converged:
@@ -122,24 +128,12 @@ def run_nvt(
                 f"NVT calculation failed: SCF did not converge properly. "
                 f"Please check the output files for details."
             )
-            output.stdout.append(f"ERROR: {error_msg}")
             raise RuntimeError(error_msg)
 
         # Check 2: Temperature convergence
         if temp_converged:
-            output.stdout.append(
-                f"NVT simulation completed successfully after {attempt} attempt(s)."
-            )
-            output.stdout.append(f"Final average temperature: {avg_temp:.1f} K")
-            output.stdout.append(f"Max temperature deviation: {max_deviation:.1f} K")
             break
         else:
-            output.stdout.append(
-                f"Temperature not converged (deviation: {max_deviation:.1f} K > "
-                f"{parameters.temp_end * 0.10:.1f} K). "
-                f"Will restart from CONTCAR..."
-            )
-
             # Check if we've exhausted retries
             if attempt >= MAX_NVT_RETRIES:
                 error_msg = (
@@ -147,13 +141,11 @@ def run_nvt(
                     f"{MAX_NVT_RETRIES} attempts. Max deviation: {max_deviation:.1f} K. "
                     f"Please check the system or increase MAX_NVT_RETRIES."
                 )
-                output.stdout.append(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
 
             # Read CONTCAR for next iteration
             if not os.path.isfile('CONTCAR'):
                 error_msg = "CONTCAR not found after NVT calculation."
-                output.stdout.append(f"ERROR: {error_msg}")
                 raise RuntimeError(error_msg)
 
             # Backup current round files
@@ -180,13 +172,17 @@ def run_nvt(
                     f'md_attempt_{attempt}.dat',
                     os.path.join(backup_dir, f'md_attempt_{attempt}.dat'),
                 )
-            output.stdout.append(f"Backup files saved to {backup_dir}/")
 
             # Read CONTCAR as new structure for next iteration
             current_structure = ase.io.read('CONTCAR', format='vasp')
-            output.stdout.append("Loaded structure from CONTCAR for next iteration.")
 
-    return output
+    return {
+        'run_dir': str(Path.cwd()),
+        'software': software,
+        'md_files': md_files,
+        'images': images,
+        'contcar': current_structure,
+    }
 
 
 def _prepare_nvt_input(
@@ -251,11 +247,10 @@ def _process_nvt_output(
     software: str,
     target_temp: float,
     plot: bool,
-    output: Output,
     attempt: int = 1,
     check_nsw: Optional[int] = None,
     max_unconverged_ratio: float = 0.01,
-) -> Tuple[bool, bool, float, float]:
+) -> Tuple[bool, bool, float, str, str]:
     """Process NVT output files and check convergence (universal for all software).
 
     This function extracts MD data using software-specific functions,
@@ -270,8 +265,6 @@ def _process_nvt_output(
         Target temperature for NVT simulation.
     plot : bool
         Whether to generate plots.
-    output : Output
-        Output object to store results.
     attempt : int
         Current attempt number (for labeling).
     check_nsw : int, optional
@@ -281,13 +274,16 @@ def _process_nvt_output(
 
     Returns
     -------
-    Tuple[bool, bool, float, float]
-        (scf_converged, temp_converged, avg_temp, max_deviation)
+    Tuple[bool, bool, float, float, str, str]
+        (scf_converged, temp_converged, avg_temp, max_deviation, image, md_file)
         - scf_converged: True if SCF converged properly
         - temp_converged: True if temperature converged to target
         - avg_temp: Average temperature of last 1000 steps
         - max_deviation: Maximum temperature deviation from target
+        - image: Path to generated plot file
+        - md_file: Path to saved MD data file
     """
+
     # Extract MD data using software-specific function
     match software:
         case 'vasp':
@@ -298,64 +294,43 @@ def _process_nvt_output(
             )
 
     if md_data is None or len(md_data['steps']) == 0:
-        output.stdout.append(f"ERROR: No MD data found for {software}")
-        return False, False, 0.0, float('inf')
-
-    n_steps = len(md_data['steps'])
-    output.stdout.append(f"MD steps completed: {n_steps}")
+        raise FileNotFoundError(
+            "Failed to extract MD data from output files. Please check the output for errors."
+        )
 
     # Check SCF convergence (universal)
-    scf_converged, n_unconverged, n_checked = check_scf_convergence(
+    scf_converged = check_scf_convergence(
         md_data=md_data,
         check_nsw=check_nsw,
         max_unconverged_ratio=max_unconverged_ratio,
     )
 
-    if scf_converged:
-        output.stdout.append(f"SCF convergence: PASSED")
-    else:
-        output.stdout.append(
-            f"SCF convergence: FAILED ({n_unconverged}/{n_checked} unconverged steps)"
-        )
-
     # Check temperature convergence (universal)
     n_last = min(len(md_data['temperatures']), 1000)
-    temp_converged, avg_temp, max_deviation, threshold = check_temperature_convergence(
+    temp_converged, max_deviation = check_temperature_convergence(
         md_data=md_data,
         target_temp=target_temp,
         n_last=n_last,
         threshold_ratio=0.10,
     )
-    output.stdout.append(f"Average temperature (last {n_last} steps): {avg_temp:.1f} K")
-    output.stdout.append(f"Max temperature deviation: {max_deviation:.1f} K")
-
-    if temp_converged:
-        output.stdout.append(f"Temperature convergence: PASSED")
-    else:
-        output.stdout.append(
-            f"Temperature convergence: FAILED "
-            f"(deviation {max_deviation:.1f} K > threshold {threshold:.1f} K)"
-        )
 
     # Save MD data to file in unified format
     md_filename = f'md_attempt_{attempt}.dat'
-    md_data_path = save_md_data(md_data, filename=md_filename)
-    output.files.append(md_data_path)
+    md_file = save_md_data(md_data, filename=md_filename)
 
     # Generate plots if requested
     if plot:
         plot_filename = f'nvt_results_attempt_{attempt}.png'
-        plot_path = plot_nvt_results(md_data, target_temp, filename=plot_filename)
-        output.images.append(plot_path)
+        image = plot_nvt_results(md_data, target_temp, filename=plot_filename)
 
-    return scf_converged, temp_converged, avg_temp, max_deviation
+    return scf_converged, temp_converged, max_deviation, md_file, image
 
 
 def check_scf_convergence(
     md_data: Dict,
     check_nsw: Optional[int] = None,
     max_unconverged_ratio: float = 0.01,
-) -> Tuple[bool, int, int]:
+) -> bool:
     """Check SCF convergence from MD data (universal for all software).
 
     This function checks if SCF converged properly based on the converged
@@ -372,17 +347,14 @@ def check_scf_convergence(
 
     Returns
     -------
-    Tuple[bool, int, int]
-        (converged, n_unconverged, n_total)
-        - converged: True if SCF converged properly
-        - n_unconverged: Number of unconverged steps
-        - n_total: Total number of steps checked
+    bool
+        True if SCF converged properly, False if there are too many unconverged steps.
     """
     converged_list = md_data['converged']
     n_steps = len(converged_list)
 
     if n_steps == 0:
-        return False, 0, 0
+        raise ValueError("No convergence data available to check SCF convergence.")
 
     # Default: check last 5% of steps
     if check_nsw is None:
@@ -391,14 +363,14 @@ def check_scf_convergence(
     # Get the range to check
     check_range = converged_list[-check_nsw:]
 
-    n_total = len(check_range)
+    # n_total = len(check_range)
     n_unconverged = sum(1 for c in check_range if not c)
     max_unconverged = int(check_nsw * max_unconverged_ratio)
 
     # Converged if unconverged steps in check range <= max_unconverged
     converged = n_unconverged <= max_unconverged
 
-    return converged, n_unconverged, n_total
+    return converged
 
 
 def check_temperature_convergence(
@@ -406,7 +378,7 @@ def check_temperature_convergence(
     target_temp: float,
     n_last: int = 1000,
     threshold_ratio: float = 0.10,
-) -> Tuple[bool, float, float, float]:
+) -> Tuple[bool, float]:
     """Check temperature convergence from MD data (universal for all software).
 
     This function checks if temperature converged to the target value.
@@ -434,13 +406,12 @@ def check_temperature_convergence(
     n_steps = len(temps)
 
     if n_steps == 0:
-        return False, 0.0, float('inf'), 0.0
+        raise ValueError("No temperature data available to check convergence.")
 
     # Use last n_last steps (or all if fewer)
     n_check = min(n_steps, n_last)
     last_ntemps = temps[-n_check:]
 
-    avg_temp = np.mean(last_ntemps)
     temp_deviation = np.abs(last_ntemps - target_temp)
     max_deviation = np.max(temp_deviation)
 
@@ -448,7 +419,7 @@ def check_temperature_convergence(
     threshold = target_temp * threshold_ratio
     converged = max_deviation <= threshold
 
-    return converged, avg_temp, max_deviation, threshold
+    return converged, max_deviation
 
 
 def plot_nvt_results(
