@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import natsort
 
-from typing import Literal, Optional, List, Dict, Sequence
+from typing import Literal, Optional, List, Dict, Sequence, cast
 
 from .libcanac import aeolap
 from .libcanac.utils import (load_wfc, close_wfc, 
@@ -48,7 +48,10 @@ def extract_eigvals_and_nacs(
     if not dirs_sorted:
         run_dirs = natsort.natsorted(run_dirs)
 
-    assert is_alle is False
+    assert not (is_alle and is_gamma_ver), "Alle and gamma version cannot be both True."
+    assert not (software != 'vasp' and is_alle), "Alle is only supported for VASP."
+    if software in ['abacus', 'siesta', 'openmx', 'hamgnn']:
+        assert is_gamma_ver, f"{software} only supports gamma version currently." # S(gamma) only
 
     if software == 'abacus':
         wfc_path = Path(run_dirs[0]) / 'WFC'
@@ -80,6 +83,11 @@ def extract_eigvals_and_nacs(
     with multiprocessing.Pool(processes=nproc) as pool:
         results = []
         paw_info = None
+        # for alle, do some checkings beforehand
+        if is_alle:
+            dir_first = check_first_dir_alle(run_dirs)
+            aeolap.test(bmin_stored, bmax_stored, dir_first)
+            paw_info = aeolap.PawProj_info(dir_first)
 
         # tdolap
         for idx in indices:
@@ -99,6 +107,7 @@ def extract_eigvals_and_nacs(
                     'ispin': ispin,
                     'soc': soc,
                     'is_alle': is_alle,
+                    'paw_info': paw_info,
                     'sysname': sysname,
                 }
             )
@@ -178,9 +187,10 @@ def calc_tdolap_wrapper(
     ispin: int,
     soc: bool = False,
     is_alle: bool = False,
+    paw_info: Optional[aeolap.PawProj_info] = None,
     sysname: str = 'qdyn',
 ):
-
+    # file checking and loading
     waveA_mapping = {
         'vasp': 'WAVECAR',
         'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+1}_nao.txt',
@@ -196,31 +206,87 @@ def calc_tdolap_wrapper(
 
     f_waveA = Path(dirA) / waveA_mapping[software]
     f_waveB = Path(dirB) / waveB_mapping[software]
-    f_S = None
 
     if not f_waveA.exists() or not f_waveB.exists():
         success = False
         return success, index, None, None
+    if is_alle:
+        f_normalcarA = Path(dirA) / 'NormalCAR'
+        f_normalcarB = Path(dirB) / 'NormalCAR'
+        if not f_normalcarA.exists() or not f_normalcarB.exists():
+            success = False
+            return success, index, None, None
     wfc_A = load_wfc(software, str(f_waveA))
     wfc_B = load_wfc(software, str(f_waveB))
-    S = None
 
-    normalize = True if software == 'vasp' else False
-    cic_t = np.stack(
-        [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
-        for band_idx in range(bmin, bmax+1)],
-        axis=0
-    )
-    cic_tdt = np.stack(
-        [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
-        for band_idx in range(bmin, bmax+1)],
-        axis=0
-    )
+    S = None
+    if software in ['hamgnn', 'siesta', 'abacus', 'openmx']:
+        if (Path(dirA) / 'overlap.npz').exists():
+            from scipy.sparse import csr_array as csr
+            f_SA = Path(dirA) / 'overlap.npz'
+            S_raw = np.load(f_SA)
+            S_data = S_raw['data']
+            S_indices = S_raw['indices']
+            S_indptr = S_raw['indptr']
+            S_shape = S_raw['shape']
+            S = csr((S_data, S_indices, S_indptr), shape=S_shape, dtype=np.float32)
+            S = S.toarray()
+        elif (Path(dirA) / 'overlap.npy').exists():
+            f_SA = Path(dirA) / 'overlap.npy'
+            S = np.load(f_SA)
+        else:
+            success = False
+            return success, index, None, None
+
+    # validations
+    if software == 'vasp':
+        assert wfc_A._nbands == wfc_B._nbands, "Number of bands mismatch between two steps."
+        assert wfc_A._nplws == wfc_B._nplws, "Number of plane waves mismatch between two steps." # type: ignore
+
+    # read coefficients
+    normalize = True if (software == 'vasp' and not is_alle) else False
+    if software in ['vasp', 'sista']:
+        cic_t = np.stack(
+            [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            for band_idx in range(bmin, bmax+1)],
+            axis=0
+        )
+        cic_tdt = np.stack(
+            [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            for band_idx in range(bmin, bmax+1)],
+            axis=0
+        )
+    else: # hamgnn, abacus
+        cic_t = wfc_A.readBandCoeffs(slice(bmin-1, bmax))
+        cic_tdt = wfc_B.readBandCoeffs(slice(bmin-1, bmax))
     
+    # calculate tdolap
     tdolap = calc_tdolap(software, cic_t, cic_tdt, S)
 
+    if is_alle:
+        from spinorb import read_cproj_NormalCar
+        paw_info = cast(aeolap.PawProj_info, paw_info)
+
+        cprojs1 = read_cproj_NormalCar(os.path.join(dirA, 'NormalCAR'))
+        cprojs2 = read_cproj_NormalCar(os.path.join(dirB, 'NormalCAR'))
+
+        # On the fly verify
+        s_olap = cic_t.conj() @ cic_t.T
+        s_aug_olap = aeolap.ae_aug_olap_martrix(
+            bmin, bmax, cprojs1, cprojs1, paw_info,
+            wfc_A._nkpts, wfc_A._nbands, ikpt, ispin
+        )
+        s_olap += s_aug_olap
+        aeolap.realtime_checking(s_olap, dirA)
+
+        # add the augmentation part to tdolap
+        tdolap += aeolap.ae_aug_olap_martrix(
+            bmin, bmax, cprojs1, cprojs2, paw_info,
+            wfc_A._nkpts, wfc_A._nbands, ikpt, ispin
+        )
+
     # eigenvalues
-    ev = wfc_A._bands[ispin-1, ikpt-1, bmin-1:bmax]
+    ev = wfc_A._bands[ispin-1, ikpt-1, bmin-1:bmax] # type: ignore
 
     # close
     close_wfc(software, wfc_A)
@@ -246,6 +312,13 @@ def calc_nac_wrapper(
         cc1, cc2 = phase_correction(tdolap, is_gamma_ver)
 
     return tdolap, cc1, cc2, perm1, perm2
+
+def check_first_dir_alle(dirs: Sequence[str]):
+    for dir in dirs:
+        if (Path(dir) / 'WAVECAR').exists() and (Path(dir) / 'NormalCAR').exists():
+            return dir
+    else:
+        raise FileNotFoundError("No directory contains both WAVECAR and NormalCAR for alle checking.")
 
 def plot_tdeigenvalues():
     pass

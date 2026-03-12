@@ -70,19 +70,20 @@ def phase_apply(tdolap: npt.NDArray, cc1: npt.NDArray, cc2: npt.NDArray, is_gamm
     return np.abs(nac) * np.sign(nac.real) # type: ignore
 
 
-def load_wfc(software: str, source: str):
+def load_wfc(software: str, source: str, is_gamma_ver: bool = False):
     if software == 'vasp':
         from vaspwfc import vaspwfc
-        return vaspwfc(source)
+        # vasp always store wavefunction in complex, is_gamma_ver can be omitted.
+        return vaspwfc(source, lgamma=is_gamma_ver)
     if software == 'siesta':
         from .siestawfc import siestawfc
-        return siestawfc(source)
+        return siestawfc(source, lgamma=is_gamma_ver)
     if software == 'hamgnn':
-        from .hamnetwfc import hamnetwfc
-        return hamnetwfc(source)
+        from .hamgnnwfc import hamngnnwfc
+        return hamngnnwfc(source)
     if software == 'abacus':
         from .abacuswfc import abacuswfc
-        return abacuswfc(source)
+        return abacuswfc(source, lgamma=is_gamma_ver)
     
     raise NotImplementedError(
         f"Software {software} is not supported for loading wavefunction coefficients."

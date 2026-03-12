@@ -30,6 +30,8 @@ def run_pre_namd(
             head = f.readline()
             if head.strip().endswith('gamma-only'):
                 is_gamma_ver = True
+    elif software in ['abacus', 'hamgnn', 'openmx', 'siesta']:
+        is_gamma_ver = True
 
     if isinstance(parameters.bmin, str):
         bmin_ = parameters.bmin.lower()
@@ -48,7 +50,7 @@ def run_pre_namd(
 
     extract_eigvals_and_nacs(
         run_dirs=run_dirs,
-        software=software,
+        software=software, # type: ignore
         is_gamma_ver=is_gamma_ver,
         is_reorder=parameters.adv.reorder,
         is_alle=parameters.adv.alle,
@@ -56,7 +58,6 @@ def run_pre_namd(
         bmax=bmax_,
         ikpt=parameters.adv.ikpt,
         ispin=parameters.adv.ispin,
-        md_dt=parameters.md_dt,
         nproc=nproc,
     )
 
