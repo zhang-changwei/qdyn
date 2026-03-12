@@ -6,10 +6,13 @@ import numpy as np
 import numpy.typing as npt
 import natsort
 
-from typing import Literal, Optional, List, Dict, Sequence
+from typing import Literal, Optional, List, Dict, Sequence, cast
 
 from .libcanac import aeolap
-from .libcanac.utils import load_wfc, close_wfc, calc_tdolap
+from .libcanac.utils import (load_wfc, close_wfc, 
+                             reorder, reorder_apply, 
+                             phase_correction, phase_apply,
+                             calc_tdolap)
 
 CA_NAC_VERSION = '1.2.0_beta'
 
@@ -21,6 +24,7 @@ def version():
 def extract_eigvals_and_nacs(
     run_dirs: List[str],
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx', 'hamgnn'] = 'vasp',
+    sysname: str = 'qdyn',
     is_gamma_ver: bool = False,
     is_reorder: bool = False,
     is_alle: bool = False,
@@ -29,7 +33,6 @@ def extract_eigvals_and_nacs(
     ikpt: int = 1,
     ispin: int = 1,
     soc: bool = False,
-    md_dt: float = 1.0,
     nproc: int = 1,
     bmin_stored: Optional[int] = None,
     bmax_stored: Optional[int] = None,
@@ -40,127 +43,283 @@ def extract_eigvals_and_nacs(
         bmin_stored = bmin
     if not bmax_stored:
         bmax_stored = bmax
+    nbasis = bmax_stored - bmin_stored + 1
     
     if not dirs_sorted:
         run_dirs = natsort.natsorted(run_dirs)
 
-    assert is_alle is False
+    assert not (is_alle and is_gamma_ver), "Alle and gamma version cannot be both True."
+    assert not (software != 'vasp' and is_alle), "Alle is only supported for VASP."
+    if software in ['abacus', 'siesta', 'openmx', 'hamgnn']:
+        assert is_gamma_ver, f"{software} only supports gamma version currently." # S(gamma) only
 
     if software == 'abacus':
         wfc_path = Path(run_dirs[0]) / 'WFC'
         nstep = len(os.listdir(wfc_path)) - 1
+        run_dirs = [run_dirs[0]] * (nstep + 1) # all the same dir
     else:
         nstep = len(run_dirs) - 1
+    indices = np.arange(nstep) # from 0
+
+    olapT = np.complex128 if software == 'vasp' and not is_gamma_ver else np.float64
+
+    # resume
+    store_path = 'canac_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_ae={}.npz'.format(
+        nstep, bmin_stored, bmax_stored, ikpt, ispin, int(is_alle)
+    )
+    if Path(store_path).exists():
+        logging.info(f"Found existing results at {store_path}. Loading...")
+        data = np.load(store_path)
+        check_list = data['success']
+        tdolaps = data['tdolaps']
+        eigenvalues = data['eigenvalues']
+    else:
+        check_list = np.zeros(nstep, dtype=np.bool)
+        tdolaps = np.zeros((nstep, nbasis, nbasis), dtype=olapT)
+        eigenvalues = np.zeros((nstep, nbasis), dtype=np.float64)
 
     # main calculation
     multiprocessing.freeze_support()
     with multiprocessing.Pool(processes=nproc) as pool:
-        indices = np.arange(nstep) + 1
-        if software == 'abacus':
-            run_dirs_A = [run_dirs[0]]
-            run_dirs_B = [run_dirs[0]]
-        else:
-            run_dirs_A = run_dirs[:-1][::nproc]
-            run_dirs_B = run_dirs[1:][::nproc]
-        result = pool.apply_async(calc_tdolap_wrapper,
-            kwds = {
-                'indices': indices[::nproc],
-                'run_dirs_A': run_dirs_A,
-                'run_dirs_B': run_dirs_B,
-                'software': software,
-                'bmin': bmin_stored,
-                'bmax': bmax_stored,
-                'ikpt': ikpt,
-                'ispin': ispin,
-                'soc': soc,
-            }
-        )
+        results = []
+        paw_info = None
+        # for alle, do some checkings beforehand
+        if is_alle:
+            dir_first = check_first_dir_alle(run_dirs)
+            aeolap.test(bmin_stored, bmax_stored, dir_first)
+            paw_info = aeolap.PawProj_info(dir_first)
+
+        # tdolap
+        for idx in indices:
+            # skip if already processed
+            if check_list[idx]:
+                continue
+
+            result = pool.apply_async(calc_tdolap_wrapper,
+                kwds = {
+                    'index': idx,
+                    'dirA': run_dirs[idx],
+                    'dirB': run_dirs[idx + 1],
+                    'software': software,
+                    'bmin': bmin_stored,
+                    'bmax': bmax_stored,
+                    'ikpt': ikpt,
+                    'ispin': ispin,
+                    'soc': soc,
+                    'is_alle': is_alle,
+                    'paw_info': paw_info,
+                    'sysname': sysname,
+                }
+            )
+            results.append(result)
+
+        for result in results:
+            success, idx, tdolap, ev = result.get()
+            if success:
+                tdolaps[idx] = tdolap
+                eigenvalues[idx] = ev
+                check_list[idx] = True
+        
+    # save results
+    np.savez(
+        store_path,
+        success=check_list,
+        tdolaps=tdolaps,
+        eigenvalues=eigenvalues
+    )
+
+    if np.all(check_list):
+        logging.info("All steps processed successfully.")
+        with multiprocessing.Pool(processes=nproc) as pool:
+            results = []
+            # nac
+            for idx in indices:
+                result = pool.apply_async(calc_nac_wrapper,
+                    kwds = {
+                        'tdolap': tdolaps[idx],
+                        'is_gamma_ver': is_gamma_ver,
+                        'is_reorder': is_reorder,
+                    }
+                )
+                results.append(result)
+
+            cc_left = np.ones(nbasis, dtype=olapT)
+            perm_left = np.arange(nbasis, dtype=int)
+            nacs = np.zeros((nstep, nbasis, nbasis), dtype=np.float64)
+
+            for idx, result in enumerate(results):
+                tdolap, _, cc2, _, perm2 = result.get()
+                if is_reorder:
+                    perm_right = perm_left[perm2]
+                    # The diff between perm_left and perm_right is handled before
+                    # So add perm_left only to cc2, tdolap
+                    cc2 = reorder_apply(cc2, perm_left)
+                    eigenvalues[idx] = reorder_apply(eigenvalues[idx], perm_left)
+                    tdolap = reorder_apply(tdolap, perm_left)
+
+                cc_right = cc_left * cc2
+                
+                nac = phase_apply(tdolap, cc_left, cc_right, is_gamma_ver)
+
+                # save
+                nacs[idx] = nac
+
+                # update
+                cc_left = cc_right
+                if is_reorder:
+                    perm_left = perm_right # type: ignore
+
+        # save in HFNAMD format
+        logging.info("Saving results in HFNAMD format...")
+        np.savetxt('EIGTXT', eigenvalues)
+        np.savetxt('NATXT', nacs)
+
 
 
 def calc_tdolap_wrapper(
-    indices: Sequence[int],
-    run_dirs_A: Sequence[str],
-    run_dirs_B: Sequence[str],
+    index: int, # from 0 to nstep-1
+    dirA: str,
+    dirB: str,
     software: str,
     bmin: int,
     bmax: int,
     ikpt: int,
     ispin: int,
     soc: bool = False,
-    is_gamma_ver: bool = False,
-    prev_output_path: str | None = None,
+    is_alle: bool = False,
+    paw_info: Optional[aeolap.PawProj_info] = None,
+    sysname: str = 'qdyn',
 ):
-    nstep = len(indices)
-    success = np.zeros(nstep, dtype=bool)
-    tdolaps = []
-    eigenvalues = []
-    # read from prev_output if provided
-    resume = False
-    if prev_output_path:
-        prev: Dict[str, npt.NDArray] = np.load(prev_output_path)
-        resume = True
+    # file checking and loading
+    waveA_mapping = {
+        'vasp': 'WAVECAR',
+        'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+1}_nao.txt',
+        'siesta': f'{sysname}.fullBZ.WFSX',
+        'hamgnn': 'wfc.npz'
+    }
+    waveB_mapping = {
+        'vasp': 'WAVECAR',
+        'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+2}_nao.txt',
+        'siesta': f'{sysname}.fullBZ.WFSX',
+        'hamgnn': 'wfc.npz'
+    }
 
-    if software == 'abacus':
-        run_dir = run_dirs_A[0]
-        for i, idx in enumerate(indices):
-            if resume and f'tdolap_{idx}' in prev.keys():
-                success[i] = True
-                tdolaps.append(prev[f'tdolap_{idx}'])
-                eigenvalues.append(prev[f'ev_{idx}'])
-            f_waveA = Path(run_dir) / 'WFC' / f'wfk{ikpt}g{idx}_nao.txt'
-            f_waveB = Path(run_dir) / 'WFC' / f'wfk{ikpt}g{idx+1}_nao.txt'
-            if not f_waveA.exists() or not f_waveB.exists():
-                success[i] = False
-                continue
-            wfc_A = load_wfc('abacus', f_waveA)
-            wfc_B = load_wfc('abacus', f_waveB)
-            S = None
-            # TODO
+    f_waveA = Path(dirA) / waveA_mapping[software]
+    f_waveB = Path(dirB) / waveB_mapping[software]
+
+    if not f_waveA.exists() or not f_waveB.exists():
+        success = False
+        return success, index, None, None
+    if is_alle:
+        f_normalcarA = Path(dirA) / 'NormalCAR'
+        f_normalcarB = Path(dirB) / 'NormalCAR'
+        if not f_normalcarA.exists() or not f_normalcarB.exists():
+            success = False
+            return success, index, None, None
+    wfc_A = load_wfc(software, str(f_waveA))
+    wfc_B = load_wfc(software, str(f_waveB))
+
+    S = None
+    if software in ['hamgnn', 'siesta', 'abacus', 'openmx']:
+        if (Path(dirA) / 'overlap.npz').exists():
+            from scipy.sparse import csr_array as csr
+            f_SA = Path(dirA) / 'overlap.npz'
+            S_raw = np.load(f_SA)
+            S_data = S_raw['data']
+            S_indices = S_raw['indices']
+            S_indptr = S_raw['indptr']
+            S_shape = S_raw['shape']
+            S = csr((S_data, S_indices, S_indptr), shape=S_shape, dtype=np.float32)
+            S = S.toarray()
+        elif (Path(dirA) / 'overlap.npy').exists():
+            f_SA = Path(dirA) / 'overlap.npy'
+            S = np.load(f_SA)
+        else:
+            success = False
+            return success, index, None, None
+
+    # validations
+    if software == 'vasp':
+        assert wfc_A._nbands == wfc_B._nbands, "Number of bands mismatch between two steps."
+        assert wfc_A._nplws == wfc_B._nplws, "Number of plane waves mismatch between two steps." # type: ignore
+
+    # read coefficients
+    normalize = True if (software == 'vasp' and not is_alle) else False
+    if software in ['vasp', 'sista']:
+        cic_t = np.stack(
+            [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            for band_idx in range(bmin, bmax+1)],
+            axis=0
+        )
+        cic_tdt = np.stack(
+            [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            for band_idx in range(bmin, bmax+1)],
+            axis=0
+        )
+    else: # hamgnn, abacus
+        cic_t = wfc_A.readBandCoeffs(slice(bmin-1, bmax))
+        cic_tdt = wfc_B.readBandCoeffs(slice(bmin-1, bmax))
+    
+    # calculate tdolap
+    tdolap = calc_tdolap(software, cic_t, cic_tdt, S)
+
+    if is_alle:
+        from spinorb import read_cproj_NormalCar
+        paw_info = cast(aeolap.PawProj_info, paw_info)
+
+        cprojs1 = read_cproj_NormalCar(os.path.join(dirA, 'NormalCAR'))
+        cprojs2 = read_cproj_NormalCar(os.path.join(dirB, 'NormalCAR'))
+
+        # On the fly verify
+        s_olap = cic_t.conj() @ cic_t.T
+        s_aug_olap = aeolap.ae_aug_olap_martrix(
+            bmin, bmax, cprojs1, cprojs1, paw_info,
+            wfc_A._nkpts, wfc_A._nbands, ikpt, ispin
+        )
+        s_olap += s_aug_olap
+        aeolap.realtime_checking(s_olap, dirA)
+
+        # add the augmentation part to tdolap
+        tdolap += aeolap.ae_aug_olap_martrix(
+            bmin, bmax, cprojs1, cprojs2, paw_info,
+            wfc_A._nkpts, wfc_A._nbands, ikpt, ispin
+        )
+
+    # eigenvalues
+    ev = wfc_A._bands[ispin-1, ikpt-1, bmin-1:bmax] # type: ignore
+
+    # close
+    close_wfc(software, wfc_A)
+    close_wfc(software, wfc_B)
+
+    return True, index, tdolap, ev
+
+def calc_nac_wrapper(
+    tdolap: npt.NDArray,
+    is_gamma_ver: bool = False,
+    is_reorder: bool = False,
+    is_phase: bool = True,
+):
+    # reorder
+    perm1, perm2 = None, None
+    if is_reorder:
+        perm1, perm2 = reorder(tdolap)
+        tdolap[np.ix_(perm1, perm2)] = tdolap
+
+    # phase correction
+    cc1, cc2 = None, None
+    if is_phase:
+        cc1, cc2 = phase_correction(tdolap, is_gamma_ver)
+
+    return tdolap, cc1, cc2, perm1, perm2
+
+def check_first_dir_alle(dirs: Sequence[str]):
+    for dir in dirs:
+        if (Path(dir) / 'WAVECAR').exists() and (Path(dir) / 'NormalCAR').exists():
+            return dir
     else:
-        filename_mapping = {
-            'vasp': 'WAVECAR',
-            'siesta': 'Sys.fullBZ.WFSX',
-            'hamgnn': 'wfc.npz'
-        }
-        for i, (idx, dirA, dirB) in enumerate(zip(indices, run_dirs_A, run_dirs_B)):
-            if resume and f'tdolap_{idx}' in prev.keys():
-                success[i] = True
-                tdolaps.append(prev[f'tdolap_{idx}'])
-                eigenvalues.append(prev[f'ev_{idx}'])
-            f_waveA = Path(dirA) / filename_mapping[software]
-            f_waveB = Path(dirB) / filename_mapping[software]
-            f_S = None
-            if not f_waveA.exists() or not f_waveB.exists():
-                success[i] = False
-                continue
-            wfc_A = load_wfc(software, f_waveA)
-            wfc_B = load_wfc(software, f_waveB)
+        raise FileNotFoundError("No directory contains both WAVECAR and NormalCAR for alle checking.")
 
-            band_indices = np.arange(bmin, bmax+1)
-            normalize = True if software == 'vasp' else False
-            cic_t = np.stack(
-                [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
-                for band_idx in range(bmin, bmax+1)],
-                axis=0
-            )
-            cic_tdt = np.stack(
-                [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
-                for band_idx in range(bmin, bmax+1)],
-                axis=0
-            )
-            
-            tdolap = calc_tdolap(software, cic_t, cic_tdt, S)
-
-            # eigenvalues
-            evs = wfc_A._bands[ispin-1, ikpt-1, bmin-1:bmax]
-            # store
-            eigenvalues.append(evs)
-            # close
-            close_wfc(software, wfc_A)
-
-    return success
-
-        
-
-
+def plot_tdeigenvalues():
+    pass
 

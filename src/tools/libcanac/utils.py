@@ -1,6 +1,9 @@
 from pathlib import Path
 import numpy as np
 import numpy.typing as npt
+from typing import Any, Sequence
+
+from . import mod_hungarian as hungarian
 
 def orthogon(cic: npt.NDArray) -> npt.NDArray:
     r"""
@@ -25,27 +28,72 @@ def orthogon(cic: npt.NDArray) -> npt.NDArray:
     
     return orthogonal_cic
 
-def load_wfc(software: str, source: str | Path):
+
+def reorder(tdolap: npt.NDArray):
+    reorder_cost = np.real(tdolap.conj() * tdolap)
+    res = hungarian.maximize(reorder_cost)
+    perm1 = np.array(res, dtype=int)[:, 0] # [1,2,3,4]
+    perm2 = np.array(res, dtype=int)[:, 1] # [1,3,2,4]
+
+    return perm1, perm2
+
+
+def reorder_apply(arr: npt.NDArray, perm: npt.NDArray) -> npt.NDArray:
+    dim = len(arr.shape)
+    if dim == 2:
+        perm0 = np.arange(arr.shape[0], dtype=int)
+        arr[np.ix_(perm0, perm)] = arr
+        arr[np.ix_(perm, perm0)] = arr
+    else: # dim == 1
+        arr[perm] = arr
+
+    return arr
+
+
+def phase_correction(tdolap: npt.NDArray, is_gamma_ver: bool = True):
+    if is_gamma_ver:
+        cc2 = np.sign(np.diag(tdolap))
+    else:
+        tdolap_diag = np.diag(tdolap)
+        cc2 = tdolap_diag / np.abs(tdolap_diag)
+    cc1 = np.ones_like(cc2)
+    
+    return cc1, cc2
+
+
+def phase_apply(tdolap: npt.NDArray, cc1: npt.NDArray, cc2: npt.NDArray, is_gamma_ver: bool = True):
+    tdolap = cc1[:, None] * tdolap * cc2.conj()[None, :]
+    nac = tdolap - tdolap.conj().T
+
+    if is_gamma_ver:
+        return nac.real # type: ignore
+    return np.abs(nac) * np.sign(nac.real) # type: ignore
+
+
+def load_wfc(software: str, source: str, is_gamma_ver: bool = False):
     if software == 'vasp':
         from vaspwfc import vaspwfc
-        return vaspwfc(source)
+        # vasp always store wavefunction in complex, is_gamma_ver can be omitted.
+        return vaspwfc(source, lgamma=is_gamma_ver)
     if software == 'siesta':
         from .siestawfc import siestawfc
-        return siestawfc(source)
+        return siestawfc(source, lgamma=is_gamma_ver)
     if software == 'hamgnn':
-        from .hamnetwfc import hamnetwfc
-        return hamnetwfc(source)
+        from .hamgnnwfc import hamngnnwfc
+        return hamngnnwfc(source)
     if software == 'abacus':
         from .abacuswfc import abacuswfc
-        return abacuswfc(source)
+        return abacuswfc(source, lgamma=is_gamma_ver)
     
     raise NotImplementedError(
         f"Software {software} is not supported for loading wavefunction coefficients."
     )
 
+
 def close_wfc(software: str, wfc: Any):
-    if sofware == 'vasp':
+    if software in ['vasp', 'siesta']:
         wfc._wfc.close()
+
 
 def calc_tdolap(
     software: str,
@@ -53,13 +101,13 @@ def calc_tdolap(
     cic_B: npt.NDArray,
     S: npt.NDArray | None = None,
 ) -> npt.NDArray:
-    """
+    r"""
     Calculate the time-derivative overlap matrix (TDOLAP) between two sets of complex wavefunction coefficients.
 
     TDOLAP is defined as:
     
     .. math::
-        \text{TDOLAP} = C_A^\dagger C_B
+        \text{TDOLAP} = \langle \psi_A | \psi_B \rangle
     """
 
     # Ensure the input matrices are orthogonalized

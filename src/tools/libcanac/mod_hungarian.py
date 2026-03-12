@@ -49,6 +49,7 @@ import unittest
 #    from liblibra_core import *
 #from libra_py import *
 
+__all__ = ['minimize', 'maximize']
 
 
 def step1(X):
