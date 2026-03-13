@@ -116,6 +116,8 @@ class NVTInputT(BaseModel):
     temp_end: float = Field(300.0, description="Final temperature in K")
     scf_thr: float = 1e-6
 
+    is_alle: bool = False
+
     parameters: str = ''  
 
 
@@ -161,6 +163,9 @@ class SCFInputT(BasicCalInputT):
     """Input parameters for static SCF calculation."""
 
     nodes: Optional[int] = None
+
+    # Number of SCF frames (taken from the end of NVE trajectory)
+    nscf: int = 2000
 
     # SCF-specific
     nelm: int = 120
