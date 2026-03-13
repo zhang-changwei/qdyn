@@ -24,21 +24,32 @@ qdyn/
 ├── src/
 │   ├── __init__.py
 │   ├── input.py            # Pydantic 输入模型定义
-│   ├── output.py           # 输出数据结构
 │   ├── input_prepare.py    # VASP 输入文件准备 (POSCAR/KPOINTS/POTCAR/INCAR)
 │   ├── job_manager.py      # FastAPI 服务器 + SLURM 作业管理
 │   ├── main_workflow.py    # 主工作流逻辑
 │   ├── params.py           # 默认参数模板 (sr/nvt/nve/scf)
+│   ├── output_postprocess.py # 输出后处理 (MD 数据提取)
 │   └── tools/
-│       ├── canac.py        # 本征值和 NAC 提取 (待实现)
+│       ├── canac.py        # 本征值和 NAC 提取
 │       ├── dephase.py      # 退相位时间计算
-│       └── nvt.py          # NVT 分子动力学运行
+│       ├── nvt.py          # NVT 分子动力学运行
+│       ├── run_vasp.py     # VASP 运行封装
+│       ├── prepare_namd.py # NAMD 预处理
+│       └── libcanac/       # CANAC 核心库
+│           ├── abacuswfc.py
+│           ├── aeolap.py
+│           ├── cp2kwfc.py
+│           ├── hamgnnhugewfc.py
+│           ├── hamnetwfc.py
+│           ├── mod_hungarian.py
+│           ├── siestawfc.py
+│           └── utils.py
 └── namd_server_test/       # 旧版 VASP 工作流代码 (仅供参考)
 ```
 
 **注意**: `namd_server_test/` 目录包含旧版 VASP 工作流的实现代码，采用不同的架构设计，但各 step 的具体处理逻辑可作为参考。
 
-**重要**: `src/constants.py` 在代码中被引用但尚未创建。`job_manager.py` 导入了 `JOB_MANAGER_POLL_INTERVAL`，需要创建此文件或修复导入。
+**重要**: `src/constants.py` 文件不存在，但 `job_manager.py` 导入了 `JOB_MANAGER_POLL_INTERVAL`，需要创建此文件并定义该常量。
 
 ## 核心模块说明
 
@@ -71,10 +82,12 @@ qdyn/
   - 与 jobflow-remote 集成提交作业到 `local_slurm` worker
   - **步骤顺序验证**: NAMD 方法要求步骤连续 (nvt → nve → scf → pre_namd → namd)
   - **断点续算**: 支持 `resume` 参数从之前任务继续
+- **已导入的功能**:
+  - `run_nvt()`: NVT 分子动力学 (从 tools.nvt 导入)
+  - `run_pre_namd()`: NAMD 预处理 (从 tools.prepare_namd 导入)
 - **待完成功能**:
   - `run_nve()`: NVE 分子动力学 (在 main_workflow.py 中引用但未导入)
   - `run_scf()`: SCF 计算 (在 main_workflow.py 中引用但未导入)
-  - `run_pre_namd()`: NAMD 预处理 (在 main_workflow.py 中引用但未导入)
 
 ### input_prepare.py
 - **VASP 输入准备函数**:
@@ -97,14 +110,21 @@ qdyn/
   - `NVTInputT`: NVT 分子动力学参数 (kspacing, md_thermostat, md_dt, md_step, temp_begin, temp_end 等)
   - `NVEInputT`: NVE 分子动力学参数 (继承 BasicCalInputT, smass=-3, potim, nsw 等)
   - `SCFInputT`: 静态 SCF 计算参数 (继承 BasicCalInputT, lorbit, nelm 等)
+  - `PreNAMDInputT`: NAMD 预处理参数 (bmin, bmax, md_dt, adiabatic_rep, surface_hopping, adv)
 
 - **主输入模型**:
-  - `InputT`: 主输入模型，包含 basic_input, scheduler_config, nvt_input, nve_input, scf_input, steps
+  - `InputT`: 主输入模型，包含 basic_input, scheduler_config, nvt_input, nve_input, scf_input, prenamd_input, steps
 
 - **工具函数**:
   - `grep_input_parameters()`: 从文本文件提取参数 (格式: `key = value1 value2 ...`)
   - `_parse_value_string()`: 解析参数值字符串
   - `_parse_single_value()`: 解析单个值 (自动转换 bool/int/float/str)
+
+### output_postprocess.py
+- **VASP 输出处理**:
+  - `extract_md_data_from_oszicar()`: 从 OSZICAR 提取 MD 数据
+    - 返回统一格式的字典: steps, temperatures, total_energies, potential_energies, kinetic_energies, converged, potim
+    - 自动检测 SCF 收敛状态
 
 ### tools/nvt.py
 - **run_nvt()**: NVT 分子动力学主函数 (`@job` 装饰器)
@@ -115,11 +135,24 @@ qdyn/
   - **文件备份**: 每轮计算文件备份到 `nvt_attempt_{n}/` 目录
 - **_prepare_nvt_input()**: 准备 NVT 输入文件
   - 支持 `md_thermostat`: `nhc` (Nose-Hoover) 或 `rescale_v` (速度重标定)
-- **_process_nvt_output_vasp()**: 处理 VASP 输出，返回收敛状态
-- **extract_md_data_from_oszicar()**: 从 OSZICAR 提取 MD 数据
-- **save_md_data()**: 保存 MD 数据到 `md_vasp.dat`
-- **check_md_convergence()**: 检查 SCF 收敛性
+- **_process_nvt_output()**: 处理 VASP 输出，返回收敛状态
+- **check_scf_convergence()**: 检查 SCF 收敛性 (通用函数)
+- **check_temperature_convergence()**: 检查温度收敛性 (通用函数)
 - **plot_nvt_results()**: 绘制 NVT 结果图 (温度、势能、总能量)
+- **save_md_data()**: 保存 MD 数据到统一格式文件
+
+### tools/run_vasp.py
+- **run_vasp()**: VASP 运行封装
+  - 自动检测 K 点数选择 `vasp_gam` 或 `vasp_std`
+  - 支持 `is_alle` 参数使用全电子 VASP (`vasp_ae`)
+  - 使用 `mpirun -np` 启动并行计算
+
+### tools/prepare_namd.py
+- **run_pre_namd()**: NAMD 预处理主函数 (`@job` 装饰器)
+  - 调用 `extract_eigvals_and_nacs()` 提取本征值和 NAC
+  - 支持 DISH 表面跳跃方法时计算退相位时间
+  - 返回 EIGTXT, NATXT, DEPHTIME 文件路径
+- **sample_initial_conditions()**: 生成初始条件采样
 
 ### tools/dephase.py
 - **calculate_dephasing_time()**: 计算退相位时间 (`@job` 装饰器)
@@ -132,15 +165,25 @@ qdyn/
   - 返回: ACF, D(t), 声子影响谱 I(ω)
 
 ### tools/canac.py
-- **extract_eigvals_and_nacs()**: 提取本征值和非绝热耦合 - 待实现
-  - 函数签名已定义，支持多种软件 (VASP/CP2K/SIESTA/ABACUS/OPENMX/HAMGNN)
+- **extract_eigvals_and_nacs()**: 提取本征值和非绝热耦合
+  - 支持多种软件 (VASP/CP2K/SIESTA/ABACUS/OPENMX/HAMGNN)
+  - 使用多进程并行计算时间重叠矩阵
+  - 版本: CA-NAC 1.2.0_beta
+- **calc_tdolap_wrapper()**: 时间重叠矩阵计算包装器
+  - 支持断点续算
+  - 读取波函数文件并计算本征值
 
-### output.py
-- **Output**: 输出数据结构
-  - `stdout`: 标准输出行列表
-  - `files`: 输出文件路径列表
-  - `images`: 图像文件路径列表
-  - `merge()`: 合并另一个 Output 对象
+### tools/libcanac/
+- CANAC 核心库模块
+  - `aeolap.py`: AEOLAP 核心算法
+  - `utils.py`: 工具函数 (load_wfc, close_wfc, calc_tdolap)
+  - `vaspwfc.py`: VASP 波函数处理
+  - `abacuswfc.py`: ABACUS 波函数处理
+  - `cp2kwfc.py`: CP2K 波函数处理
+  - `siestawfc.py`: SIESTA 波函数处理
+  - `hamnetwfc.py`: HamNet 波函数处理
+  - `hamgnnhugewfc.py`: HamGNN Huge 波函数处理
+  - `mod_hungarian.py`: 匈牙利算法实现
 
 ## 配置文件 (config/qdyn.yaml)
 
@@ -151,14 +194,18 @@ basic:
 machine:
   partition: queue1-1           # SLURM 分区名称
   cpus_per_node: 64             # 每节点 CPU 核心数
+  working_dir: /path/to/work    # 工作目录 (必需)
 
 module: 
   vasp: ['compiler/intel/2021.3.0', 'mpi/intelmpi/2021.3.0']
+  python: []
 
 export: 
   vasp:
     PATH: '/path/to/bin'
     LD_LIBRARY_PATH: '/path/to/lib'
+  python:
+    PATH: '/path/to/bin'
 
 pp_path:
   vasp: ''                      # 赝势路径
@@ -173,6 +220,12 @@ nvt:
     cpus_per_task: 1
 
 nve:
+  vasp:
+    nodes: 2
+    ntasks_per_node: 64
+    cpus_per_task: 1
+
+scf:
   vasp:
     nodes: 2
     ntasks_per_node: 64
@@ -223,6 +276,7 @@ python main.py
 3. 在 `input_prepare.py` 中添加 `prepare_{software}_inputs()` 函数
 4. 在 `tools/nvt.py` 中添加 `_prepare_nvt_input_{software}()` 函数
 5. 在 `params.py` 中添加默认参数模板
+6. 在 `tools/libcanac/` 中添加波函数处理模块
 
 ### Git 工作流
 ```bash
@@ -251,26 +305,34 @@ git push
 | jobflow | 工作流定义 |
 | jobflow-remote | 远程作业执行 |
 | jupyter | 交互式开发 |
-| scipy | 科学计算 (dephase.py 使用) |
+| natsort | 自然排序 (canac.py 使用) |
+
+**注意**: `scipy` 在 `dephase.py` 中使用，但未在 pyproject.toml 中声明。
 
 ## 实现状态
 
 | 模块 | 状态 |
 |------|------|
-| job_manager.py | ✅ 已实现 (需创建 constants.py) |
-| main_workflow.py | ⚠️ 部分实现 (缺少 run_nve, run_scf, run_pre_namd) |
+| job_manager.py | ⚠️ 已实现 (需创建 constants.py) |
+| main_workflow.py | ⚠️ 部分实现 (缺少 run_nve, run_scf 导入) |
 | input_prepare.py | ✅ VASP 已实现 |
 | params.py | ✅ 已实现 |
-| tools/nvt.py | ✅ VASP 已实现 |
-| tools/dephase.py | ✅ 已实现 |
-| tools/canac.py | ⏳ 待实现 |
+| output_postprocess.py | ✅ 已实现 |
+| tools/nvt.py | ⚠️ 已实现 (is_alle 参数未定义) |
+| tools/run_vasp.py | ✅ 已实现 |
+| tools/prepare_namd.py | ✅ 已实现 |
+| tools/dephase.py | ⚠️ 已实现 (缺少 scipy 依赖声明) |
+| tools/canac.py | ⚠️ 部分实现 (VASP/SIESTA/HAMGNN/ABACUS 支持，is_alle 未实现) |
+| tools/libcanac/ | ✅ 已实现 |
 
 ## 待解决问题
 
 1. **缺少 constants.py**: `job_manager.py` 导入 `JOB_MANAGER_POLL_INTERVAL` 但文件不存在
-2. **缺少 run_nve/run_scf/run_pre_namd**: `main_workflow.py` 中引用但未导入
+2. **缺少 run_nve/run_scf 导入**: `main_workflow.py` 中引用但未导入这些函数
 3. **scipy 依赖**: `dephase.py` 使用 scipy 但未在 pyproject.toml 中声明
 4. **scf 配置**: `main_workflow.py` 中使用 `self.config['scf']` 但配置文件中未定义
+5. **working_dir 配置**: `job_manager.py` 中使用 `self.config['machine']['working_dir']` 但配置文件中未定义
+6. **is_alle 参数**: `NVTInputT` 中未定义 `is_alle` 属性，但 `run_nvt` 中使用了 `parameters.is_alle`；同时 `canac.py` 中 `assert is_alle is False` 表示该功能尚未实现
 
 ## 注意事项
 
