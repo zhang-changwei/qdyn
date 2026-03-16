@@ -21,7 +21,10 @@ from jobflow_remote import get_jobstore
 
 from .input import InputT
 from .tools.nvt import run_nvt
+from .tools.nve import run_nve
+from .tools.scf import run_scf
 from .tools.prepare_namd import run_pre_namd
+from .tools.namd import run_namd
 
 
 class ValidationError(Exception):
@@ -93,14 +96,12 @@ class MainWorkflow:
 
         if method == 'namd':
             key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
-            try:
-                step_int = [key_map[step] for step in input.steps]
-                if not is_continuous_steps(sorted(step_int)):
-                    raise ValidationError
-            except:
-                raise ValidationError(
-                    f"Invalid steps for method {method}. Steps must be continuous and in the order of nvt -> nve -> scf -> pre_namd -> namd. Got {input.steps}."
-                )
+            inv_map = {v: k for k, v in key_map.items()}
+            step_int = [key_map[step] for step in input.steps]
+            step_int.sort()
+            if not is_continuous_steps(step_int):
+                raise ValidationError
+            first_step = inv_map[step_int[0]]
         else:
             raise NotImplementedError(f"Method {method} is not supported yet.")
 
@@ -281,15 +282,17 @@ class MainWorkflow:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
-                run_dirs = [
-                    jobs[prev_step][idx].output['run_dir'] 
-                    for idx in range(len(jobs[prev_step]))
-                ]
-                prev_output = jobs[prev_step][0].output
+                run_dirs = []
+                for idx in range(len(jobs[prev_step])):
+                    run_dirs.extend(jobs[prev_step][idx].output['run_dirs'])
+                prev_output = jobs[prev_step][-1].output
             elif first_step == 'pre_namd' and resume:
                 prev_jobs = self.job_ids[prev_task_id][prev_step]
-                run_dirs = [self.js.get_output(prev_job_uuid)['run_dir'] for prev_job_uuid in prev_jobs]  # type: ignore
-                prev_output = self.js.get_output(prev_jobs[0])
+                run_dirs = []
+                for prev_job_uuid in prev_jobs:
+                    output = self.js.get_output(prev_job_uuid)
+                    run_dirs.extend(output['run_dirs'])
+                    prev_output = output
             else:
                 raise ValidationError()
 
@@ -319,6 +322,66 @@ class MainWorkflow:
                 },
             )
             jobs['pre_namd'] = [job_pre_namd]
+
+            # update flag
+            is_last_step = True if next_step not in input.steps else False
+            if is_last_step:
+                flag = f'gen_input_{next_step}'
+
+        # step 4: NAMD
+        if 'namd' in input.steps or flag == 'gen_input_namd':
+            prev_step = 'pre_namd'
+            next_step = ''
+            if prev_step in input.steps:
+                prev_output = jobs[prev_step][0].output
+            elif first_step == 'namd' and resume:
+                prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
+                prev_output = self.js.get_output(prev_job_uuid)
+            else:
+                raise ValidationError()
+            eigtxt = prev_output['EIGTXT']
+            natxt = prev_output['NATXT']
+            dephtime = prev_output['DEPHTIME']
+
+            if input.namd_input.surface_hopping == 'FSSH':
+                nodes = 1
+                ntasks_per_node = 1
+                cpus_per_task = self.config['machine']['cpus_per_node']
+            else:
+                nodes = (
+                    input.namd_input.nodes 
+                    if input.namd_input.nodes is not None else 1
+                )
+                ntasks_per_node = self.config['machine']['cpus_per_node']
+                cpus_per_task = 1
+
+            job_namd = run_namd(
+                parameters=input.namd_input,
+                eigtxt=eigtxt,
+                natxt=natxt,
+                dephtime=dephtime,
+                nodes=nodes,
+                ntasks_per_node=ntasks_per_node,
+                cpus_per_task=cpus_per_task,
+                plot=input.basic_input.plot,
+                prepare_input_only=bool(flag),
+            )
+            job_namd = set_run_config(
+                job_namd,
+                exec_config=ExecutionConfig(
+                    modules=self.config['module']['namd'],
+                    export={**self.config['export']['namd'],
+                            'OMP_NUM_THREADS': str(cpus_per_task)},
+                    pre_run=None,
+                    post_run=None,
+                ),
+                resources={
+                    'nodes': nodes,
+                    'ntasks_per_node': ntasks_per_node,
+                    'cpus_per_task': cpus_per_task,
+                },
+            )
+            jobs['namd'] = [job_namd]
 
             # update flag
             is_last_step = True if next_step not in input.steps else False

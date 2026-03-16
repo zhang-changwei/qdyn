@@ -45,7 +45,7 @@ def calculate_dephasing_time(
     energy = np.loadtxt(energies_path)  # shape (nstep, nbasis)
     nbasis = energy.shape[1]
     matrix = np.zeros((nbasis, nbasis), dtype=np.float64)
-    output = {'images': []}
+    images = []
 
     for ii in range(nbasis):
         for jj in range(ii):
@@ -66,7 +66,7 @@ def calculate_dephasing_time(
                 img_path = f'{working_dir}/dephasing_{ii}_{jj}.png'
                 plt.savefig(img_path, dpi=300)
 
-                output['images'].append(img_path)
+                images.append(img_path)
 
             popt, pcov = curve_fit(gaussian, T, Dt)
             Dt_fit = gaussian(T, *popt)
@@ -76,9 +76,8 @@ def calculate_dephasing_time(
     # output
     deph_path = f'{working_dir}/DEPHTIME'
     np.savetxt(deph_path, matrix, fmt='%10.4f')
-    output['DEPHTIME'] = deph_path # type: ignore
 
-    return output
+    return {'DEPHTIME': deph_path, 'images': images}
 
 
 def gaussian(x, sigma):

@@ -33,6 +33,14 @@ def run_pre_namd(
     elif software in ['abacus', 'hamgnn', 'openmx', 'siesta']:
         is_gamma_ver = True
 
+    # sort dirs
+    indices = []
+    for run_dir in run_dirs:
+        idx = int(Path(run_dir).name)
+        indices.append(idx)
+    sorted_indices = np.argsort(indices)
+    run_dirs = [run_dirs[i] for i in sorted_indices]
+
     if isinstance(parameters.bmin, str):
         bmin_ = parameters.bmin.lower()
         bmin_.replace('vbm', prev_output['vbm'])
@@ -59,6 +67,7 @@ def run_pre_namd(
         ikpt=parameters.adv.ikpt,
         ispin=parameters.adv.ispin,
         nproc=nproc,
+        dirs_sorted=True,
     )
 
     images = []
@@ -85,17 +94,3 @@ def run_pre_namd(
                      if parameters.surface_hopping == 'DISH' 
                      else None),
     }
-
-
-def sample_initial_conditions(
-    time_start: int,
-    time_stop: int,
-    bmin: int,
-    bmax: int,
-    nsample: int = 200,
-) -> npt.NDArray[np.int32]:
-    rng = np.random.default_rng()
-    inicon = np.zeros([nsample, 2], dtype=np.int32)
-    inicon[:, 0] = rng.integers(time_start, time_stop, size=nsample, endpoint=True)
-    inicon[:, 1] = rng.integers(bmin, bmax, size=nsample, endpoint=True)
-    return inicon

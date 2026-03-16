@@ -56,6 +56,20 @@ class BasicCalInputT(BaseModel):
 #     encut: float = 500
 #     scf_thr: float = 1e-6
 
+class NAMDInputT(BaseModel):
+    nodes: Optional[int] = None
+
+    md_dt: float = 1.0
+    adiabatic_rep: bool = True
+    surface_hopping: Literal['FSSH', 'DISH'] = 'DISH'
+    nsample: int = 200
+    ntraj: int = 200
+    nelm: int = 10
+    namdtime: int = 1_000_000 # 1 ns
+    temperature: float = 300.0
+    lhole: bool = False
+    inibands: List[int] # start from 1
+
 
 class _PreNAMDInputAdvT(BaseModel):
     reorder: bool = False
@@ -68,7 +82,7 @@ class PreNAMDInputT(BaseModel):
     bmax: int | str = 'CBM'
     md_dt: float = 1.0
     adiabatic_rep: bool = True
-    surface_hopping: Literal['FSSH', 'DISH'] = 'FSSH'
+    surface_hopping: Literal['FSSH', 'DISH'] = 'DISH'
 
     adv: _PreNAMDInputAdvT = _PreNAMDInputAdvT()
 
@@ -194,10 +208,11 @@ class InputT(BaseModel):
     nve_input: NVEInputT
     scf_input: SCFInputT
     prenamd_input: PreNAMDInputT
+    namd_input: NAMDInputT
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
 
-
+# deprecated
 def grep_input_parameters(file_path: str) -> dict:
     """
     Extract parameters from a plain text file and return a dictionary.

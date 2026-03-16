@@ -4,7 +4,6 @@ from pathlib import Path
 import os
 import numpy as np
 import numpy.typing as npt
-import natsort
 
 from typing import Literal, Optional, List, Dict, Sequence, cast
 
@@ -46,6 +45,7 @@ def extract_eigvals_and_nacs(
     nbasis = bmax_stored - bmin_stored + 1
     
     if not dirs_sorted:
+        import natsort
         run_dirs = natsort.natsorted(run_dirs)
 
     assert not (is_alle and is_gamma_ver), "Alle and gamma version cannot be both True."
