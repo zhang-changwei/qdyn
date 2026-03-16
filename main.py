@@ -8,7 +8,7 @@ def main():
 
 def serve(config_path):
     import uvicorn
-    from src.job_manager import app
+    from src.app import app
     app.state.config_path = config_path
     logging.basicConfig(level=logging.INFO)
     uvicorn.run(app, host='0.0.0.0', port=8000)
