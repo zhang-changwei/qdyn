@@ -2,14 +2,15 @@ from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Any
 
 ## Important!
-# InputT: should contain minimal parameters exposed to users, 
+# InputT: should contain minimal parameters exposed to users,
 #         universal for all DFT codes
 # paramters: str, in DFT code vanilla input format (for advanced users)
 
 ## load order:
-# Default param template 
-# -> predefined params in InputT 
+# Default param template
+# -> predefined params in InputT
 # -> parameters string (overrides previous ones)
+
 
 class BasicInputT(BaseModel):
     """Basic input parameters for QDYN calculations."""
@@ -56,6 +57,7 @@ class BasicCalInputT(BaseModel):
 #     encut: float = 500
 #     scf_thr: float = 1e-6
 
+
 class NAMDInputT(BaseModel):
     nodes: Optional[int] = None
 
@@ -65,10 +67,10 @@ class NAMDInputT(BaseModel):
     nsample: int = 200
     ntraj: int = 200
     nelm: int = 10
-    namdtime: int = 1_000_000 # 1 ns
+    namdtime: int = 1_000_000  # 1 ns
     temperature: float = 300.0
     lhole: bool = False
-    inibands: List[int] # start from 1
+    inibands: List[int]  # start from 1
 
 
 class _PreNAMDInputAdvT(BaseModel):
@@ -76,6 +78,7 @@ class _PreNAMDInputAdvT(BaseModel):
     alle: bool = False
     ikpt: int = 1
     ispin: int = 1
+
 
 class PreNAMDInputT(BaseModel):
     bmin: int | str = 'VBM'
@@ -85,36 +88,6 @@ class PreNAMDInputT(BaseModel):
     surface_hopping: Literal['FSSH', 'DISH'] = 'DISH'
 
     adv: _PreNAMDInputAdvT = _PreNAMDInputAdvT()
-
-
-class SRInputT(BasicCalInputT):
-    """Input parameters for structure relaxation."""
-
-    # Relaxation parameters
-    nsw: int = 100
-    ibrion: int = 2
-    isif: int = 2
-    ediffg: float = -0.01
-
-    # Electronic
-    nelm: int = 90
-    nelmin: int = 6
-    scf_thr: float = 1e-6
-
-    def to_vasp_incar(self) -> dict:
-        """Convert to VASP INCAR parameters."""
-        return {
-            'ENCUT': self.encut,
-            'EDIFF': self.scf_thr,
-            'NSW': self.nsw,
-            'IBRION': self.ibrion,
-            'ISIF': self.isif,
-            'EDIFFG': self.ediffg,
-            'NELM': self.nelm,
-            'NELMIN': self.nelmin,
-            'NCORE': self.ncore,
-            'KPAR': self.kpar,
-        }
 
 
 class NVTInputT(BaseModel):
@@ -130,73 +103,47 @@ class NVTInputT(BaseModel):
     temp_end: float = Field(300.0, description="Final temperature in K")
     scf_thr: float = 1e-6
 
+    parameters: str = ''
+
+    # job control
     is_alle: bool = False
 
-    parameters: str = ''  
 
-
-class NVEInputT(BasicCalInputT):
+class NVEInputT(BaseModel):
     """Input parameters for NVE molecular dynamics."""
 
     nodes: Optional[int] = None
 
-    # MD parameters
-    ibrion: int = 0
-    isym: int = 0
-    smass: float = -3.0  # -3 for NVE (microcanonical)
-    potim: float = 1.0
-    nsw: int = 5000
-    nblock: int = 1
+    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
 
-    # Electronic
-    algo: str = 'Normal'
-    nelm: int = 120
-    nelmin: int = 4
+    # MD parameters
+    md_dt: float = Field(1.0, description="MD time step in fs")
+    md_step: int = Field(1000, description="Number of MD steps")
     scf_thr: float = 1e-6
 
-    def to_vasp_incar(self) -> dict:
-        """Convert to VASP INCAR parameters."""
-        return {
-            'ENCUT': self.encut,
-            'EDIFF': self.scf_thr,
-            'POTIM': self.potim,
-            'NSW': self.nsw,
-            'NBLOCK': self.nblock,
-            'SMASS': self.smass,
-            'ALGO': self.algo,
-            'NELM': self.nelm,
-            'NELMIN': self.nelmin,
-            'ISYM': self.isym,
-            'IBRION': self.ibrion,
-            'NCORE': self.ncore,
-            'KPAR': self.kpar,
-        }
+    parameters: str = ''
 
 
-class SCFInputT(BasicCalInputT):
+class SCFInputT(BaseModel):
     """Input parameters for static SCF calculation."""
 
     nodes: Optional[int] = None
 
-    # Number of SCF frames (taken from the end of NVE trajectory)
-    nscf: int = 2000
+    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
 
     # SCF-specific
-    nelm: int = 120
     scf_thr: float = 1e-6
-    lorbit: int = 11
-    # nedos: int = 2001
 
-    def to_vasp_incar(self) -> dict:
-        """Convert to VASP INCAR parameters."""
-        return {
-            'ENCUT': self.encut,
-            'EDIFF': self.scf_thr,
-            'NELM': self.nelm,
-            'LORBIT': self.lorbit,
-            'NCORE': self.ncore,
-            'KPAR': self.kpar,
-        }
+    # job control
+    md_step: int = Field(
+        1000, description="Number of MD steps (frames) in the structure file"
+    )
+    nscf: int = Field(md_step // 2, description="Number of SCF frames to calculate")
+    batch_size: int = Field(
+        100,
+        description="Number of frames per batch task. Smaller batches mean more parallel tasks.",
+    )
+    parameters: str = Field('', description="Additional INCAR parameters string")
 
 
 class InputT(BaseModel):
@@ -211,6 +158,7 @@ class InputT(BaseModel):
     namd_input: NAMDInputT
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
+
 
 # deprecated
 def grep_input_parameters(file_path: str) -> dict:

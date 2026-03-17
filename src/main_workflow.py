@@ -228,10 +228,11 @@ class MainWorkflow:
                 prev_step = 'nve'
                 next_step = 'pre_namd'
                 if prev_step in input.steps:
-                    structures = jobs[prev_step][0].output['strus']
+                    # Get XDATCAR path from NVE output
+                    xdatcar_path = jobs[prev_step][0].output['md_tracks']
                 elif first_step == 'scf' and resume:
                     prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    structures = self.js.get_output(prev_job_uuid)['strus']  # type: ignore
+                    xdatcar_path = self.js.get_output(prev_job_uuid)['md_tracks']  # type: ignore
                 else:
                     raise ValidationError()
 
@@ -248,7 +249,7 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=self.config['pp_path'][software],
                     orb_path=self.config['orb_path'][software],
-                    structures=structures,
+                    xdatcar_path=xdatcar_path,
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,
@@ -310,8 +311,7 @@ class MainWorkflow:
                 job_pre_namd,
                 exec_config=ExecutionConfig(
                     modules=self.config['module']['python'],
-                    export={**self.config['export']['python'], 
-                            'OMP_NUM_THREADS': '4'},
+                    export={**self.config['export']['python'], 'OMP_NUM_THREADS': '4'},
                     pre_run=None,
                     post_run=None,
                 ),
@@ -349,8 +349,7 @@ class MainWorkflow:
                 cpus_per_task = self.config['machine']['cpus_per_node']
             else:
                 nodes = (
-                    input.namd_input.nodes 
-                    if input.namd_input.nodes is not None else 1
+                    input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
                 ntasks_per_node = self.config['machine']['cpus_per_node']
                 cpus_per_task = 1
@@ -370,8 +369,10 @@ class MainWorkflow:
                 job_namd,
                 exec_config=ExecutionConfig(
                     modules=self.config['module']['namd'],
-                    export={**self.config['export']['namd'],
-                            'OMP_NUM_THREADS': str(cpus_per_task)},
+                    export={
+                        **self.config['export']['namd'],
+                        'OMP_NUM_THREADS': str(cpus_per_task),
+                    },
                     pre_run=None,
                     post_run=None,
                 ),

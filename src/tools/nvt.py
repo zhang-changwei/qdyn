@@ -6,19 +6,22 @@ from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
 
 import ase.io
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
+
+
 from ase import Atoms
 from jobflow import job
 
 from ..input import NVTInputT
-from ..params import params_default
+from ..params import params_default, backup_files
 from ..input_prepare import prepare_vasp_inputs
-from ..output_postprocess import extract_md_data_from_oszicar
-from .run_vasp import run_vasp
+from ..output_postprocess import (
+    extract_md_data_from_oszicar,
+    check_scf_convergence,
+    save_md_data,
+    plot_md_results,
+)
+from .run_software import run_software
 
 
 MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergence
@@ -103,11 +106,12 @@ def run_nvt(
             orb_path=orb_path,
         )
 
-        # Run VASP
-        run_vasp(nprocs=nprocs, is_alle=parameters.is_alle)
+        # Run the software
+        run_software(software_lower, nprocs, is_alle=parameters.is_alle)
 
         # Process output and check convergence
         (
+            current_structure,
             scf_converged,
             temp_converged,
             max_deviation,
@@ -116,6 +120,7 @@ def run_nvt(
         ) = _process_nvt_output(
             software=software_lower,
             target_temp=parameters.temp_end,
+            md_dt=parameters.md_dt,
             plot=plot,
             attempt=attempt,
         )
@@ -151,15 +156,7 @@ def run_nvt(
             # Backup current round files
             backup_dir = f"nvt_attempt_{attempt}"
             os.makedirs(backup_dir, exist_ok=True)
-            for f in [
-                'POSCAR',
-                'CONTCAR',
-                'OSZICAR',
-                'OUTCAR',
-                'INCAR',
-                'KPOINTS',
-                'POTCAR',
-            ]:
+            for f in backup_files[software_lower]:
                 if os.path.isfile(f):
                     shutil.copy(f, os.path.join(backup_dir, f))
             if os.path.isfile(f'nvt_results_attempt_{attempt}.png'):
@@ -172,9 +169,6 @@ def run_nvt(
                     f'md_attempt_{attempt}.dat',
                     os.path.join(backup_dir, f'md_attempt_{attempt}.dat'),
                 )
-
-            # Read CONTCAR as new structure for next iteration
-            current_structure = ase.io.read('CONTCAR', format='vasp')
 
     return {
         'run_dir': str(Path.cwd()),
@@ -246,11 +240,12 @@ def _prepare_nvt_input(
 def _process_nvt_output(
     software: str,
     target_temp: float,
+    md_dt: float,
     plot: bool,
     attempt: int = 1,
     check_nsw: Optional[int] = None,
     max_unconverged_ratio: float = 0.01,
-) -> Tuple[bool, bool, float, str, str]:
+) -> Tuple[Atoms, bool, bool, float, str, str]:
     """Process NVT output files and check convergence (universal for all software).
 
     This function extracts MD data using software-specific functions,
@@ -274,7 +269,7 @@ def _process_nvt_output(
 
     Returns
     -------
-    Tuple[bool, bool, float, float, str, str]
+    Tuple[Atoms, bool, bool, float, str, str]
         (scf_converged, temp_converged, avg_temp, max_deviation, image, md_file)
         - scf_converged: True if SCF converged properly
         - temp_converged: True if temperature converged to target
@@ -288,6 +283,8 @@ def _process_nvt_output(
     match software:
         case 'vasp':
             md_data = extract_md_data_from_oszicar()
+            # Read CONTCAR as new structure for next iteration
+            current_structure = ase.io.read('CONTCAR', format='vasp')
         case _:
             raise NotImplementedError(
                 f"MD data extraction for {software} is not implemented yet."
@@ -300,7 +297,7 @@ def _process_nvt_output(
 
     # Check SCF convergence (universal)
     scf_converged = check_scf_convergence(
-        md_data=md_data,
+        converged_list=md_data['converged'],
         check_nsw=check_nsw,
         max_unconverged_ratio=max_unconverged_ratio,
     )
@@ -316,61 +313,21 @@ def _process_nvt_output(
 
     # Save MD data to file in unified format
     md_filename = f'md_attempt_{attempt}.dat'
-    md_file = save_md_data(md_data, filename=md_filename)
+    md_file = save_md_data(md_data, md_dt, filename=md_filename)
 
     # Generate plots if requested
     if plot:
         plot_filename = f'nvt_results_attempt_{attempt}.png'
-        image = plot_nvt_results(md_data, target_temp, filename=plot_filename)
+        image = plot_md_results(md_data, plot_filename, target_temp)
 
-    return scf_converged, temp_converged, max_deviation, md_file, image
-
-
-def check_scf_convergence(
-    md_data: Dict,
-    check_nsw: Optional[int] = None,
-    max_unconverged_ratio: float = 0.01,
-) -> bool:
-    """Check SCF convergence from MD data (universal for all software).
-
-    This function checks if SCF converged properly based on the converged
-    flags in the MD data.
-
-    Parameters
-    ----------
-    md_data : dict
-        MD data dictionary with 'converged' field.
-    check_nsw : int, optional
-        Number of steps to check (from the end). If None, check last 5% of steps.
-    max_unconverged_ratio : float
-        Maximum ratio of unconverged steps allowed (default: 0.01 = 1%).
-
-    Returns
-    -------
-    bool
-        True if SCF converged properly, False if there are too many unconverged steps.
-    """
-    converged_list = md_data['converged']
-    n_steps = len(converged_list)
-
-    if n_steps == 0:
-        raise ValueError("No convergence data available to check SCF convergence.")
-
-    # Default: check last 5% of steps
-    if check_nsw is None:
-        check_nsw = n_steps // 10
-
-    # Get the range to check
-    check_range = converged_list[-check_nsw:]
-
-    # n_total = len(check_range)
-    n_unconverged = sum(1 for c in check_range if not c)
-    max_unconverged = int(check_nsw * max_unconverged_ratio)
-
-    # Converged if unconverged steps in check range <= max_unconverged
-    converged = n_unconverged <= max_unconverged
-
-    return converged
+    return (
+        current_structure,
+        scf_converged,
+        temp_converged,
+        max_deviation,
+        md_file,
+        image,
+    )
 
 
 def check_temperature_convergence(
@@ -420,122 +377,3 @@ def check_temperature_convergence(
     converged = max_deviation <= threshold
 
     return converged, max_deviation
-
-
-def plot_nvt_results(
-    md_data: Dict,
-    target_temp: float,
-    filename: str = 'nvt_results.png',
-) -> str:
-    """Plot NVT simulation results.
-
-    Parameters
-    ----------
-    md_data : dict
-        MD data dictionary from extract_md_data_from_oszicar().
-    target_temp : float
-        Target temperature for reference line.
-    filename : str
-        Output filename for the plot.
-
-    Returns
-    -------
-    str
-        Path to the saved plot.
-    """
-    steps = md_data['steps']
-    temperatures = md_data['temperatures']
-    total_energies = md_data['total_energies']
-    potential_energies = md_data['potential_energies']
-
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10))
-
-    # Plot temperature
-    ax1 = axes[0]
-    ax1.plot(steps, temperatures, color='tab:red', linewidth=0.8)
-    ax1.axhline(
-        y=target_temp,
-        color='gray',
-        linestyle='--',
-        linewidth=1,
-        label=f'Target: {target_temp} K',
-    )
-    ax1.set_xlabel('Step')
-    ax1.set_ylabel('Temperature (K)')
-    ax1.legend(loc='upper right')
-    ax1.set_title('Temperature Evolution')
-
-    # Plot potential energy
-    ax2 = axes[1]
-    ax2.plot(steps, potential_energies, color='tab:green', linewidth=0.8)
-    ax2.set_xlabel('Step')
-    ax2.set_ylabel('Potential Energy (eV)')
-    ax2.set_title('Potential Energy Evolution')
-
-    # Plot total energy
-    ax3 = axes[2]
-    ax3.plot(steps, total_energies, color='tab:blue', linewidth=0.8)
-    ax3.set_xlabel('Step')
-    ax3.set_ylabel('Total Energy (eV)')
-    ax3.set_title('Total Energy Evolution')
-
-    fig.tight_layout()
-    plt.savefig(filename, dpi=300)
-    plt.close()
-
-    return os.path.abspath(filename)
-
-
-def save_md_data(md_data: Dict, filename: str = 'md.dat') -> str:
-    """Save MD data to a file in unified format.
-
-    This function saves MD data in a unified format that works for all
-    supported software (VASP, CP2K, SIESTA, ABACUS, OpenMX, etc.).
-
-    Parameters
-    ----------
-    md_data : dict
-        MD data dictionary with unified format:
-        - 'steps': list of step numbers
-        - 'temperatures': list of temperatures (K)
-        - 'total_energies': list of total energies (eV)
-        - 'potential_energies': list of potential energies (eV)
-        - 'kinetic_energies': list of kinetic energies (eV)
-        - 'converged': list of bool, SCF convergence status for each step
-        - 'potim': time step (fs)
-    filename : str
-        Output filename (default: 'md.dat').
-
-    Returns
-    -------
-    str
-        Path to the saved file.
-    """
-    with open(filename, 'w') as f:
-        f.write(f"# Time step (fs): {md_data['potim']}\n")
-        f.write(
-            "# Step  Temperature(K)  Total_Energy(eV)  E_pot(eV)  E_kin(eV)  Converged\n"
-        )
-
-        for i in range(len(md_data['steps'])):
-            conv_flag = 1 if md_data['converged'][i] else 0
-            f.write(
-                f"{md_data['steps'][i]:6d} "
-                f"{md_data['temperatures'][i]:12.2f} "
-                f"{md_data['total_energies'][i]:16.8f} "
-                f"{md_data['potential_energies'][i]:14.8f} "
-                f"{md_data['kinetic_energies'][i]:14.8f} "
-                f"{conv_flag}\n"
-            )
-
-        # Summary lines
-        temps = np.array(md_data['temperatures'])
-        converged_list = md_data['converged']
-        n_converged = sum(converged_list)
-        n_total = len(converged_list)
-
-        f.write(f"# Total steps: {n_total}\n")
-        f.write(f"# Converged steps: {n_converged}/{n_total}\n")
-        f.write(f"# Average T (K): {np.mean(temps):.2f}\n")
-
-    return os.path.abspath(filename)

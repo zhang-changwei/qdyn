@@ -10,8 +10,9 @@ _incar = {
     'NCORE': 8,
     'ISMEAR': 0,
     'SIGMA': 0.1,
+    'ENCUT': 500,
 }
-    
+
 params_default = {
     'sr': {
         'vasp': {
@@ -61,11 +62,42 @@ params_default = {
         'vasp': {
             **_incar,
             'LORBIT': 11,
-            'NEDOS': 2001,
+            # 'NEDOS': 2001,
             'NELM': 120,
             'EDIFF': 1e-6,
+            'LWAVE': True,
+            'LCHARG': True,
+            'ICHARG': 1,
         }
     },
 }
 
+md_tracks = {
+    'vasp': 'XDATCAR',
+}
+
+backup_files = {
+    'vasp': [
+        'POSCAR',
+        'CONTCAR',
+        'XDATCAR',
+        'OSZICAR',
+        'OUTCAR',
+        'INCAR',
+        'KPOINTS',
+        'POTCAR',
+    ],
+}
+
+chg_name = {
+    'vasp': 'CHGCAR',
+}
+
+ipt_files = {
+    'vasp': ['INCAR', 'KPOINTS', 'POTCAR'],
+}
+
+stru_files = {
+    'vasp': 'POSCAR',
+}
 __all__ = ['params_default']

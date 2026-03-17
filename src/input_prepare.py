@@ -1,7 +1,7 @@
 import io
 import os
 import shutil
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import ase.io
 import numpy as np
@@ -13,8 +13,8 @@ from .input import (
     NVTInputT,
     NVEInputT,
     SCFInputT,
-    SRInputT,
 )
+
 
 # ===========================================================================
 # VASP specific functions

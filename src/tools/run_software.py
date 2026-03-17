@@ -1,8 +1,25 @@
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 
-def run_vasp(nprocs: int, is_alle: bool = False) -> None:
+def run_software(software: str, nprocs: int, is_alle: Optional[bool] = False) -> None:
+    """Run the specified software with appropriate settings.
+
+    Args:
+        software: Name of the software to run (e.g., 'vasp').
+        nprocs: Number of MPI processes to use.
+        is_alle: Whether to use all-electron version (if applicable).
+    """
+
+    match software:
+        case 'vasp':
+            run_vasp(nprocs=nprocs, is_alle=is_alle)
+        case _:
+            raise NotImplementedError(f"Software '{software}' is not supported yet.")
+
+
+def run_vasp(nprocs: int, is_alle: Optional[bool] = False) -> None:
     """Run VASP calculation using mpirun.
 
     Args:
