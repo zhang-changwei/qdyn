@@ -19,6 +19,7 @@ import matplotlib
 
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
+import natsort
 import numpy as np
 import ase.io
 from ase import Atoms
@@ -174,8 +175,7 @@ def _run_scf_task(
     Dict
         Dictionary containing:
         - run_dir: Working directory path for this task
-        - subdirs: List of subdirectory paths for each SCF calculation
-        - frame_indices: List of (global_idx, local_idx) tuples
+        - frame_range: (start, end) tuple of frame indices (inclusive)
         - successful: Number of successful SCF calculations
         - failed: List of failed frame indices
         - vbm: VBM band index (from the last successful calculation)
@@ -209,11 +209,10 @@ def _run_scf_task(
     task_dir = Path.cwd()
     run_dir = str(task_dir)
 
-    # Create subdirectories and track them
+    # Create subdirectories
     subdirs = []
-    frame_indices = []  # (global_idx, local_idx)
 
-    for local_idx, structure in enumerate(batch_structures):
+    for local_idx, structure in enumerate(batch_structures, start=1):
         global_idx = frame_start + local_idx
         subdir_name = f"scf_{global_idx:04d}"
         subdir_path = task_dir / subdir_name
@@ -223,22 +222,6 @@ def _run_scf_task(
         _write_stru(software_lower, structure, subdir_path)
 
         subdirs.append(str(subdir_path))
-        frame_indices.append((global_idx, local_idx))
-
-    # if prepare_input_only:
-    #     # Copy common inputs to each subdirectory and write POSCAR
-    #     for local_idx, (subdir, structure) in enumerate(zip(subdirs, batch_structures)):
-    #         _write_stru(software_lower, structure, subdir)
-
-    #     return {
-    #         'run_dir': run_dir,
-    #         'subdirs': subdirs,
-    #         'frame_indices': frame_indices,
-    #         'successful': 0,
-    #         'failed': [],
-    #         'vbm': 0,
-    #         'cbm': 0,
-    #     }
 
     successful = 0
     failed = []
@@ -249,7 +232,7 @@ def _run_scf_task(
     files_to_copy = ipt_files[software_lower]
 
     # Run SCF calculations sequentially with CHGCAR passing
-    for local_idx, subdir in enumerate(subdirs):
+    for local_idx, subdir in enumerate(subdirs, start=1):
         global_idx = frame_start + local_idx
 
         # Check if this subdirectory already has a result
@@ -306,29 +289,19 @@ def _run_scf_task(
         finally:
             os.chdir(task_dir)
 
-    # Extract VBM/CBM from the last successful calculation
-    if successful > 0:
-        # Find the last successful subdirectory
-        for local_idx in range(len(subdirs) - 1, -1, -1):
-            if _get_status(subdirs[local_idx]) == STATUS_ENDED:
-                original_cwd = os.getcwd()
-                os.chdir(subdirs[local_idx])
-                try:
-                    vbm, cbm = extract_band_edges()
-                except:
-                    vbm, cbm = 0, 0
-                finally:
-                    os.chdir(original_cwd)
-                break
+    if successful < n_frames:
+        raise ValueError(
+            f"SCF calculation failed for {len(failed)} out of {n_frames} frames in this batch."
+            f"Failed frame indices: {failed}. Please check the respective subdirectories for details."
+        )
 
+    # frame_end is exclusive, so actual last frame index is frame_end - 1
+    # prepare_namd.py expects inclusive range: (start, end)
     return {
         'run_dir': run_dir,
-        'subdirs': subdirs,
-        'frame_indices': frame_indices,
+        'frame_range': (frame_start + 1, frame_end),
         'successful': successful,
         'failed': failed,
-        'vbm': vbm,
-        'cbm': cbm,
     }
 
 
@@ -491,25 +464,57 @@ def _clean_all_files(subdir: str, stru: str):
 def _validate_scf_output(software: str):
     """Validate SCF calculation completed successfully.
 
-    Checks for 'Total CPU' in OUTCAR, following the convention from
-    the legacy vaspscf script.
+    Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
+    the file tail for efficiency.
 
     Raises
     ------
     RuntimeError
-        If OUTCAR is missing or calculation did not complete.
+        If OUTCAR is missing or calculation did not complete/converge.
     """
     match software:
         case 'vasp':
             if not os.path.isfile('OUTCAR'):
                 raise RuntimeError("SCF calculation failed: OUTCAR not found.")
 
-            with open('OUTCAR', 'r') as f:
-                content = f.read()
+            # Read only the tail of OUTCAR for efficiency
+            file_size = os.path.getsize('OUTCAR')
+            tail_size = min(8192, file_size)
+            with open('OUTCAR', 'rb') as f:
+                f.seek(-tail_size, os.SEEK_END)
+                content = f.read().decode('utf-8', errors='ignore')
+                # Skip partial first line if we didn't read the whole file
+                if file_size > tail_size:
+                    idx = content.find('\n')
+                    if idx != -1:
+                        content = content[idx + 1:]
 
+            # Check completion marker
             if 'Total CPU' not in content:
                 raise RuntimeError(
                     "SCF calculation failed: OUTCAR does not contain 'Total CPU' marker. "
+                    "The calculation may not have completed successfully."
+                )
+
+            # Check SCF convergence
+            if 'reached required accuracy' not in content:
+                # Look for common convergence failure markers
+                if 'WARNING in EDDAV' in content or 'ZBRENT: fatal error' in content:
+                    raise RuntimeError(
+                        "SCF calculation failed: SCF did not converge. "
+                        "Check OUTCAR for convergence errors."
+                    )
+                raise RuntimeError(
+                    "SCF calculation failed: SCF did not converge. "
+                    "OUTCAR does not contain 'reached required accuracy' marker."
+                )
+
+            # Check WAVECAR file size
+            if not os.path.isfile('WAVECAR'):
+                raise RuntimeError("SCF calculation failed: WAVECAR not found.")
+            if os.path.getsize('WAVECAR') == 0:
+                raise RuntimeError(
+                    "SCF calculation failed: WAVECAR is empty. "
                     "The calculation may not have completed successfully."
                 )
 
@@ -521,369 +526,3 @@ def _validate_scf_output(software: str):
             raise NotImplementedError(
                 f"Validation for software '{software}' is not implemented."
             )
-
-
-def extract_band_edges(
-    outcar_path: str = 'OUTCAR',
-    whichK: int = 1,
-    whichS: int = 1,
-) -> Tuple[int, int]:
-    """Extract VBM and CBM band indices from OUTCAR.
-
-    Parses the eigenvalue section after "E-fermi :" to find the last
-    occupied band (VBM) and first unoccupied band (CBM).
-
-    Parameters
-    ----------
-    outcar_path : str
-        Path to OUTCAR file.
-    whichK : int
-        K-point index (1-based).
-    whichS : int
-        Spin component index (1-based).
-
-    Returns
-    -------
-    Tuple[int, int]
-        (vbm, cbm) - VBM and CBM band indices (1-based VASP convention).
-    """
-    with open(outcar_path, 'r') as f:
-        OUTCAR = [line for line in f if line.strip()]
-
-    NBANDS = NKPTS = ISPIN = 0
-    for line in OUTCAR:
-        if 'NBANDS' in line and 'NKPTS' in line:
-            NBANDS = int(line.split()[-1])
-            NKPTS = int(line.split()[3])
-        if 'ISPIN  =' in line:
-            ISPIN = int(line.split()[2])
-            break
-
-    # Find the last E-fermi section (for NSW=0, there's only one)
-    where_Efermi = [ii for ii, line in enumerate(OUTCAR) if 'E-fermi :' in line]
-
-    if not where_Efermi:
-        raise RuntimeError("Could not find 'E-fermi' in OUTCAR.")
-
-    ii = where_Efermi[-1]
-
-    if ISPIN == 1:
-        start = ii + 1
-        end = start + (NBANDS + 2) * NKPTS + 1
-    else:
-        start = ii + 1
-        end = start + ((NBANDS + 2) * NKPTS + 1) * ISPIN + 2
-
-    # Filter out lines containing alphabetic characters (header lines)
-    data_lines = [line for line in OUTCAR[start:end] if not re.search('[a-zA-Z]', line)]
-
-    # Select bands for the specified spin and k-point
-    offset = ((whichS - 1) * NKPTS + (whichK - 1)) * NBANDS
-    band_lines = data_lines[offset : offset + NBANDS]
-
-    vbm = 0
-    cbm = 0
-    for line in band_lines:
-        parts = line.split()
-        band_idx = int(parts[0])
-        occupation = float(parts[-1])
-
-        if occupation > 0.5:
-            vbm = band_idx
-        elif cbm == 0:
-            cbm = band_idx
-
-    if vbm == 0:
-        raise RuntimeError("Could not determine VBM from OUTCAR eigenvalues.")
-    if cbm == 0:
-        cbm = vbm + 1
-
-    return vbm, cbm
-
-
-def extract_eigenvalues_from_outcar(
-    outcar_path: str = 'OUTCAR',
-    whichK: int = 1,
-    whichS: int = 1,
-) -> np.ndarray:
-    """Extract eigenvalues from a single OUTCAR file.
-
-    Parameters
-    ----------
-    outcar_path : str
-        Path to OUTCAR.
-    whichK : int
-        K-point index (1-based).
-    whichS : int
-        Spin component index (1-based).
-
-    Returns
-    -------
-    np.ndarray
-        Array of eigenvalues, shape (nbands,).
-    """
-    with open(outcar_path, 'r') as f:
-        OUTCAR = [line for line in f if line.strip()]
-
-    NBANDS = NKPTS = ISPIN = 0
-    for line in OUTCAR:
-        if 'NBANDS' in line and 'NKPTS' in line:
-            NBANDS = int(line.split()[-1])
-            NKPTS = int(line.split()[3])
-        if 'ISPIN  =' in line:
-            ISPIN = int(line.split()[2])
-            break
-
-    where_Efermi = [ii for ii, line in enumerate(OUTCAR) if 'E-fermi :' in line]
-
-    if not where_Efermi:
-        raise RuntimeError(f"Could not find 'E-fermi' in {outcar_path}.")
-
-    ii = where_Efermi[-1]
-
-    if ISPIN == 1:
-        start = ii + 1
-        end = start + (NBANDS + 2) * NKPTS + 1
-    else:
-        start = ii + 1
-        end = start + ((NBANDS + 2) * NKPTS + 1) * ISPIN + 2
-
-    data_lines = [line for line in OUTCAR[start:end] if not re.search('[a-zA-Z]', line)]
-
-    # Extract energies for selected spin and k-point
-    offset = ((whichS - 1) * NKPTS + (whichK - 1)) * NBANDS
-    band_lines = data_lines[offset : offset + NBANDS]
-
-    eigenvalues = np.array([float(line.split()[1]) for line in band_lines])
-
-    return eigenvalues
-
-
-@job
-def collect_all_scf_data(
-    batch_results: List[Dict],
-    plot: bool = True,
-) -> Dict:
-    """Collect and process data from all SCF batch calculations.
-
-    This function is called after all batch calculations are completed
-    to perform final data processing and generate comprehensive plots.
-
-    Parameters
-    ----------
-    batch_results : List[Dict]
-        List of results from all batch calculations.
-    plot : bool
-        Whether to generate final plots.
-
-    Returns
-    -------
-    Dict
-        Dictionary containing:
-        - all_dirs: List of all SCF calculation directories (sorted by frame index)
-        - summary_data: Summary of the calculations
-        - images: List of generated plot file paths
-    """
-    # Collect all SCF directories from all batches
-    all_dirs = []
-    for batch_result in batch_results:
-        if 'subdirs' in batch_result:
-            all_dirs.extend(batch_result['subdirs'])
-        elif 'run_dir' in batch_result:
-            all_dirs.append(batch_result['run_dir'])
-
-    # Sort directories to ensure chronological order
-    all_dirs.sort()
-
-    # Perform final data processing
-    summary_data = {
-        'total_calculations': len(all_dirs),
-        'batch_count': len(batch_results),
-        'directories': all_dirs,
-        'successful': sum(r.get('successful', 0) for r in batch_results),
-        'failed_frames': [f for r in batch_results for f in r.get('failed', [])],
-    }
-
-    # Generate final plots if requested
-    images = []
-    if plot and all_dirs:
-        # Find VBM from the last successful calculation
-        vbm = cbm = 0
-        for batch_result in reversed(batch_results):
-            if batch_result.get('vbm', 0) > 0:
-                vbm = batch_result['vbm']
-                cbm = batch_result['cbm']
-                break
-
-        if vbm == 0:
-            # Try to extract from last directory
-            last_dir = all_dirs[-1]
-            original_cwd = os.getcwd()
-            try:
-                os.chdir(last_dir)
-                vbm, cbm = extract_band_edges()
-            except:
-                vbm, cbm = 1, 2
-            finally:
-                os.chdir(original_cwd)
-
-        # Generate TDKS plot for all directories
-        tdksgen_image = plot_scf_tdks(all_dirs, vbm, filename='final_tdksgen.png')
-        images.append(tdksgen_image)
-
-        # Generate additional summary plots
-        summary_image = plot_summary_data(all_dirs, filename='scf_summary.png')
-        images.append(summary_image)
-
-    return {
-        'all_dirs': all_dirs,
-        'summary_data': summary_data,
-        'images': images,
-    }
-
-
-def plot_summary_data(
-    all_run_dirs: List[str],
-    filename: str = 'scf_summary.png',
-) -> str:
-    """Plot a summary of SCF calculations across all directories.
-
-    Parameters
-    ----------
-    all_run_dirs : List[str]
-        List of SCF run directories in chronological order.
-    filename : str
-        Output plot filename.
-
-    Returns
-    -------
-    str
-        Path to saved plot file.
-    """
-    # Collect energies from all frames
-    total_energies = []
-    convergence_status = []
-
-    for d in all_run_dirs:
-        outcar_path = os.path.join(d, 'OUTCAR')
-        if os.path.isfile(outcar_path):
-            # Extract total energy from OUTCAR
-            with open(outcar_path, 'r') as f:
-                content = f.read()
-
-            # Find total energies in OUTCAR
-            energy_matches = re.findall(r'T\=\s*\d+\s+E\=\s*[-+]?\d+\.\d+', content)
-            if energy_matches:
-                last_energy_line = energy_matches[-1]
-                total_energy = float(last_energy_line.split()[-1])
-                total_energies.append(total_energy)
-            else:
-                total_energies.append(np.nan)
-
-            # Check convergence status
-            if 'EDIFF' in content and 'energy(sigma->0)' in content:
-                convergence_status.append(True)
-            else:
-                convergence_status.append(False)
-
-    if not total_energies:
-        raise RuntimeError("No total energy values found for summary plotting.")
-
-    # Plot total energy vs frame index
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    frame_indices = list(range(len(total_energies)))
-    ax.plot(frame_indices, total_energies, 'o-', color='b', alpha=0.7, markersize=3)
-
-    ax.set_xlabel('SCF Frame Index')
-    ax.set_ylabel('Total Energy (eV)')
-    ax.set_title('Total Energy Evolution in SCF Calculations')
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(filename, dpi=300)
-    plt.close()
-
-    return os.path.abspath(filename)
-
-
-def plot_scf_tdks(
-    all_run_dirs: List[str],
-    vbm: int,
-    filename: str = 'tdks.png',
-) -> str:
-    """Plot time-dependent Kohn-Sham eigenvalues (TDKS) from SCF calculations.
-
-    Reads OUTCAR files from all SCF directories, extracts eigenvalues,
-    and plots band energies versus time step. Energies are shifted
-    relative to the VBM energy.
-
-    Parameters
-    ----------
-    all_run_dirs : List[str]
-        List of SCF run directories in chronological order.
-    vbm : int
-        VBM band index (1-based).
-    filename : str
-        Output plot filename.
-
-    Returns
-    -------
-    str
-        Path to saved plot file.
-    """
-    # Collect eigenvalues from all frames
-    all_eigenvalues = []
-    for d in all_run_dirs:
-        outcar_path = os.path.join(d, 'OUTCAR')
-        if os.path.isfile(outcar_path):
-            eigvals = extract_eigenvalues_from_outcar(outcar_path)
-            all_eigenvalues.append(eigvals)
-
-    if not all_eigenvalues:
-        raise RuntimeError("No valid OUTCAR files found for TDKS plotting.")
-
-    # Stack into [nframe, nband] array
-    TDKS = np.array(all_eigenvalues)
-    nsw = TDKS.shape[0]
-    nband = TDKS.shape[1]
-
-    # VBM energy: average VBM eigenvalue across all frames
-    vbm_idx = vbm - 1  # Convert to 0-based
-    cbm_idx = vbm  # CBM is next band (0-based)
-
-    vbm_energy = np.average(TDKS[:, vbm_idx])
-    cbm_energy = np.average(TDKS[:, cbm_idx]) if cbm_idx < nband else vbm_energy
-    band_gap = cbm_energy - vbm_energy
-
-    # Shift energies relative to VBM
-    TDKS -= vbm_energy
-
-    # Save band gap info
-    with open('VBCB', 'w') as f:
-        f.write(f"CBINDEX = {vbm + 1}\n")
-        f.write(f"VBM_energy = {vbm_energy:.6f}\n")
-        f.write(f"CBM_energy = {cbm_energy:.6f}\n")
-        f.write(f"Band_gap   = {band_gap:.6f}\n")
-
-    # Plot
-    dt = 1.0
-    TIME = np.arange(nsw) * dt
-
-    fig = plt.figure()
-    fig.set_size_inches(6.0, 4.0)
-    ax = plt.subplot(111)
-
-    for ib in range(nband):
-        ax.plot(TIME, TDKS[:, ib], ls='-', lw=1.0, color='b', alpha=0.7)
-
-    ax.set_ylim(-0.5 * band_gap, 1.5 * band_gap)
-    ax.set_xlabel('Time [fs]')
-    ax.set_ylabel('Energy [eV]')
-    ax.set_title('Time-Dependent KS Eigenvalues')
-
-    plt.tight_layout()
-    plt.savefig(filename, dpi=360)
-    plt.close()
-
-    return os.path.abspath(filename)

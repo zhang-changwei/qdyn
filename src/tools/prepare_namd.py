@@ -1,12 +1,18 @@
 import os
+import re
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Tuple, Any, Optional
 
+import matplotlib
+
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 from jobflow import job
 
 from ..input import PreNAMDInputT
+from ..output_postprocess import extract_wht_with_cache, extract_band_edges
 from .canac import extract_eigvals_and_nacs
 from .dephase import calculate_dephasing_time
 
@@ -16,7 +22,6 @@ def run_pre_namd(
     software: str,
     parameters: PreNAMDInputT,
     scf_batch_results: List[Dict],
-    prev_output: Dict[str, Any],
     nproc: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
@@ -49,6 +54,7 @@ def run_pre_namd(
     Dict
         Dictionary containing run_dir, software, images, and output file paths.
     """
+    software_lower = software.lower()
     # No input files required
     if prepare_input_only:
         return
@@ -56,8 +62,8 @@ def run_pre_namd(
     # Reconstruct all SCF subdirectories from batch results
     all_scf_dirs = []
     for batch_result in scf_batch_results:
-        run_dir = batch_result.get('run_dir', '')
-        frame_range = batch_result.get('frame_range', (0, 0))
+        run_dir = batch_result['run_dir']
+        frame_range = batch_result['frame_range']
         frame_start, frame_end = frame_range
 
         for global_idx in range(frame_start, frame_end + 1):
@@ -65,41 +71,27 @@ def run_pre_namd(
             subdir_path = os.path.join(run_dir, subdir_name)
             all_scf_dirs.append(subdir_path)
 
-    # Sort directories to ensure chronological order
-    import natsort
+    # Sort directories by scf index to ensure chronological order
+    # (different batches may have different run_dir UUIDs)
+    all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('_')[-1]))
 
-    all_scf_dirs = natsort.natsorted(all_scf_dirs)
-
-    # Find VBM/CBM from any successful batch
-    vbm = cbm = 0
-    for batch_result in scf_batch_results:
-        if batch_result.get('vbm', 0) > 0:
-            vbm = batch_result['vbm']
-            cbm = batch_result['cbm']
-            break
-
-    # If not found in batch results, try prev_output
-    if vbm == 0 and 'vbm' in prev_output:
-        vbm = prev_output['vbm']
-        cbm = prev_output['cbm']
+    ksen_path = plot_ksen_weight(software_lower, all_scf_dirs, parameters, nproc)
+    vbm, cbm = extract_band_edges(
+        software=software_lower,
+        dir_path=all_scf_dirs[0],
+        whichK=parameters.adv.ikpt,
+        whichS=parameters.adv.ispin,
+    )
 
     # basics
     is_gamma_ver = False
-    if software == 'vasp':
-        with open(f'{run_dirs[0]}/OUTCAR', 'r') as f:
+    if software_lower == 'vasp':
+        with open(f'{all_scf_dirs[0]}/OUTCAR', 'r') as f:
             head = f.readline()
             if head.strip().endswith('gamma-only'):
                 is_gamma_ver = True
-    elif software in ['abacus', 'hamgnn', 'openmx', 'siesta']:
+    elif software_lower in ['abacus', 'hamgnn', 'openmx', 'siesta']:
         is_gamma_ver = True
-
-    # sort dirs
-    indices = []
-    for run_dir in run_dirs:
-        idx = int(Path(run_dir).name)
-        indices.append(idx)
-    sorted_indices = np.argsort(indices)
-    run_dirs = [run_dirs[i] for i in sorted_indices]
 
     if isinstance(parameters.bmin, str):
         bmin_ = parameters.bmin.lower()
@@ -117,8 +109,8 @@ def run_pre_namd(
         bmax_ = parameters.bmax
 
     extract_eigvals_and_nacs(
-        run_dirs=run_dirs,
-        software=software,  # type: ignore
+        run_dirs=all_scf_dirs,
+        software=software_lower,  # type: ignore
         is_gamma_ver=is_gamma_ver,
         is_reorder=parameters.adv.reorder,
         is_alle=parameters.adv.alle,
@@ -134,6 +126,8 @@ def run_pre_namd(
     if plot:
         pass
 
+    images.append(ksen_path)
+
     # DEPHTIME
     if parameters.surface_hopping == 'DISH':
         output = calculate_dephasing_time(
@@ -146,7 +140,7 @@ def run_pre_namd(
 
     return {
         'run_dir': str(Path.cwd()),
-        'software': software,
+        'software': software_lower,
         'images': images,
         'EIGTXT': str(Path.cwd() / 'EIGTXT'),
         'NATXT': str(Path.cwd() / 'NATXT'),
@@ -156,3 +150,122 @@ def run_pre_namd(
             else None
         ),
     }
+
+
+def plot_ksen_weight(
+    software: str,
+    run_dirs: list,
+    parameters: PreNAMDInputT,
+    nproc: Optional[int] = None,
+    filename: str = 'ksen_wht.png',
+    cmap: str = 'seismic',
+    figsize: Tuple[float, float] = (4.8, 3.0),
+    dpi: int = 360,
+) -> str:
+    """Plot Kohn-Sham energy bands with weight coloring.
+
+    This function creates a scatter plot of energy bands over time,
+    where the color represents the weight (e.g., atomic projection).
+
+    Parameters
+    ----------
+    software : str
+        Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
+    run_dirs : list
+        List of directories to process.
+    parameters : PreNAMDInputT
+        Pre-NAMD input parameters containing:
+        - md_dt: time step in fs
+        - adv.ispin: spin index (1-based, converted to 0-based internally)
+        - adv.ikpt: k-point index (1-based, converted to 0-based internally)
+    which_atoms : np.ndarray, optional
+        Array of atom indices for which to calculate weights.
+    nproc : int, optional
+        Number of parallel processes. If None, uses all available CPUs.
+    filename : str
+        Output filename for the plot (default: 'ksen_wht.png').
+    energy_limits : tuple of float, optional
+        (ymin, ymax) for energy axis. If None, auto-determined from data.
+    cbar_labels : tuple of str, optional
+        (max_label, min_label) for colorbar. If None, uses weight values.
+    cmap : str
+        Colormap name (default: 'seismic').
+    figsize : tuple of float
+        Figure size in inches (default: (4.8, 3.0)).
+    dpi : int
+        Output DPI (default: 360).
+
+    Returns
+    -------
+    str
+        Path to the saved plot.
+    """
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+    # Extract parameters
+    dt = parameters.md_dt
+    which_spin = parameters.adv.ispin - 1  # Convert to 0-based index
+    which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
+    which_atoms = parameters.adv.iatoms
+    cbar_labels = parameters.adv.cbar_labels
+    energy_limits = parameters.adv.energy_limits
+
+    # Extract energy and weight data
+    Enr, Wht = extract_wht_with_cache(
+        software=software,
+        run_dirs=run_dirs,
+        which_spin=which_spin,
+        which_kpoint=which_kpoint,
+        which_atoms=which_atoms,
+        nproc=nproc,
+    )
+
+    # Derive dimensions from array shapes
+    nsw = Enr.shape[0]
+
+    # Create time grid using broadcasting (no need for nband)
+    # T has shape (nsw, 1), which broadcasts to match Enr shape (nsw, nband)
+    T = np.arange(0, nsw * dt, dt)[:, np.newaxis]
+
+    # Create figure
+    fig = plt.figure()
+    fig.set_size_inches(*figsize)
+
+    ax = plt.subplot()
+
+    # Scatter plot with weight coloring
+    img = ax.scatter(
+        T,
+        Enr,
+        s=1.0,
+        c=Wht,
+        lw=0.0,
+        zorder=1,
+        vmin=Wht.min(),
+        vmax=Wht.max(),
+        cmap=cmap,
+    )
+
+    # Add colorbar
+    divider = make_axes_locatable(ax)
+    ax_cbar = divider.append_axes('right', size='5%', pad=0.02)
+    cbar = plt.colorbar(img, cax=ax_cbar, orientation='vertical')
+
+    if cbar_labels is not None:
+        cbar.set_ticks([Wht.max(), Wht.min()])
+        cbar.set_ticklabels(cbar_labels)
+
+    # Set energy limits
+    if energy_limits is not None:
+        ax.set_ylim(*energy_limits)
+
+    # Labels and formatting
+    ax.set_xlabel('Time [fs]', labelpad=5)
+    ax.set_ylabel('Energy [eV]', labelpad=8)
+    ax.tick_params(which='both', labelsize='x-small')
+
+    plt.tight_layout(pad=0.2)
+    plt.savefig(filename, dpi=dpi)
+    plt.close()
+
+    return os.path.abspath(filename)

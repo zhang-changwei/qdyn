@@ -1,5 +1,6 @@
 import os
-from typing import Dict, Optional
+import re
+from typing import Dict, Tuple, Optional
 
 import matplotlib
 
@@ -180,6 +181,188 @@ def plot_md_results(
     return os.path.abspath(filename)
 
 
+def parallel_wht(
+    runDirs: list,
+    whichAtoms: Optional[np.ndarray],
+    software: str,
+    nproc: Optional[int] = None,
+) -> Tuple:
+    """Calculate atom-projected weights in parallel for different software.
+
+    Parameters
+    ----------
+    runDirs : list
+        List of directories to process.
+    whichAtoms : np.ndarray, optional
+        Array of atom indices for which to calculate weights.
+    software : str
+        Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
+    nproc : int, optional
+        Number of parallel processes. If None, uses all available CPUs.
+
+    Returns
+    -------
+    tuple
+        (Enr, Wht) or (Enr, Wht_partial, TotWht) depending on whichAtoms.
+    """
+    import multiprocessing
+
+    nproc = multiprocessing.cpu_count() if nproc is None else nproc
+    pool = multiprocessing.Pool(processes=nproc)
+
+    # Select weight extraction function based on software
+    match software:
+        case 'vasp':
+            weight_func = WeightFromPro
+            weight_file = 'PROCAR'
+        case _:
+            raise NotImplementedError
+
+    results = []
+    for rd in runDirs:
+        res = pool.apply_async(
+            weight_func,
+            (
+                rd + '/' + weight_file,
+                whichAtoms,
+                None,
+            ),
+        )
+        results.append(res)
+
+    enr = []
+    wht = []
+    if whichAtoms is None:
+        for ii in range(len(results)):
+            tmp_enr, tmp_wht = results[ii].get()
+            enr.append(tmp_enr)
+            wht.append(tmp_wht)
+        return np.array(enr), np.array(wht)
+    else:
+        totwht = []
+        for ii in range(len(results)):
+            tmp_enr, tmp_wht, tmp_totwht = results[ii].get()
+            enr.append(tmp_enr)
+            wht.append(tmp_wht)
+            totwht.append(tmp_totwht)
+        return np.array(enr), np.array(wht), np.array(totwht)
+
+
+def extract_wht_with_cache(
+    software: str,
+    run_dirs: list,
+    which_spin: int = 0,
+    which_kpoint: int = 0,
+    which_atoms: Optional[np.ndarray] = None,
+    nproc: Optional[int] = None,
+    cache_file_wht: str = 'all_wht.npy',
+    cache_file_enr: str = 'all_en.npy',
+    force_recalculate: bool = False,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract and cache wavefunction weight data from different software.
+
+    This function extracts atom-projected weights from output files across
+    multiple SCF directories. Results are cached in .npy files for fast reuse.
+
+    Parameters
+    ----------
+    run_dirs : list
+        List of directories to process.
+    software : str
+        Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
+    which_spin : int
+        Spin index to extract (default: 0, index starts from 0).
+    which_kpoint : int
+        K-point index to extract (default: 0, index starts from 0).
+    which_atoms : np.ndarray, optional
+        Array of atom indices for which to calculate weights.
+        If None, returns total weights for all atoms.
+    nproc : int, optional
+        Number of parallel processes. If None, uses all available CPUs.
+    cache_file_wht : str
+        Filename for cached weights (default: 'all_wht.npy').
+    cache_file_enr : str
+        Filename for cached energies (default: 'all_en.npy').
+    force_recalculate : bool
+        If True, ignore cache and recalculate (default: False).
+
+    Returns
+    -------
+    tuple
+        (Enr, Wht) where:
+        - Enr: np.ndarray of shape (nsw, nbands) - energies for each step and band
+        - Wht: np.ndarray of shape (nsw, nbands) - weights for each step and band
+
+    Notes
+    -----
+    - When which_atoms is provided, Wht = partial_weight / total_weight
+    - When which_atoms is None, Wht = total_weight (sum over all atoms)
+    """
+
+    # Check for cached results
+    if (
+        not force_recalculate
+        and os.path.isfile(cache_file_wht)
+        and os.path.isfile(cache_file_enr)
+    ):
+        Wht = np.load(cache_file_wht)
+        Enr = np.load(cache_file_enr)
+        return Enr, Wht
+
+    # Calculate weights in parallel
+    if which_atoms is not None:
+        Enr, Wht_partial, TotWht = parallel_wht(
+            run_dirs, which_atoms, software=software, nproc=nproc
+        )
+        # Select specific spin and k-point
+        Enr = Enr[:, which_spin, which_kpoint, :]
+        Wht_partial = Wht_partial[:, which_spin, which_kpoint, :]
+        TotWht = TotWht[:, which_spin, which_kpoint, :]
+        Wht = Wht_partial / TotWht
+    else:
+        Enr, Wht = parallel_wht(run_dirs, which_atoms, software=software, nproc=nproc)
+        # Select specific spin and k-point
+        Enr = Enr[:, which_spin, which_kpoint, :]
+        Wht = Wht[:, which_spin, which_kpoint, :]
+
+    # Save to cache files
+    np.save(cache_file_wht, Wht)
+    np.save(cache_file_enr, Enr)
+
+    return Enr, Wht
+
+
+def extract_band_edges(
+    software: str, dir_path: str, whichK: int = 0, whichS: int = 0
+) -> Tuple[int, int]:
+    """Extract VBM and CBM band indices from output files for different software.
+
+    This function parses the output files to find the last occupied band (VBM)
+    and first unoccupied band (CBM) for a given k-point and spin.
+
+    Parameters
+    ----------
+    software : str
+        Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
+    dir_path : str
+        Path to directory containing output files.
+    whichK : int
+        K-point index (0-based).
+    whichS : int
+        Spin index (0-based).
+
+    Returns
+    -------
+    Tuple[int, int]
+        (vbm, cbm) - VBM and CBM band indices (0-based).
+    """
+    match software:
+        case 'vasp':
+            return extract_from_vasp_outcar(dir_path, whichK, whichS)
+        case _:
+            raise NotImplementedError
+
+
 # ===========================================================================
 # VASP specific functions
 # ===========================================================================
@@ -267,3 +450,143 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
         'kinetic_energies': kinetic_energies,
         'converged': converged,
     }
+
+
+def WeightFromPro(
+    infile: str = 'PROCAR',
+    whichAtom: Optional[np.ndarray] = None,
+    spd: Optional[np.ndarray] = None,
+) -> Tuple:
+    """
+    Contribution of selected atoms to the each KS orbital
+    """
+
+    print(infile)
+    assert os.path.isfile(infile), '%s cannot be found!' % infile
+    FileContents = [line for line in open(infile) if line.strip()]
+
+    # when the band number is too large, there will be no space between ";" and
+    # the actual band number. A bug found by Homlee Guo.
+    # Here, #kpts, #bands and #ions are all integers
+    nkpts, nbands, nions = [
+        int(xx) for xx in re.sub('[^0-9]', ' ', FileContents[1]).split()
+    ]
+
+    if spd:
+        Weights = np.asarray(
+            [
+                line.split()[1:-1]
+                for line in FileContents
+                if not re.search('[a-zA-Z]', line)
+            ],
+            dtype=float,
+        )
+        Weights = np.sum(Weights[:, spd], axis=1)
+    else:
+        Weights = np.asarray(
+            [
+                line.split()[-1]
+                for line in FileContents
+                if not re.search('[a-zA-Z]', line)
+            ],
+            dtype=float,
+        )
+
+    TotalWeights = np.asarray(
+        [line.split()[-1] for line in FileContents if re.search('^tot', line)],
+        dtype=float,
+    )
+
+    nspin = Weights.shape[0] // (nkpts * nbands * nions)
+    Weights.resize(nspin, nkpts, nbands, nions)
+    TotalWeights.resize(nspin, nkpts, nbands)
+
+    Energies = np.asarray(
+        [line.split()[-4] for line in FileContents if 'occ.' in line], dtype=float
+    )
+    Energies.resize(nspin, nkpts, nbands)
+
+    if whichAtom is None:
+        return Energies, np.sum(Weights, axis=-1)
+    else:
+        # whichAtom = [xx - 1 for xx in whichAtom]
+        return Energies, np.sum(Weights[:, :, :, whichAtom], axis=-1), TotalWeights
+
+
+def extract_from_vasp_outcar(
+    dir_path: str,
+    whichK: int = 1,
+    whichS: int = 1,
+) -> Tuple[int, int]:
+    """Extract VBM and CBM band indices from OUTCAR.
+
+    Parses the eigenvalue section after "E-fermi :" to find the last
+    occupied band (VBM) and first unoccupied band (CBM).
+
+    Parameters
+    ----------
+    dir_path : str
+        Path to directory containing OUTCAR file.
+    whichK : int
+        K-point index (1-based).
+    whichS : int
+        Spin component index (1-based).
+
+    Returns
+    -------
+    Tuple[int, int]
+        (vbm, cbm) - VBM and CBM band indices (1-based VASP convention).
+    """
+    outcar_path = os.path.join(dir_path, 'OUTCAR')
+    with open(outcar_path, 'r') as f:
+        OUTCAR = [line for line in f if line.strip()]
+
+    NBANDS = NKPTS = ISPIN = 0
+    for line in OUTCAR:
+        if 'NBANDS' in line and 'NKPTS' in line:
+            NBANDS = int(line.split()[-1])
+            NKPTS = int(line.split()[3])
+        if 'ISPIN  =' in line:
+            ISPIN = int(line.split()[2])
+            break
+
+    # Find the last E-fermi section (for NSW=0, there's only one)
+    where_Efermi = [ii for ii, line in enumerate(OUTCAR) if 'E-fermi :' in line]
+
+    if not where_Efermi:
+        raise RuntimeError("Could not find 'E-fermi' in OUTCAR.")
+
+    ii = where_Efermi[-1]
+
+    if ISPIN == 1:
+        start = ii + 1
+        end = start + (NBANDS + 2) * NKPTS + 1
+    else:
+        start = ii + 1
+        end = start + ((NBANDS + 2) * NKPTS + 1) * ISPIN + 2
+
+    # Filter out lines containing alphabetic characters (header lines)
+    data_lines = [line for line in OUTCAR[start:end] if not re.search('[a-zA-Z]', line)]
+
+    # Select bands for the specified spin and k-point
+    offset = ((whichS - 1) * NKPTS + (whichK - 1)) * NBANDS
+    band_lines = data_lines[offset : offset + NBANDS]
+
+    vbm = 0
+    cbm = 0
+    for line in band_lines:
+        parts = line.split()
+        band_idx = int(parts[0])
+        occupation = float(parts[-1])
+
+        if occupation > 0.5:
+            vbm = band_idx
+        elif cbm == 0:
+            cbm = band_idx
+
+    if vbm == 0:
+        raise RuntimeError("Could not determine VBM from OUTCAR eigenvalues.")
+    if cbm == 0:
+        cbm = vbm + 1
+
+    return vbm, cbm

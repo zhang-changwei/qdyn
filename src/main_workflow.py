@@ -283,17 +283,15 @@ class MainWorkflow:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
-                run_dirs = []
+                scf_batch_results = []
                 for idx in range(len(jobs[prev_step])):
-                    run_dirs.extend(jobs[prev_step][idx].output['run_dirs'])
-                prev_output = jobs[prev_step][-1].output
+                    scf_batch_results.extend(jobs[prev_step][idx].output)
             elif first_step == 'pre_namd' and resume:
                 prev_jobs = self.job_ids[prev_task_id][prev_step]
-                run_dirs = []
+                scf_batch_results = []
                 for prev_job_uuid in prev_jobs:
                     output = self.js.get_output(prev_job_uuid)
-                    run_dirs.extend(output['run_dirs'])
-                    prev_output = output
+                    scf_batch_results.extend(output)
             else:
                 raise ValidationError()
 
@@ -301,8 +299,7 @@ class MainWorkflow:
             job_pre_namd = run_pre_namd(
                 software=software,
                 parameters=input.prenamd_input,
-                run_dirs=run_dirs,
-                prev_output=prev_output,
+                scf_batch_results=scf_batch_results,
                 nproc=ncpus // 4,
                 plot=input.basic_input.plot,
                 prepare_input_only=bool(flag),
