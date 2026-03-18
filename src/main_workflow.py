@@ -1,11 +1,13 @@
 import asyncio
 from copy import deepcopy
+import json
 import shutil
 from pathlib import Path
 import requests
 import logging
 import io
 import os
+import sqlite3
 import subprocess
 import uuid
 import yaml
@@ -17,7 +19,7 @@ from jobflow.core.job import Job
 from jobflow.core.flow import Flow
 from jobflow_remote import set_run_config, submit_flow
 from jobflow_remote.config.base import ExecutionConfig
-from jobflow_remote import get_jobstore
+from jobflow_remote import JobController
 
 from .input import InputT
 from .tools.nvt import run_nvt
@@ -28,6 +30,22 @@ from .tools.namd import run_namd
 
 
 class ValidationError(Exception):
+    """Input parameters or steps are invalid."""
+    pass
+
+
+class ConfigError(Exception):
+    """Server-side qdyn.yaml configuration is missing or incomplete."""
+    pass
+
+
+class ResumeError(Exception):
+    """Resume failed: previous task/job not found or has no output."""
+    pass
+
+
+class QueryError(Exception):
+    """Error during querying job status or output."""
     pass
 
 
@@ -39,8 +57,10 @@ class MainWorkflow:
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
 
-        self.js = get_jobstore()
-        self.js.connect()
+        self.jc = JobController.from_project_name()
+
+    def __del__(self):
+        self.jc.close()
 
     # ------------------------------------------------------------------
     # Config
@@ -51,7 +71,7 @@ class MainWorkflow:
         path = config_path or os.environ.get('QDYN_CONFIG') or 'config/qdyn.yaml'
         path = os.path.abspath(path)
         if not os.path.exists(path):
-            raise FileNotFoundError(
+            raise ConfigError(
                 f"QDYN config file not found: {path}\n"
                 f"Create config/qdyn.yaml or set the QDYN_CONFIG environment variable."
             )
@@ -59,6 +79,79 @@ class MainWorkflow:
             cfg = yaml.safe_load(f)
         logging.info(f"Loaded config from {path}.")
         return cfg
+
+    def _get_config(self, *keys: str):
+        """Traverse self.config by key path, raising ConfigError if any key is missing.
+
+        Usage: self._get_config('nvt', 'vasp', 'nodes')
+        is equivalent to self.config['nvt']['vasp']['nodes']
+        but raises ConfigError with a clear message on KeyError.
+        """
+        node = self.config
+        for i, key in enumerate(keys):
+            if not isinstance(node, dict) or key not in node:
+                path = '.'.join(keys[:i + 1])
+                raise ConfigError(f"Missing '{path}' in qdyn.yaml")
+            node = node[key]
+        return node
+    
+    # ------------------------------------------------------------------
+    # Pre-flight validation
+    # ------------------------------------------------------------------
+
+    def _validate_input(
+        self,
+        input: InputT,
+        method: str,
+        stru: Optional[str],
+        stru_format: str,
+        resume: bool,
+        prev_task_id: str,
+    ) -> None:
+        """Validate inputs before building the workflow. Raises
+        ValidationError or ResumeError with a clear message."""
+        software = input.basic_input.software
+        if not(software == 'vasp' and method == 'namd'):
+            raise NotImplementedError(
+                f"Currently only the combination of software='vasp' and method='namd' is supported.\n"
+                f"Got software='{software}', method='{method}'."
+            )
+
+        # --- steps ---
+        if not input.steps:
+            raise ValidationError("input.steps is empty; at least one step is required.")
+
+        valid_steps = {'nvt', 'nve', 'scf', 'pre_namd', 'namd'}
+        unknown = set(input.steps) - valid_steps # type: ignore
+        if unknown:
+            raise ValidationError(
+                f"Unknown step(s): {unknown}. Valid steps: {sorted(valid_steps)}"
+            )
+
+        if method == 'namd':
+            key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
+            step_int = sorted(key_map[s] for s in input.steps)
+            for i in range(1, len(step_int)):
+                if step_int[i] != step_int[i - 1] + 1:
+                    raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")
+        else:
+            raise NotImplementedError(f"Method '{method}' is not supported yet.")
+
+        # --- resume ---
+        if resume:
+            if not prev_task_id:
+                raise ValidationError("prev_task_id must be provided when resume=True.")
+            if prev_task_id not in self.task_ids:
+                raise ResumeError(f"Previous task '{prev_task_id}' not found.")
+
+        if stru:
+            try:
+                ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+            except:
+                raise ValidationError(
+                    f"Provided structure string could not be parsed "
+                    f"by ASE with format '{stru_format}'."
+                )
 
     # ------------------------------------------------------------------
     # Core logic
@@ -72,38 +165,28 @@ class MainWorkflow:
         stru_format: str = 'vasp',
         resume: bool = False,
         prev_task_id: str = '',
-    ) -> Tuple[str, Dict[str, List[Job | Flow]]]:
+    ) -> Dict[str, List[Job | Flow]]:
+        '''
+        Notice: assume the config is valid, 
+                no error handling for missing config entries.
+        '''
 
         # basic keys
-        software = input.basic_input.software
-        first_step = input.steps[0]
-        flag = ''
-        # resume
-        if resume:
-            assert prev_task_id, "prev_job_id must be provided when resume=True."
-
-        task_id = str(uuid.uuid4())
         jobs: Dict[str, List[Job | Flow]] = {}
+        software = input.basic_input.software
+        flag = ''
 
-        # validate steps
-        def is_continuous_steps(steps: List[int]) -> bool:
-            if len(steps) <= 1:
-                return True
-            for i in range(1, len(steps)):
-                if steps[i] != steps[i - 1] + 1:
-                    return False
-            return True
+        # pre-flight validation
+        self._validate_input(input, method, stru, stru_format, resume, prev_task_id)
 
         if method == 'namd':
             key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
             inv_map = {v: k for k, v in key_map.items()}
             step_int = [key_map[step] for step in input.steps]
             step_int.sort()
-            if not is_continuous_steps(step_int):
-                raise ValidationError
             first_step = inv_map[step_int[0]]
         else:
-            raise NotImplementedError(f"Method {method} is not supported yet.")
+            raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
         # step 1: NVT
         if 'nvt' in input.steps or flag == 'gen_input_nvt':
@@ -112,13 +195,20 @@ class MainWorkflow:
             if prev_step in input.steps:
                 structure = jobs[prev_step][0].output['stru']
             elif first_step == 'nvt' and resume:
-                prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                structure = self.js.get_output(prev_job_uuid)['stru']  # type: ignore
+                try:
+                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
+                    structure = self.get_job_output(prev_job_uuid)['stru']
+                except:
+                    raise ResumeError(
+                        f"Previous job for step '{prev_step}' not found or has no output. "
+                        f"Cannot resume nvt."
+                    )
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format)
             else:
                 raise ValidationError(
-                    "No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid."
+                    "No structure provided for the nvt step. \n"
+                    "Provide a structure string or set resume=True with a valid prev_task_uuid."
                 )
 
             nodes = (
@@ -126,6 +216,7 @@ class MainWorkflow:
                 if input.nvt_input.nodes is not None
                 else self.config['nvt'][software]['nodes']
             )
+            assert nodes > 0
             ntasks_per_node = self.config['nvt'][software]['ntasks_per_node']
             cpus_per_task = self.config['nvt'][software]['cpus_per_task']
 
@@ -169,13 +260,20 @@ class MainWorkflow:
             if prev_step in input.steps:
                 structure = jobs[prev_step][0].output['stru']
             elif first_step == 'nve' and resume:
-                prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                structure = self.js.get_output()['stru']  # type: ignore
+                try:
+                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
+                    structure = self.get_job_output(prev_job_uuid)['stru']
+                except:
+                    raise ResumeError(
+                        f"Previous job for step '{prev_step}' not found or has no output. "
+                        f"Cannot resume nve."
+                    )
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format)
             else:
                 raise ValidationError(
-                    "No structure provided for the first step. Provide a structure string or set resume=True with a valid prev_job_uuid."
+                    "No structure provided for NVE step. \n"
+                    "Provide a structure string or set resume=True with a valid prev_task_id."
                 )
 
             nodes = (
@@ -183,6 +281,7 @@ class MainWorkflow:
                 if input.nve_input.nodes is not None
                 else self.config['nve'][software]['nodes']
             )
+            assert nodes > 0
             ntasks_per_node = self.config['nve'][software]['ntasks_per_node']
             cpus_per_task = self.config['nve'][software]['cpus_per_task']
 
@@ -231,16 +330,28 @@ class MainWorkflow:
                     # Get XDATCAR path from NVE output
                     xdatcar_path = jobs[prev_step][0].output['md_tracks']
                 elif first_step == 'scf' and resume:
-                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    xdatcar_path = self.js.get_output(prev_job_uuid)['md_tracks']  # type: ignore
+                    try:
+                        prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
+                        structures = self.get_job_output(prev_job_uuid)['strus']
+                    except:
+                        raise ResumeError(
+                            f"Previous job for step '{prev_step}' not found or has no output. "
+                            f"Cannot resume scf."
+                        )
+                elif stru:
+                    structures = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
                 else:
-                    raise ValidationError()
+                    raise ValidationError(
+                        "SCF step requires NVE output. Include 'nve' in steps, "
+                        "or set resume=True with a prev_task_id that has NVE results."
+                    )
 
                 nodes = (
                     input.scf_input.nodes
                     if input.scf_input.nodes is not None
                     else self.config['scf'][software]['nodes']
                 )
+                assert nodes > 0
                 ntasks_per_node = self.config['scf'][software]['ntasks_per_node']
                 cpus_per_task = self.config['scf'][software]['cpus_per_task']
 
@@ -287,19 +398,29 @@ class MainWorkflow:
                 for idx in range(len(jobs[prev_step])):
                     scf_batch_results.extend(jobs[prev_step][idx].output)
             elif first_step == 'pre_namd' and resume:
-                prev_jobs = self.job_ids[prev_task_id][prev_step]
-                scf_batch_results = []
-                for prev_job_uuid in prev_jobs:
-                    output = self.js.get_output(prev_job_uuid)
-                    scf_batch_results.extend(output)
+                try:
+                    prev_jobs = self.job_ids[prev_task_id][prev_step]
+                    run_dirs = []
+                    for prev_job_uuid in prev_jobs:
+                        output = self.get_job_output(prev_job_uuid)
+                        run_dirs.extend(output['run_dirs'])
+                except:
+                    raise ResumeError(
+                        f"Previous job(s) for step '{prev_step}' not found or has no output. "
+                        f"Cannot resume pre_namd."
+                    )
             else:
-                raise ValidationError()
+                raise ValidationError(
+                    f"PRE_NAMD step requires '{prev_step}' output. Include '{prev_step}' "
+                    f"in steps, or set resume=True with a prev_task_id that has "
+                    f"'{prev_step}' results."
+                )
 
             ncpus = self.config['machine']['cpus_per_node']
             job_pre_namd = run_pre_namd(
                 software=software,
                 parameters=input.prenamd_input,
-                scf_batch_results=scf_batch_results,
+                run_dirs=run_dirs,
                 nproc=ncpus // 4,
                 plot=input.basic_input.plot,
                 prepare_input_only=bool(flag),
@@ -332,10 +453,19 @@ class MainWorkflow:
             if prev_step in input.steps:
                 prev_output = jobs[prev_step][0].output
             elif first_step == 'namd' and resume:
-                prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                prev_output = self.js.get_output(prev_job_uuid)
+                try:
+                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
+                    prev_output = self.get_job_output(prev_job_uuid)
+                except:
+                    raise ResumeError(
+                        f"Previous job for step '{prev_step}' not found or has no output. "
+                        f"Cannot resume namd."
+                    )
             else:
-                raise ValidationError()
+                raise ValidationError(
+                    "NAMD step requires PRE_NAMD output. Include 'pre_namd' in steps, "
+                    "or set resume=True with a prev_task_id that has PRE_NAMD results."
+                )
             eigtxt = prev_output['EIGTXT']
             natxt = prev_output['NATXT']
             dephtime = prev_output['DEPHTIME']
@@ -348,6 +478,7 @@ class MainWorkflow:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
+                assert nodes > 0
                 ntasks_per_node = self.config['machine']['cpus_per_node']
                 cpus_per_task = 1
 
@@ -386,7 +517,7 @@ class MainWorkflow:
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
-        return task_id, jobs
+        return jobs
 
     def submit(
         self,
@@ -398,7 +529,7 @@ class MainWorkflow:
         prev_task_id: str = '',
     ) -> str:
 
-        task_id, jobs = self.main_workflow(
+        jobs = self.main_workflow(
             input=input,
             method=method,
             stru=stru,
@@ -409,11 +540,10 @@ class MainWorkflow:
         jobs_flatten = []
         for job_list in jobs.values():
             jobs_flatten.extend(job_list)
-        db_ids = submit_flow(
-            jobs_flatten,
-            worker='local_slurm',
-        )
+        flow = Flow(jobs_flatten)
+        db_ids = submit_flow(flow, worker='local_slurm')
 
+        task_id = flow.uuid
         job_ids = {}
         for key, value in jobs.items():
             job_ids[key] = [v.uuid for v in value]
@@ -439,18 +569,37 @@ class MainWorkflow:
     def list_jobs(self, task_id: str) -> Dict[str, List[str]]:
         """Return job UUIDs grouped by step for a given task."""
         if task_id not in self.job_ids:
-            raise KeyError(f"Task '{task_id}' not found. Known: {self.task_ids}")
+            raise ValidationError(f"Task '{task_id}' not found.")
         return self.job_ids[task_id]
 
-    def get_jobs_status(self, job_uuids: List[str]):
-        """Query job statuses.
-
-        TODO: Decide whether to query by jobflow UUID (via JobController) or
-        by SLURM job ID (via sacct).  The former requires a running MongoDB
-        instance; the latter is lighter but loses jobflow-level state info.
-        """
-        pass
+    def get_job_status(self, job_uuid: str) -> str:
+        """Query job status."""
+        try:
+            job_info = self.jc.get_job_info(job_id=job_uuid)
+            assert job_info is not None
+        except:
+            raise QueryError(f"Job '{job_uuid}' not found.")
+        return job_info.state.value
 
     def get_job_output(self, job_uuid: str):
         """Retrieve a completed job's output from the jobstore."""
-        return self.js.get_output(job_uuid)
+        status = self.get_job_status(job_uuid)
+        if status != 'COMPLETED':
+            raise QueryError(
+                f"Job '{job_uuid}' is not completed. Current status: {status}"
+            )
+        out = self.jc.get_job_output(job_id=job_uuid)
+
+        return out
+
+    def restore_from_db(self, conn: sqlite3.Connection) -> int:
+        """Restore task_ids and job_ids from the SQLite database.
+        Returns the number of tasks restored."""
+        rows = conn.execute(
+            "SELECT task_id, job_ids FROM task_owners"
+        ).fetchall()
+        for row in rows:
+            tid = row["task_id"]
+            self.task_ids.append(tid)
+            self.job_ids[tid] = json.loads(row["job_ids"])
+        return len(rows)

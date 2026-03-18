@@ -44,6 +44,7 @@ nve:
     cpus_per_task: 1
 
 auth:
+  single_user_mode: false         # set true to disable auth (no login, no DB)
   secret_key: ""                  # leave empty to auto-generate on first start
   user_db_path: "data/qdyn_users.db"
   token_expire_hours: 24

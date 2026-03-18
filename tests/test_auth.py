@@ -3,7 +3,7 @@ import tempfile
 
 import pytest
 
-from src.auth.database import (
+from src.database import (
     init_db,
     get_db,
     create_user,
@@ -294,3 +294,62 @@ class TestProtectedEndpoints:
         )
         assert resp_a.json()["user"] == "alice"
         assert resp_b.json()["user"] == "bob"
+
+
+# ---------------------------------------------------------------------------
+# Single-user mode
+# ---------------------------------------------------------------------------
+
+
+class TestSingleUserMode:
+    """Test that single-user mode bypasses auth entirely."""
+
+    @pytest.fixture()
+    def single_user_client(self):
+        from fastapi import Depends, FastAPI
+        from fastapi.testclient import TestClient
+
+        from src.auth.dependencies import get_current_user, set_single_user_mode
+
+        set_single_user_mode(True)
+
+        test_app = FastAPI()
+
+        @test_app.get("/protected")
+        def protected(username: str = Depends(get_current_user)):
+            return {"user": username}
+
+        client = TestClient(test_app)
+        yield client
+        set_single_user_mode(False)
+
+    def test_access_without_token(self, single_user_client):
+        resp = single_user_client.get("/protected")
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "admin"
+
+    def test_access_with_arbitrary_token(self, single_user_client):
+        resp = single_user_client.get(
+            "/protected", headers={"Authorization": "Bearer anything"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "admin"
+
+    def test_mode_reverts_to_multi_user(self):
+        """After disabling single-user mode, auth is required again."""
+        from fastapi import Depends, FastAPI
+        from fastapi.testclient import TestClient
+
+        from src.auth.dependencies import get_current_user, set_single_user_mode
+
+        set_single_user_mode(False)
+
+        test_app = FastAPI()
+
+        @test_app.get("/protected")
+        def protected(username: str = Depends(get_current_user)):
+            return {"user": username}
+
+        client = TestClient(test_app)
+        resp = client.get("/protected")
+        assert resp.status_code in (401, 403)
