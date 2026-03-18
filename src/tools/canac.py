@@ -171,8 +171,10 @@ def extract_eigvals_and_nacs(
 
         # save in HFNAMD format
         logging.info("Saving results in HFNAMD format...")
-        np.savetxt('EIGTXT', eigenvalues)
-        np.savetxt('NATXT', nacs)
+        bot = bmin - bmin_stored
+        top = bmax - bmin + 1
+        np.savetxt('EIGTXT', eigenvalues[:, bot:top])
+        np.savetxt('NATXT', nacs[:, bot:top, bot:top].reshape(nstep, -1))
 
 
 

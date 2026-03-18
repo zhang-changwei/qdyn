@@ -2,7 +2,7 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, status
 
-from .database import get_db, create_user, get_user
+from ..database import get_db, create_user, get_user
 from .models import UserCreate, Token
 from .security import hash_password, verify_password, create_access_token
 
