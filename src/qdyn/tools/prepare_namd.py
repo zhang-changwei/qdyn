@@ -1,5 +1,4 @@
 import os
-import re
 from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -8,7 +7,6 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import numpy.typing as npt
 from jobflow import job
 
 from ..input import PreNAMDInputT
@@ -21,7 +19,7 @@ from .dephase import calculate_dephasing_time
 def run_pre_namd(
     software: str,
     parameters: PreNAMDInputT,
-    scf_batch_results: List[Dict],
+    run_dirs: List[str],
     nproc: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
@@ -34,12 +32,16 @@ def run_pre_namd(
         Software name.
     parameters : PreNAMDInputT
         Pre-NAMD parameters.
-    scf_batch_results : List[Dict]
-        List of SCF batch results, each containing:
-        - run_dir: Working directory path for the batch task
-        - frame_range: (start, end) frame indices
-        - vbm: VBM band index
-        - cbm: CBM band index
+    run_dirs : List[str]
+        List of SCF run directories.
+    nproc : int
+        Number of processes for parallel calculation.
+    plot : bool
+        Whether to generate plots.
+    prepare_input_only : bool
+        If True, only prepare input files without running.
+
+    Returns
     prev_output : Dict[str, Any]
         Output from previous step (for compatibility).
     nproc : int
@@ -60,28 +62,30 @@ def run_pre_namd(
         return
 
     # Reconstruct all SCF subdirectories from batch results
+    # Subdirectories may have different naming patterns but always contain digits (e.g., 001, 0001, 0250)
     all_scf_dirs = []
-    for batch_result in scf_batch_results:
-        run_dir = batch_result['run_dir']
-        frame_range = batch_result['frame_range']
-        frame_start, frame_end = frame_range
-
-        for global_idx in range(frame_start, frame_end + 1):
-            subdir_name = f"scf_{global_idx:04d}"
-            subdir_path = os.path.join(run_dir, subdir_name)
-            all_scf_dirs.append(subdir_path)
+    for run_dir in run_dirs:
+        # Find all scf_* subdirectories
+        for entry in Path(run_dir).glob('scf_*'):
+            if entry.is_dir():
+                all_scf_dirs.append(entry)
 
     # Sort directories by scf index to ensure chronological order
     # (different batches may have different run_dir UUIDs)
     all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('_')[-1]))
 
-    ksen_path = plot_ksen_weight(software_lower, all_scf_dirs, parameters, nproc)
     vbm, cbm = extract_band_edges(
         software=software_lower,
         dir_path=all_scf_dirs[0],
         whichK=parameters.adv.ikpt,
         whichS=parameters.adv.ispin,
     )
+    images = []
+    if plot:
+        ksen_path = plot_ksen_weight(
+            software_lower, all_scf_dirs, parameters, vbm, cbm, nproc
+        )
+        images.append(ksen_path)
 
     # basics
     is_gamma_ver = False
@@ -122,12 +126,6 @@ def run_pre_namd(
         dirs_sorted=True,
     )
 
-    images = []
-    if plot:
-        pass
-
-    images.append(ksen_path)
-
     # DEPHTIME
     if parameters.surface_hopping == 'DISH':
         output = calculate_dephasing_time(
@@ -156,6 +154,8 @@ def plot_ksen_weight(
     software: str,
     run_dirs: list,
     parameters: PreNAMDInputT,
+    vbm: int,
+    cbm: int,
     nproc: Optional[int] = None,
     filename: str = 'ksen_wht.png',
     cmap: str = 'seismic',
@@ -208,7 +208,6 @@ def plot_ksen_weight(
     which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
     which_atoms = parameters.adv.iatoms
     cbar_labels = parameters.adv.cbar_labels
-    energy_limits = parameters.adv.energy_limits
 
     # Extract energy and weight data
     Enr, Wht = extract_wht_with_cache(
@@ -256,8 +255,7 @@ def plot_ksen_weight(
         cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    if energy_limits is not None:
-        ax.set_ylim(*energy_limits)
+    ax.set_ylim(vbm - 0.5, cbm + 0.5)
 
     # Labels and formatting
     ax.set_xlabel('Time [fs]', labelpad=5)

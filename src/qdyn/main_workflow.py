@@ -31,21 +31,25 @@ from .tools.namd import run_namd
 
 class ValidationError(Exception):
     """Input parameters or steps are invalid."""
+
     pass
 
 
 class ConfigError(Exception):
     """Server-side qdyn.yaml configuration is missing or incomplete."""
+
     pass
 
 
 class ResumeError(Exception):
     """Resume failed: previous task/job not found or has no output."""
+
     pass
 
 
 class QueryError(Exception):
     """Error during querying job status or output."""
+
     pass
 
 
@@ -90,11 +94,11 @@ class MainWorkflow:
         node = self.config
         for i, key in enumerate(keys):
             if not isinstance(node, dict) or key not in node:
-                path = '.'.join(keys[:i + 1])
+                path = '.'.join(keys[: i + 1])
                 raise ConfigError(f"Missing '{path}' in qdyn.yaml")
             node = node[key]
         return node
-    
+
     # ------------------------------------------------------------------
     # Pre-flight validation
     # ------------------------------------------------------------------
@@ -111,7 +115,7 @@ class MainWorkflow:
         """Validate inputs before building the workflow. Raises
         ValidationError or ResumeError with a clear message."""
         software = input.basic_input.software
-        if not(software == 'vasp' and method == 'namd'):
+        if not (software == 'vasp' and method == 'namd'):
             raise NotImplementedError(
                 f"Currently only the combination of software='vasp' and method='namd' is supported.\n"
                 f"Got software='{software}', method='{method}'."
@@ -119,10 +123,12 @@ class MainWorkflow:
 
         # --- steps ---
         if not input.steps:
-            raise ValidationError("input.steps is empty; at least one step is required.")
+            raise ValidationError(
+                "input.steps is empty; at least one step is required."
+            )
 
         valid_steps = {'nvt', 'nve', 'scf', 'pre_namd', 'namd'}
-        unknown = set(input.steps) - valid_steps # type: ignore
+        unknown = set(input.steps) - valid_steps  # type: ignore
         if unknown:
             raise ValidationError(
                 f"Unknown step(s): {unknown}. Valid steps: {sorted(valid_steps)}"
@@ -133,7 +139,9 @@ class MainWorkflow:
             step_int = sorted(key_map[s] for s in input.steps)
             for i in range(1, len(step_int)):
                 if step_int[i] != step_int[i - 1] + 1:
-                    raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")
+                    raise ValidationError(
+                        f"Steps must be contiguous. Got: {input.steps}"
+                    )
         else:
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
@@ -167,7 +175,7 @@ class MainWorkflow:
         prev_task_id: str = '',
     ) -> Dict[str, List[Job | Flow]]:
         '''
-        Notice: assume the config is valid, 
+        Notice: assume the config is valid,
                 no error handling for missing config entries.
         '''
 
@@ -328,7 +336,7 @@ class MainWorkflow:
                 next_step = 'pre_namd'
                 if prev_step in input.steps:
                     # Get XDATCAR path from NVE output
-                    xdatcar_path = jobs[prev_step][0].output['md_tracks']
+                    structures = jobs[prev_step][0].output['strus']
                 elif first_step == 'scf' and resume:
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
@@ -339,7 +347,9 @@ class MainWorkflow:
                             f"Cannot resume scf."
                         )
                 elif stru:
-                    structures = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+                    structures = ase.io.read(
+                        io.StringIO(stru), format=stru_format, index=':'
+                    )
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -360,7 +370,7 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=self.config['pp_path'][software],
                     orb_path=self.config['orb_path'][software],
-                    xdatcar_path=xdatcar_path,
+                    structures=structures,
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,
@@ -394,16 +404,16 @@ class MainWorkflow:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
-                scf_batch_results = []
+                run_dirs = []
                 for idx in range(len(jobs[prev_step])):
-                    scf_batch_results.extend(jobs[prev_step][idx].output)
+                    run_dirs.extend(jobs[prev_step][idx].output['run_dir'])
             elif first_step == 'pre_namd' and resume:
                 try:
                     prev_jobs = self.job_ids[prev_task_id][prev_step]
                     run_dirs = []
                     for prev_job_uuid in prev_jobs:
                         output = self.get_job_output(prev_job_uuid)
-                        run_dirs.extend(output['run_dirs'])
+                        run_dirs.extend(output['run_dir'])
                 except:
                     raise ResumeError(
                         f"Previous job(s) for step '{prev_step}' not found or has no output. "
@@ -595,9 +605,7 @@ class MainWorkflow:
     def restore_from_db(self, conn: sqlite3.Connection) -> int:
         """Restore task_ids and job_ids from the SQLite database.
         Returns the number of tasks restored."""
-        rows = conn.execute(
-            "SELECT task_id, job_ids FROM task_owners"
-        ).fetchall()
+        rows = conn.execute("SELECT task_id, job_ids FROM task_owners").fetchall()
         for row in rows:
             tid = row["task_id"]
             self.task_ids.append(tid)

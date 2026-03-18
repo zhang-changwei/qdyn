@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal, List, Optional, Any
+
+import numpy as np
 
 ## Important!
 # InputT: should contain minimal parameters exposed to users,
@@ -42,22 +44,6 @@ class BasicCalInputT(BaseModel):
     parameters: str = ''
 
 
-# class NVEInputT(BaseModel):
-#     nodes: Optional[int] = None
-#     kspacing: float = 0.04
-#     encut: float = 500
-#     scf_thr: float = 1e-6
-#     temp_begin: float = 300
-#     temp_end: float = 300
-
-
-# class SCFInputT(BaseModel):
-#     nodes: Optional[int] = None
-#     kspacing: float = 0.04
-#     encut: float = 500
-#     scf_thr: float = 1e-6
-
-
 class NAMDInputT(BaseModel):
     nodes: Optional[int] = None
 
@@ -78,6 +64,9 @@ class _PreNAMDInputAdvT(BaseModel):
     alle: bool = False
     ikpt: int = 1
     ispin: int = 1
+
+    iatoms: Optional[np.ndarray] = None
+    cbar_labels: Optional[List[str]] = None
 
 
 class PreNAMDInputT(BaseModel):
@@ -104,9 +93,6 @@ class NVTInputT(BaseModel):
     scf_thr: float = 1e-6
 
     parameters: str = ''
-
-    # job control
-    is_alle: bool = False
 
 
 class NVEInputT(BaseModel):
@@ -138,12 +124,22 @@ class SCFInputT(BaseModel):
     md_step: int = Field(
         1000, description="Number of MD steps (frames) in the structure file"
     )
-    nscf: int = Field(md_step // 2, description="Number of SCF frames to calculate")
+    nscf: Optional[int] = Field(None, description="Number of SCF frames to calculate")
+
     batch_size: int = Field(
         100,
         description="Number of frames per batch task. Smaller batches mean more parallel tasks.",
     )
+
+    is_alle: bool = Field(False, description="Whether to use all-electron vasp")
     parameters: str = Field('', description="Additional INCAR parameters string")
+
+    @model_validator(mode='after')
+    def set_nscf_default(self) -> "SCFInputT":
+        # 如果用户没有显式传入 nscf，则根据 md_step 计算
+        if self.nscf is None:
+            self.nscf = self.md_step // 2
+        return self
 
 
 class InputT(BaseModel):

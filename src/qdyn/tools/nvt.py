@@ -1,6 +1,5 @@
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
@@ -107,7 +106,7 @@ def run_nvt(
         )
 
         # Run the software
-        run_software(software_lower, nprocs, is_alle=parameters.is_alle)
+        run_software(software_lower, nprocs)
 
         # Process output and check convergence
         (
@@ -175,7 +174,7 @@ def run_nvt(
         'software': software,
         'md_files': md_files,
         'images': images,
-        'contcar': current_structure,
+        'stru': current_structure,
     }
 
 

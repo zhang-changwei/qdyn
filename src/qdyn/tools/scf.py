@@ -13,7 +13,7 @@ import re
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import matplotlib
 
@@ -41,7 +41,7 @@ def run_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    xdatcar_path: str,
+    structures: str,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -63,8 +63,8 @@ def run_scf(
         Path to pseudopotential files.
     orb_path : str
         Path to orbital files.
-    xdatcar_path : str
-        Path to XDATCAR file (or other structure file). Structures are read inside
+    structures : str
+        Path to md tracks file (or other structure file). Structures are read inside
         _run_scf_task to support jobflow serialization.
     nodes : int
         Number of nodes.
@@ -109,7 +109,7 @@ def run_scf(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            xdatcar_path=xdatcar_path,
+            structures=structures,
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
@@ -128,7 +128,7 @@ def _run_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    xdatcar_path: str,
+    structures: str,
     frame_start: int,
     frame_end: int,
     nodes: int = 1,
@@ -139,7 +139,7 @@ def _run_scf_task(
     """Run a batch of SCF calculations for multiple structures.
 
     This job:
-    1. Reads structures from xdatcar_path
+    1. Reads structures
     2. Creates subdirectories for each structure (scf_XXXX format)
     3. Prepares common input files (INCAR, KPOINTS, POTCAR)
     4. Runs SCF calculations sequentially with CHGCAR passing
@@ -155,8 +155,8 @@ def _run_scf_task(
         Pseudopotential path.
     orb_path : str
         Orbital file path.
-    xdatcar_path : str
-        Path to XDATCAR file (or other structure file).
+    structures : str
+        Path to md tracks file.
     frame_start : int
         Global frame index of the first structure (0-based).
     frame_end : int
@@ -189,7 +189,7 @@ def _run_scf_task(
     # Determine the starting frame index in the file (select last total_frames)
     selected_structures = read_strus(
         software=software_lower,
-        structure_path=xdatcar_path,
+        structure_path=structures,
         index=-nscf,
     )
 
@@ -211,10 +211,11 @@ def _run_scf_task(
 
     # Create subdirectories
     subdirs = []
+    numdigit = len(str(nscf))
 
     for local_idx, structure in enumerate(batch_structures, start=1):
         global_idx = frame_start + local_idx
-        subdir_name = f"scf_{global_idx:04d}"
+        subdir_name = f"scf_{global_idx:0{numdigit}d}"
         subdir_path = task_dir / subdir_name
 
         # Create subdirectories and write structure
@@ -225,7 +226,6 @@ def _run_scf_task(
 
     successful = 0
     failed = []
-    vbm = cbm = 0
     prev_chgcar = None
     chgcar = chg_name[software_lower]
     stru_name = stru_files[software_lower]
@@ -299,7 +299,6 @@ def _run_scf_task(
     # prepare_namd.py expects inclusive range: (start, end)
     return {
         'run_dir': run_dir,
-        'frame_range': (frame_start + 1, frame_end),
         'successful': successful,
         'failed': failed,
     }
@@ -487,7 +486,7 @@ def _validate_scf_output(software: str):
                 if file_size > tail_size:
                     idx = content.find('\n')
                     if idx != -1:
-                        content = content[idx + 1:]
+                        content = content[idx + 1 :]
 
             # Check completion marker
             if 'Total CPU' not in content:

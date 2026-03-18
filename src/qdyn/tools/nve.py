@@ -1,15 +1,8 @@
 import os
-import re
-import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
-import numpy as np
 from ase import Atoms
 from jobflow import job
 
@@ -104,7 +97,7 @@ def run_nve(
     #     }
 
     # Run the software
-    run_software(software_lower, nprocs, is_alle=parameters.is_alle)
+    run_software(software_lower, nprocs)
 
     # Process output and check convergence
     scf_converged, md_file, images = _process_nve_output(
@@ -129,7 +122,7 @@ def run_nve(
         'software': software,
         'md_files': md_file,
         'images': images,
-        'md_tracks': track,
+        'strus': track,
     }
 
 
