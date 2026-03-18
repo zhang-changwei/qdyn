@@ -537,7 +537,7 @@ class MainWorkflow:
         stru_format: str = 'vasp',
         resume: bool = False,
         prev_task_id: str = '',
-    ) -> str:
+    ) -> Tuple[str, Dict[str, List[Job | Flow]]]:
 
         jobs = self.main_workflow(
             input=input,
@@ -561,7 +561,7 @@ class MainWorkflow:
 
         self.task_ids.append(task_id)
 
-        return task_id
+        return task_id, jobs
 
     def remove_task(self, task_id: str):
         """Remove a task from local tracking.
@@ -576,9 +576,9 @@ class MainWorkflow:
         """Return all task IDs known to this instance (local-memory view)."""
         return list(self.task_ids)
 
-    def list_jobs(self, task_id: str) -> Dict[str, List[str]]:
+    def list_task_jobs(self, task_id: str) -> Dict[str, List[str]]:
         """Return job UUIDs grouped by step for a given task."""
-        if task_id not in self.job_ids:
+        if task_id not in self.task_ids:
             raise ValidationError(f"Task '{task_id}' not found.")
         return self.job_ids[task_id]
 
