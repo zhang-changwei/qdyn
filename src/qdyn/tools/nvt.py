@@ -105,6 +105,15 @@ def run_nvt(
             orb_path=orb_path,
         )
 
+        if prepare_input_only:
+            return {
+                'run_dir': str(Path.cwd()),
+                'software': software,
+                'md_files': [],
+                'images': [],
+                'stru': [],
+            }
+
         # Run the software
         run_software(software_lower, nprocs)
 
@@ -174,7 +183,7 @@ def run_nvt(
         'software': software,
         'md_files': md_files,
         'images': images,
-        'stru': current_structure,
+        'stru': current_structure.todict(),
     }
 
 
@@ -283,7 +292,7 @@ def _process_nvt_output(
         case 'vasp':
             md_data = extract_md_data_from_oszicar()
             # Read CONTCAR as new structure for next iteration
-            current_structure = ase.io.read('CONTCAR', format='vasp').todict() # type: ignore
+            current_structure = ase.io.read('CONTCAR', format='vasp')  # type: ignore
         case _:
             raise NotImplementedError(
                 f"MD data extraction for {software} is not implemented yet."
@@ -314,6 +323,7 @@ def _process_nvt_output(
     md_filename = f'md_attempt_{attempt}.dat'
     md_file = save_md_data(md_data, md_dt, filename=md_filename)
 
+    image = ''
     # Generate plots if requested
     if plot:
         plot_filename = f'nvt_results_attempt_{attempt}.png'

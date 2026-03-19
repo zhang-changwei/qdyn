@@ -107,7 +107,9 @@ class SCFInputT(BaseModel):
     md_step: int = Field(
         1000, description="Number of MD steps (frames) in the structure file"
     )
-    nscf: Optional[int] = Field(None, description="Number of SCF frames to calculate")
+    scf_step: Optional[int] = Field(
+        None, description="Number of SCF frames to calculate"
+    )
 
     batch_size: int = Field(
         100,
@@ -118,10 +120,10 @@ class SCFInputT(BaseModel):
     parameters: str = Field('', description="Additional INCAR parameters string")
 
     @model_validator(mode='after')
-    def set_nscf_default(self) -> "SCFInputT":
-        # 如果用户没有显式传入 nscf，则根据 md_step 计算
-        if self.nscf is None:
-            self.nscf = self.md_step // 2
+    def set_scf_step_default(self) -> "SCFInputT":
+        # 如果用户没有显式传入 scf_step，则根据 md_step 计算
+        if self.scf_step is None:
+            self.scf_step = self.md_step // 2
         return self
 
 

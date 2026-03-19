@@ -72,6 +72,11 @@ def run_pre_namd(
             if entry.is_dir():
                 all_scf_dirs.append(entry)
 
+    if len(all_scf_dirs) == 0:
+        raise IndexError(
+            f"No scf_* directories found in {run_dirs}. Please check the directory structure."
+        )
+
     # Sort directories by scf index to ensure chronological order
     # (different batches may have different run_dir UUIDs)
     all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('_')[-1]))
@@ -102,6 +107,7 @@ def run_pre_namd(
     def safe_eval(expr: str) -> Any:
         ALLOWED_OPS = {ast.Add: operator.add, ast.Sub: operator.sub}
         tree = ast.parse(expr, mode='eval')
+
         def _eval(node):
             if isinstance(node, ast.Constant):
                 return node.value
@@ -109,8 +115,9 @@ def run_pre_namd(
                 return ALLOWED_OPS[type(node.op)](_eval(node.left), _eval(node.right))
             else:
                 raise ValueError(f"Unsupported expression: {expr}")
+
         return _eval(tree.body)
-    
+
     if isinstance(parameters.bmin, str):
         bmin_ = parameters.bmin.lower()
         bmin_ = bmin_.replace('vbm', str(vbm))
@@ -269,7 +276,7 @@ def plot_ksen_weight(
         cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    # ax.set_ylim(vbm - 0.5, cbm + 0.5)
+    ax.set_ylim(Enr[0, vbm] - 0.5, Enr[0, cbm] + 0.5)
 
     # Labels and formatting
     ax.set_xlabel('Time [fs]', labelpad=5)

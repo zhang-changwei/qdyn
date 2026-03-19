@@ -183,9 +183,9 @@ def _run_scf_task(
     """
     software_lower = software.lower()
     nprocs = nodes * ntasks_per_node
-    nscf = parameters.nscf
+    scf_step = parameters.scf_step
 
-    selected_structures = [Atoms.fromdict(s) for s in structures[-nscf:]]
+    selected_structures = [Atoms.fromdict(s) for s in structures[-scf_step:]]
 
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)
@@ -199,13 +199,20 @@ def _run_scf_task(
         orb_path=orb_path,
     )
 
+    if prepare_input_only:
+        return {
+            'run_dir': str(Path.cwd()),
+            'successful': 0,
+            'failed': [],
+        }
+
     # Task working directory
     task_dir = Path.cwd()
     run_dir = str(task_dir)
 
     # Create subdirectories
     subdirs = []
-    numdigit = len(str(nscf))
+    numdigit = len(str(scf_step))
 
     for local_idx, structure in enumerate(batch_structures, start=1):
         global_idx = frame_start + local_idx

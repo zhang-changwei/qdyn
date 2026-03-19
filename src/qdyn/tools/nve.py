@@ -88,14 +88,14 @@ def run_nve(
         orb_path=orb_path,
     )
 
-    # if prepare_input_only:
-    #     return {
-    #         'run_dir': str(Path.cwd()),
-    #         'software': software,
-    #         'images': [],
-    #         'strus': [],
-    #         'contcar': structure,
-    #     }
+    if prepare_input_only:
+        return {
+            'run_dir': str(Path.cwd()),
+            'software': software,
+            'md_files': [],
+            'images': [],
+            'strus': [],
+        }
 
     # Run the software
     run_software(software_lower, nprocs)
@@ -114,8 +114,8 @@ def run_nve(
         )
 
     if os.path.isfile(md_tracks[software_lower]):
-        track = read_strus(software_lower)
-        track_list = [track[i].todict() for i in range(len(track))]
+        strus = read_strus(software_lower)
+        strus_list = [strus[i].todict() for i in range(len(strus))]
     else:
         raise FileNotFoundError(f"MD track file not found for {software_lower}.")
 
@@ -124,7 +124,7 @@ def run_nve(
         'software': software,
         'md_files': md_file,
         'images': images,
-        'strus': track_list,
+        'strus': strus_list,
     }
 
 
