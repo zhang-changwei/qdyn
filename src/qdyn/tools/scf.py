@@ -128,11 +128,7 @@ def _run_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-<<<<<<< Updated upstream
-    structures: str,
-=======
     structures: List[Atoms],
->>>>>>> Stashed changes
     frame_start: int,
     frame_end: int,
     nodes: int = 1,
@@ -189,17 +185,7 @@ def _run_scf_task(
     nprocs = nodes * ntasks_per_node
     nscf = parameters.nscf
 
-<<<<<<< Updated upstream
-    # Read structures from file
-    # Determine the starting frame index in the file (select last total_frames)
-    selected_structures = read_strus(
-        software=software_lower,
-        structure_path=structures,
-        index=-nscf,
-    )
-=======
     selected_structures = structures[-nscf:]
->>>>>>> Stashed changes
 
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)
