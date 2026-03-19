@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import ase.io
 from ase import Atoms
 from jobflow import job
 
@@ -113,7 +114,8 @@ def run_nve(
         )
 
     if os.path.isfile(md_tracks[software_lower]):
-        track = os.path.abspath(md_tracks[software_lower])
+        track = read_strus(software_lower)
+        track_list = [track[i].todict() for i in range(len(track))]
     else:
         raise FileNotFoundError(f"MD track file not found for {software_lower}.")
 
@@ -122,7 +124,7 @@ def run_nve(
         'software': software,
         'md_files': md_file,
         'images': images,
-        'strus': track,
+        'strus': track_list,
     }
 
 
@@ -230,3 +232,29 @@ def _process_nve_output(
         images.append(image)
 
     return scf_converged, md_file, images
+
+
+def read_strus(software: str) -> List[Atoms]:
+    """Read structure file and return ASE Atoms object.
+
+    Parameters
+    ----------
+    software : str
+        Software name ('vasp', 'cp2k', etc.).
+    structure_path : str
+        Path to structure file (e.g. CONTCAR, POSCAR, XYZ).
+    format : str, optional
+        File format (e.g. 'vasp', 'cp2k-xyz').
+
+    Returns
+    -------
+    List[Atoms]
+        List of ASE Atoms objects representing the structures.
+    """
+    match software:
+        case 'vasp':
+            structure = ase.io.read('XDATCAR', format='vasp-xdatcar', index=':')
+        case _:
+            raise ValueError(f"Unsupported software: {software}")
+
+    return structure

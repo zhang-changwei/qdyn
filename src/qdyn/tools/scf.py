@@ -128,7 +128,11 @@ def _run_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
+<<<<<<< Updated upstream
     structures: str,
+=======
+    structures: List[Atoms],
+>>>>>>> Stashed changes
     frame_start: int,
     frame_end: int,
     nodes: int = 1,
@@ -185,6 +189,7 @@ def _run_scf_task(
     nprocs = nodes * ntasks_per_node
     nscf = parameters.nscf
 
+<<<<<<< Updated upstream
     # Read structures from file
     # Determine the starting frame index in the file (select last total_frames)
     selected_structures = read_strus(
@@ -192,6 +197,9 @@ def _run_scf_task(
         structure_path=structures,
         index=-nscf,
     )
+=======
+    selected_structures = structures[-nscf:]
+>>>>>>> Stashed changes
 
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)
@@ -348,36 +356,6 @@ def _prepare_scf_input(
             raise NotImplementedError(
                 f"Software {software} is not supported for SCF input preparation yet."
             )
-
-
-def read_strus(
-    software: str,
-    structure_path: str,
-    index: Optional[int] = None,
-) -> List[Atoms]:
-    """Read structure file and return ASE Atoms object.
-
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', 'cp2k', etc.).
-    structure_path : str
-        Path to structure file (e.g. CONTCAR, POSCAR, XYZ).
-    format : str, optional
-        File format (e.g. 'vasp', 'cp2k-xyz').
-
-    Returns
-    -------
-    List[Atoms]
-        List of ASE Atoms objects representing the structures.
-    """
-    match software:
-        case 'vasp':
-            structure = ase.io.read(structure_path, format='vasp-xdatcar', index=index)
-        case _:
-            raise ValueError(f"Unsupported software: {software}")
-
-    return structure
 
 
 def _write_stru(software: str, structure: Atoms, output_path: Path):

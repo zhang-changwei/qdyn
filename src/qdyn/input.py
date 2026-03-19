@@ -65,7 +65,7 @@ class _PreNAMDInputAdvT(BaseModel):
     ikpt: int = 1
     ispin: int = 1
 
-    iatoms: Optional[np.ndarray] = None
+    which_atoms: Optional[np.ndarray] = None
     cbar_labels: Optional[List[str]] = None
 
 

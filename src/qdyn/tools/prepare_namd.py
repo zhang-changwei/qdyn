@@ -206,7 +206,7 @@ def plot_ksen_weight(
     dt = parameters.md_dt
     which_spin = parameters.adv.ispin - 1  # Convert to 0-based index
     which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
-    which_atoms = parameters.adv.iatoms
+    which_atoms = parameters.adv.which_atoms
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data

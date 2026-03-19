@@ -337,10 +337,18 @@ class MainWorkflow:
                 if prev_step in input.steps:
                     # Get XDATCAR path from NVE output
                     structures = jobs[prev_step][0].output['strus']
+                    structures = [
+                        ase.Atoms.fromdict(structures[i])
+                        for i in range(len(structures))
+                    ]
                 elif first_step == 'scf' and resume:
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                         structures = self.get_job_output(prev_job_uuid)['strus']
+                        structures = [
+                            ase.Atoms.fromdict(structures[i])
+                            for i in range(len(structures))
+                        ]
                     except:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
