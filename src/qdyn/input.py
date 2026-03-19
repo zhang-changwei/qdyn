@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, List, Optional, Any
 
 import numpy as np
@@ -48,8 +48,17 @@ class _PreNAMDInputAdvT(BaseModel):
     ikpt: int = 1
     ispin: int = 1
 
-    which_atoms: Optional[np.ndarray] = None
+    which_atoms: Optional[List[int]] = None
     cbar_labels: Optional[List[str]] = None
+
+    @field_validator('which_atoms', mode='before')
+    @classmethod
+    def normalize_which_atoms(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        return value
 
 
 class PreNAMDInputT(BaseModel):
@@ -139,6 +148,8 @@ class InputT(BaseModel):
     namd_input: NAMDInputT
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
+    stru: Optional[str] = ''
+    stru_format: str = 'vasp'
 
 
 # deprecated

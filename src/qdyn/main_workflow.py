@@ -16,16 +16,41 @@ from ase import Atoms
 import ase.io
 from jobflow.core.job import Job
 from jobflow.core.flow import Flow
-from jobflow_remote import set_run_config, submit_flow
+from jobflow_remote import SETTINGS, set_run_config, submit_flow
 from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
-from .tools.nvt import run_nvt
-from .tools.nve import run_nve
-from .tools.scf import run_scf
-from .tools.prepare_namd import run_pre_namd
-from .tools.namd import run_namd
+
+
+def _lazy_import_run_nvt():
+    from .tools.nvt import run_nvt
+
+    return run_nvt
+
+
+def _lazy_import_run_nve():
+    from .tools.nve import run_nve
+
+    return run_nve
+
+
+def _lazy_import_run_scf():
+    from .tools.scf import run_scf
+
+    return run_scf
+
+
+def _lazy_import_run_pre_namd():
+    from .tools.prepare_namd import run_pre_namd
+
+    return run_pre_namd
+
+
+def _lazy_import_run_namd():
+    from .tools.namd import run_namd
+
+    return run_namd
 
 
 class ValidationError(Exception):
@@ -59,11 +84,12 @@ class MainWorkflow:
         self.task_ids: List[str] = []
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
-
-        self.jc = JobController.from_project_name()
+        self.jc: Optional[JobController] = None
 
     def __del__(self):
-        self.jc.close()
+        jc = getattr(self, "jc", None)
+        if jc is not None:
+            jc.close()
 
     # ------------------------------------------------------------------
     # Config
@@ -97,6 +123,39 @@ class MainWorkflow:
                 raise ConfigError(f"Missing '{path}' in qdyn.yaml")
             node = node[key]
         return node
+
+    def _configure_jobflow_remote(self) -> None:
+        """Apply optional jobflow-remote settings from qdyn.yaml before first use."""
+        basic_cfg = self.config.get('basic', {})
+        project_path = basic_cfg.get('jf_project_path', '')
+        if project_path:
+            SETTINGS.projects_folder = os.path.abspath(os.path.expanduser(project_path))
+
+        project_name = basic_cfg.get('jf_project_name', '')
+        if project_name:
+            SETTINGS.project = project_name
+
+    def _ensure_job_controller(self) -> JobController:
+        """Initialize the jobflow-remote controller on demand."""
+        self._configure_jobflow_remote()
+        if self.jc is None:
+            try:
+                self.jc = JobController.from_project_name()
+            except Exception as exc:
+                raise ConfigError(
+                    "Failed to initialize jobflow-remote. "
+                    "Set basic.jf_project_path/jf_project_name in qdyn.yaml "
+                    "or configure ~/.jfremote before using remote job features."
+                ) from exc
+        return self.jc
+
+    @staticmethod
+    def _validate_positive_nodes(nodes: int, step: str) -> None:
+        """Ensure node count is positive."""
+        if nodes <= 0:
+            raise ValidationError(
+                f"{step}.nodes must be a positive integer or omitted to use the default."
+            )
 
     # ------------------------------------------------------------------
     # Pre-flight validation
@@ -197,6 +256,7 @@ class MainWorkflow:
 
         # step 1: NVT
         if 'nvt' in input.steps or flag == 'gen_input_nvt':
+            run_nvt = _lazy_import_run_nvt()
             prev_step = ''
             next_step = 'nve'
             if prev_step in input.steps:
@@ -223,7 +283,7 @@ class MainWorkflow:
                 if input.nvt_input.nodes is not None
                 else self.config['nvt'][software]['nodes']
             )
-            assert nodes > 0
+            self._validate_positive_nodes(nodes, 'nvt')
             ntasks_per_node = self.config['nvt'][software]['ntasks_per_node']
             cpus_per_task = self.config['nvt'][software]['cpus_per_task']
 
@@ -248,6 +308,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
+                    'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
@@ -262,6 +323,7 @@ class MainWorkflow:
 
         # step 2: NVE
         if 'nve' in input.steps or flag == 'gen_input_nve':
+            run_nve = _lazy_import_run_nve()
             prev_step = 'nvt'
             next_step = 'scf'
             if prev_step in input.steps:
@@ -288,7 +350,7 @@ class MainWorkflow:
                 if input.nve_input.nodes is not None
                 else self.config['nve'][software]['nodes']
             )
-            assert nodes > 0
+            self._validate_positive_nodes(nodes, 'nve')
             ntasks_per_node = self.config['nve'][software]['ntasks_per_node']
             cpus_per_task = self.config['nve'][software]['cpus_per_task']
 
@@ -313,6 +375,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
+                    'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
@@ -327,6 +390,7 @@ class MainWorkflow:
 
         # step 3: SCF
         if 'scf' in input.steps or flag == 'gen_input_scf':
+            run_scf = _lazy_import_run_scf()
             if software == 'abacus':
                 # no need for scf calc if using abacus
                 pass
@@ -358,7 +422,7 @@ class MainWorkflow:
                     if input.scf_input.nodes is not None
                     else self.config['scf'][software]['nodes']
                 )
-                assert nodes > 0
+                self._validate_positive_nodes(nodes, 'scf')
                 ntasks_per_node = self.config['scf'][software]['ntasks_per_node']
                 cpus_per_task = self.config['scf'][software]['cpus_per_task']
 
@@ -384,6 +448,7 @@ class MainWorkflow:
                             post_run=None,
                         ),
                         resources={
+                            'partition': self.config['machine']['partition'],
                             'nodes': nodes,
                             'ntasks_per_node': ntasks_per_node,
                             'cpus_per_task': cpus_per_task,
@@ -398,6 +463,7 @@ class MainWorkflow:
 
         # step 4: PRE_NAMD
         if 'pre_namd' in input.steps or flag == 'gen_input_pre_namd':
+            run_pre_namd = _lazy_import_run_pre_namd()
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
@@ -441,6 +507,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
+                    'partition': self.config['machine']['partition'],
                     'nodes': 1,
                     'ntasks_per_node': 1,
                     'cpus_per_task': ncpus,
@@ -455,6 +522,7 @@ class MainWorkflow:
 
         # step 4: NAMD
         if 'namd' in input.steps or flag == 'gen_input_namd':
+            run_namd = _lazy_import_run_namd()
             prev_step = 'pre_namd'
             next_step = ''
             if prev_step in input.steps:
@@ -485,7 +553,7 @@ class MainWorkflow:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
-                assert nodes > 0
+                self._validate_positive_nodes(nodes, 'namd')
                 ntasks_per_node = self.config['machine']['cpus_per_node']
                 cpus_per_task = 1
 
@@ -512,6 +580,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
+                    'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
@@ -535,6 +604,7 @@ class MainWorkflow:
         resume: bool = False,
         prev_task_id: str = '',
     ) -> Tuple[str, Dict[str, List[str]]]:
+        self._ensure_job_controller()
 
         jobs = self.main_workflow(
             input=input,
@@ -581,8 +651,9 @@ class MainWorkflow:
 
     def get_job_status(self, job_uuid: str) -> str:
         """Query job status."""
+        jc = self._ensure_job_controller()
         try:
-            job_info = self.jc.get_job_info(job_id=job_uuid)
+            job_info = jc.get_job_info(job_id=job_uuid)
             assert job_info is not None
         except:
             raise QueryError(f"Job '{job_uuid}' not found.")
@@ -590,12 +661,13 @@ class MainWorkflow:
 
     def get_job_output(self, job_uuid: str):
         """Retrieve a completed job's output from the jobstore."""
+        jc = self._ensure_job_controller()
         status = self.get_job_status(job_uuid)
         if status != 'COMPLETED':
             raise QueryError(
                 f"Job '{job_uuid}' is not completed. Current status: {status}"
             )
-        out = self.jc.get_job_output(job_id=job_uuid)
+        out = jc.get_job_output(job_id=job_uuid)
 
         return out
 

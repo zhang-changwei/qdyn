@@ -1,14 +1,14 @@
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .security import decode_token
 
-_bearer_scheme = HTTPBearer()
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False)),
+    credentials: HTTPAuthorizationCredentials = Security(_bearer_scheme),
 ) -> str:
     """Extract and verify the JWT, returning the username."""
     if credentials is None:

@@ -228,6 +228,8 @@ def plot_ksen_weight(
     which_spin = parameters.adv.ispin - 1  # Convert to 0-based index
     which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
     which_atoms = parameters.adv.which_atoms
+    if which_atoms is not None:
+        which_atoms = np.asarray(which_atoms, dtype=int)
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data

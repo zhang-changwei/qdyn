@@ -24,7 +24,9 @@ manager: Optional[MainWorkflow] = None
 async def lifespan(app: FastAPI):
     global manager
     config_path = (
-        app.state.config_path or os.environ.get("QDYN_CONFIG") or "config/qdyn.yaml"
+        getattr(app.state, "config_path", None)
+        or os.environ.get("QDYN_CONFIG")
+        or "config/qdyn.yaml"
     )
     manager = MainWorkflow(config_path)
 
@@ -86,27 +88,21 @@ def _verify_ownership(task_id: str, username: str) -> None:
         )
 
 
-# --- endpoints ---
-
-
-@app.post("/submit", response_model=str, status_code=201)
-def submit_task(
+def _submit_with_tracking(
     input: InputT,
-    method: Literal["namd", "n2amd"] = "namd",
-    stru: Optional[str] = "",
-    stru_format: str = "vasp",
-    resume: bool = False,
-    prev_task_id: str = "",
-    username: str = Depends(get_current_user),
-):
-    """Submit a new task and return its task ID."""
+    method: Literal["namd", "n2amd"],
+    resume: bool,
+    prev_task_id: str,
+    username: str,
+) -> str:
+    """Submit a task and persist task ownership metadata."""
     m = _manager()
     try:
         task_id, job_ids = m.submit(
             input=input,
             method=method,
-            stru=stru,
-            stru_format=stru_format,
+            stru=input.stru,
+            stru_format=input.stru_format,
             resume=resume,
             prev_task_id=prev_task_id,
         )
@@ -119,6 +115,27 @@ def submit_task(
 
     qdyndb.assign_task(task_id, username, job_ids)
     return task_id
+
+
+# --- endpoints ---
+
+
+@app.post("/submit", response_model=str, status_code=201)
+def submit_task(
+    input: InputT,
+    method: Literal["namd", "n2amd"] = "namd",
+    resume: bool = False,
+    prev_task_id: str = "",
+    username: str = Depends(get_current_user),
+):
+    """Submit a new task and return its task ID."""
+    return _submit_with_tracking(
+        input=input,
+        method=method,
+        resume=resume,
+        prev_task_id=prev_task_id,
+        username=username,
+    )
 
 
 @app.get("/tasks", response_model=list[str])

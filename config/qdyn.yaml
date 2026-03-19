@@ -5,6 +5,7 @@
 
 basic:
   jf_project_path: ""
+  jf_project_name: ""
   user_db_path: "data/qdyn_users.db"
 
 machine:
