@@ -4,6 +4,13 @@ A toolkit for non-adiabatic quasiparticle dynamics
 # Install
 
 ```bash
+# production environment (w/ N2AMD)
+uv sync --extra ml --no-dev
+# production environment (w/o N2AMD)
+uv sync --no-dev
+# development environment (w/ N2AMD)
+uv sync --extra ml
+# development environment (w/o N2AMD)
 uv sync
 ```
 

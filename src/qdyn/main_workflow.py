@@ -3,7 +3,6 @@ from copy import deepcopy
 import json
 import shutil
 from pathlib import Path
-import requests
 import logging
 import io
 import os
