@@ -5,14 +5,21 @@ from typing import Optional
 
 class QdynDB:
 
+    def __init__(self):
+        self._conn: Optional[sqlite3.Connection] = None
+
     def init_db(self, db_path: str = "data/qdyn_users.db") -> None:
         """Create tables and store the module-level connection."""
 
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(db_path, check_same_thread=True)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA journal_mode = WAL")  # 开启读写并行
+        self._conn.execute("PRAGMA synchronous = NORMAL")  # 兼顾性能和数据安全，断电最多丢几秒数据
+        self._conn.execute("PRAGMA busy_timeout = 3000")  # 抢不到锁最多等待3秒，避免直接报错
+        self._conn.execute("PRAGMA foreign_keys = ON")  # 开启外键约束，你这里用了外键必须开！
+
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,6 +46,7 @@ class QdynDB:
 
     def close_db(self) -> None:
         if self._conn is not None:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._conn.close()
             self._conn = None
 
