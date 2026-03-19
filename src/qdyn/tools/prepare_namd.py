@@ -1,3 +1,5 @@
+import ast
+import operator
 import os
 from pathlib import Path
 from typing import List, Dict, Tuple, Any, Optional
@@ -97,18 +99,30 @@ def run_pre_namd(
     elif software_lower in ['abacus', 'hamgnn', 'openmx', 'siesta']:
         is_gamma_ver = True
 
+    def safe_eval(expr: str) -> Any:
+        ALLOWED_OPS = {ast.Add: operator.add, ast.Sub: operator.sub}
+        tree = ast.parse(expr, mode='eval')
+        def _eval(node):
+            if isinstance(node, ast.Constant):
+                return node.value
+            elif isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPS:
+                return ALLOWED_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+            else:
+                raise ValueError(f"Unsupported expression: {expr}")
+        return _eval(tree.body)
+    
     if isinstance(parameters.bmin, str):
         bmin_ = parameters.bmin.lower()
         bmin_ = bmin_.replace('vbm', str(vbm))
         bmin_ = bmin_.replace('cbm', str(cbm))
-        bmin_ = eval(bmin_)
+        bmin_ = safe_eval(bmin_)
     else:
         bmin_ = parameters.bmin
     if isinstance(parameters.bmax, str):
         bmax_ = parameters.bmax.lower()
         bmax_ = bmax_.replace('vbm', str(vbm))
         bmax_ = bmax_.replace('cbm', str(cbm))
-        bmax_ = eval(bmax_)
+        bmax_ = safe_eval(bmax_)
     else:
         bmax_ = parameters.bmax
 
@@ -255,7 +269,7 @@ def plot_ksen_weight(
         cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    ax.set_ylim(vbm - 0.5, cbm + 0.5)
+    # ax.set_ylim(vbm - 0.5, cbm + 0.5)
 
     # Labels and formatting
     ax.set_xlabel('Time [fs]', labelpad=5)

@@ -41,7 +41,7 @@ def run_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    structures: str,
+    structures: List[Dict],
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -128,7 +128,7 @@ def _run_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    structures: List[Atoms],
+    structures: List[Dict],
     frame_start: int,
     frame_end: int,
     nodes: int = 1,
@@ -185,7 +185,7 @@ def _run_scf_task(
     nprocs = nodes * ntasks_per_node
     nscf = parameters.nscf
 
-    selected_structures = structures[-nscf:]
+    selected_structures = [Atoms.fromdict(s) for s in structures[-nscf:]]
 
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)

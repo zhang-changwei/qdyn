@@ -10,6 +10,8 @@ import numpy as np
 import numpy.typing as npt
 from jobflow import job
 
+from typing import List
+
 from ..input import NAMDInputT
 
 @job
@@ -37,11 +39,11 @@ def run_namd(
     time_start = 2
     time_stop = nsw - parameters.namdtime - 1 if sh == 'FSSH' else nsw - 1
     assert time_stop > time_start, "Not enough time steps for the specified namdtime."
+    inibands = [b + 1000 for b in parameters.inibands]
     inicon = sample_initial_conditions(
         time_start,
         time_stop,
-        bmin=1001,
-        bmax=1000 + nbasis,
+        inibands=inibands,
         nsample=parameters.nsample,
     )
     np.savetxt('INICON', inicon, fmt='%d')
@@ -82,14 +84,13 @@ def run_namd(
 def sample_initial_conditions(
     time_start: int,
     time_stop: int,
-    bmin: int,
-    bmax: int,
+    inibands: List[int],
     nsample: int = 200,
 ) -> npt.NDArray[np.int32]:
     rng = np.random.default_rng()
     inicon = np.zeros([nsample, 2], dtype=np.int32)
     inicon[:, 0] = rng.integers(time_start, time_stop, size=nsample, endpoint=True)
-    inicon[:, 1] = rng.integers(bmin, bmax, size=nsample, endpoint=True)
+    inicon[:, 1] = rng.choice(inibands, size=nsample)
     return inicon
 
 def _parepare_namd_input(
@@ -128,9 +129,9 @@ def _parepare_namd_input(
     return inp
 
 def plot_fssh(energies: npt.NDArray, lhole: bool = False):
-    nbasis, nsw = energies.shape
+    nsw, nbasis = energies.shape
     f_shprop = glob('SHPROP.*')
-    data = np.array(np.loadtxt(f) for f in f_shprop)
+    data = np.array([np.loadtxt(f) for f in f_shprop])
     data = np.mean(data, axis=0)
 
     shprop = data[:, 2:] # shape (namdtime, nbasis)
@@ -175,7 +176,7 @@ def plot_fssh(energies: npt.NDArray, lhole: bool = False):
     # plot population evolution
     fig.clf()
     ax = plt.subplot()
-    for i in range(len(nbasis)):
+    for i in range(nbasis):
         ax.plot(time, shprop[:, i])
 
     ax.set_xlim(0, time[-1])

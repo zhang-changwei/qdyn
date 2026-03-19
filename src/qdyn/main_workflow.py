@@ -212,7 +212,7 @@ class MainWorkflow:
                         f"Cannot resume nvt."
                     )
             elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format)
+                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
             else:
                 raise ValidationError(
                     "No structure provided for the nvt step. \n"
@@ -277,7 +277,7 @@ class MainWorkflow:
                         f"Cannot resume nve."
                     )
             elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format)
+                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
             else:
                 raise ValidationError(
                     "No structure provided for NVE step. \n"
@@ -335,29 +335,19 @@ class MainWorkflow:
                 prev_step = 'nve'
                 next_step = 'pre_namd'
                 if prev_step in input.steps:
-                    # Get XDATCAR path from NVE output
                     structures = jobs[prev_step][0].output['strus']
-                    structures = [
-                        ase.Atoms.fromdict(structures[i])
-                        for i in range(len(structures))
-                    ]
                 elif first_step == 'scf' and resume:
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                         structures = self.get_job_output(prev_job_uuid)['strus']
-                        structures = [
-                            ase.Atoms.fromdict(structures[i])
-                            for i in range(len(structures))
-                        ]
                     except:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
                             f"Cannot resume scf."
                         )
                 elif stru:
-                    structures = ase.io.read(
-                        io.StringIO(stru), format=stru_format, index=':'
-                    )
+                    strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+                    structures = [s.todict() for s in strus_ase] # type: ignore
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -378,7 +368,7 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=self.config['pp_path'][software],
                     orb_path=self.config['orb_path'][software],
-                    structures=structures,
+                    structures=structures, # type: ignore
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,
@@ -545,7 +535,7 @@ class MainWorkflow:
         stru_format: str = 'vasp',
         resume: bool = False,
         prev_task_id: str = '',
-    ) -> Tuple[str, Dict[str, List[Job | Flow]]]:
+    ) -> Tuple[str, Dict[str, List[str]]]:
 
         jobs = self.main_workflow(
             input=input,
@@ -569,7 +559,7 @@ class MainWorkflow:
 
         self.task_ids.append(task_id)
 
-        return task_id, jobs
+        return task_id, job_ids
 
     def remove_task(self, task_id: str):
         """Remove a task from local tracking.

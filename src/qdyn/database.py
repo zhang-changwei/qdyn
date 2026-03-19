@@ -35,6 +35,12 @@ class QdynDB:
         if self._conn is None:
             raise RuntimeError("Database not initialized. Call init_db() first.")
         return self._conn
+    
+
+    def close_db(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
 
     def create_user(self, username: str, hashed_pw: str) -> None:

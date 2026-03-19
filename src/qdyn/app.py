@@ -43,8 +43,8 @@ async def lifespan(app: FastAPI):
         manager.config.setdefault("auth", {})["secret_key"] = generated_key
         with open(config_path, "r") as f:
             raw = f.read()
-            raw.replace('secret_key: ""', f'secret_key: "{generated_key}"')
-            raw.replace("secret_key: ''", f'secret_key: "{generated_key}"')
+            raw = raw.replace('secret_key: ""', f'secret_key: "{generated_key}"')
+            raw = raw.replace("secret_key: ''", f'secret_key: "{generated_key}"')
         with open(config_path, "w") as f:
             f.write(raw)
         logging.info("Auto-generated auth secret_key and saved to config.")
@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI):
     logging.info(f"Restored {restored} tasks from database.")
 
     yield
+
+    # cleanup
+    qdyndb.close_db()
 
 
 app = FastAPI(title="QDYN Job Manager", lifespan=lifespan)

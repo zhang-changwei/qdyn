@@ -68,8 +68,8 @@ def main(
         manager.config.setdefault("auth", {})["secret_key"] = generated_key
         with open(config_path, "r") as f:
             raw = f.read()
-            raw.replace('secret_key: ""', f'secret_key: "{generated_key}"')
-            raw.replace("secret_key: ''", f'secret_key: "{generated_key}"')
+            raw = raw.replace('secret_key: ""', f'secret_key: "{generated_key}"')
+            raw = raw.replace("secret_key: ''", f'secret_key: "{generated_key}"')
         with open(config_path, "w") as f:
             f.write(raw)
         logging.info("Auto-generated auth secret_key and saved to config.")
@@ -114,8 +114,11 @@ def main(
 
     else:
         raise NotImplementedError(f"Unknown task: {task}")
+    
+    # --- cleanup ---
+    qdyndb.close_db()
 
-if __name__ == "__main__":
+def main_cli():
     logging.basicConfig(
         stream=sys.stdout,
         level=logging.INFO,
@@ -143,7 +146,6 @@ if __name__ == "__main__":
     parser.add_argument("-O", "--output", nargs=3, metavar=('TASK_ID', 'JOB_UUID', 'OUTPUT_PATH'),
                         help=("Get job output\n"
                               "Usage: -O TASK_ID JOB_UUID path/to/output.yaml"))
-    parser.add_argument()
     args = parser.parse_args()
 
     if args.submit:
@@ -175,3 +177,6 @@ if __name__ == "__main__":
         
     else:
         logging.info("User request: no specific action, exiting.")
+
+if __name__ == "__main__":
+    main_cli()

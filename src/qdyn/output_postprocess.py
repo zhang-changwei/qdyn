@@ -208,44 +208,44 @@ def parallel_wht(
     import multiprocessing
 
     nproc = multiprocessing.cpu_count() if nproc is None else nproc
-    pool = multiprocessing.Pool(processes=nproc)
+    with multiprocessing.Pool(processes=nproc) as pool:
 
-    # Select weight extraction function based on software
-    match software:
-        case 'vasp':
-            weight_func = WeightFromPro
-            weight_file = 'PROCAR'
-        case _:
-            raise NotImplementedError
+        # Select weight extraction function based on software
+        match software:
+            case 'vasp':
+                weight_func = WeightFromPro
+                weight_file = 'PROCAR'
+            case _:
+                raise NotImplementedError
 
-    results = []
-    for rd in runDirs:
-        res = pool.apply_async(
-            weight_func,
-            (
-                rd + '/' + weight_file,
-                whichAtoms,
-                None,
-            ),
-        )
-        results.append(res)
+        results = []
+        for rd in runDirs:
+            res = pool.apply_async(
+                weight_func,
+                (
+                    rd + '/' + weight_file,
+                    whichAtoms,
+                    None,
+                ),
+            )
+            results.append(res)
 
-    enr = []
-    wht = []
-    if whichAtoms is None:
-        for ii in range(len(results)):
-            tmp_enr, tmp_wht = results[ii].get()
-            enr.append(tmp_enr)
-            wht.append(tmp_wht)
-        return np.array(enr), np.array(wht)
-    else:
-        totwht = []
-        for ii in range(len(results)):
-            tmp_enr, tmp_wht, tmp_totwht = results[ii].get()
-            enr.append(tmp_enr)
-            wht.append(tmp_wht)
-            totwht.append(tmp_totwht)
-        return np.array(enr), np.array(wht), np.array(totwht)
+        enr = []
+        wht = []
+        if whichAtoms is None:
+            for ii in range(len(results)):
+                tmp_enr, tmp_wht = results[ii].get()
+                enr.append(tmp_enr)
+                wht.append(tmp_wht)
+            return np.array(enr), np.array(wht)
+        else:
+            totwht = []
+            for ii in range(len(results)):
+                tmp_enr, tmp_wht, tmp_totwht = results[ii].get()
+                enr.append(tmp_enr)
+                wht.append(tmp_wht)
+                totwht.append(tmp_totwht)
+            return np.array(enr), np.array(wht), np.array(totwht)
 
 
 def extract_wht_with_cache(

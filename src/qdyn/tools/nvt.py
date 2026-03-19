@@ -32,7 +32,7 @@ def run_nvt(
     parameters: NVTInputT,
     pp_path: str,
     orb_path: str,
-    structure: Atoms,
+    structure: Dict,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -89,7 +89,7 @@ def run_nvt(
 
     software_lower = software.lower()
 
-    current_structure = structure
+    current_structure = Atoms.fromdict(structure)
     nprocs = nodes * ntasks_per_node
     images = []
     md_files = []
@@ -283,7 +283,7 @@ def _process_nvt_output(
         case 'vasp':
             md_data = extract_md_data_from_oszicar()
             # Read CONTCAR as new structure for next iteration
-            current_structure = ase.io.read('CONTCAR', format='vasp')
+            current_structure = ase.io.read('CONTCAR', format='vasp').todict() # type: ignore
         case _:
             raise NotImplementedError(
                 f"MD data extraction for {software} is not implemented yet."

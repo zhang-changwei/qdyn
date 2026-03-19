@@ -27,23 +27,6 @@ class SchedulerConfigT(BaseModel):
     pass
 
 
-class BasicCalInputT(BaseModel):
-    """Basic calculation input parameters."""
-
-    # Kpoints
-    kspacing: float = Field()
-
-    # Common parameters
-    encut: float = 500.0
-
-    # Parallelization
-    ncore: int = 8
-    kpar: int = 2
-
-    # Additional parameters string (KEY=VALUE format)
-    parameters: str = ''
-
-
 class NAMDInputT(BaseModel):
     nodes: Optional[int] = None
 

@@ -17,6 +17,7 @@ machine:
 module: 
   vasp: ['compiler/intel/2021.3.0', 'mpi/intelmpi/2021.3.0']
   python: []
+  namd: []
 
 export: 
   vasp:
@@ -24,6 +25,7 @@ export:
     LD_LIBRARY_PATH: 'balabala'
   python:
     PATH: 'balabala'
+  namd: {}
 
 
 pp_path:
@@ -44,7 +46,13 @@ nve:
     ntasks_per_node: 64
     cpus_per_task: 1
 
+scf:
+  vasp:
+    nodes: 1
+    ntasks_per_node: 64
+    cpus_per_task: 1
+
+
 auth:
-  single_user_mode: false         # set true to disable auth (no login, no DB)
   secret_key: ""                  # leave empty to auto-generate on first start
   token_expire_hours: 24

@@ -25,7 +25,7 @@ def run_nve(
     parameters: NVEInputT,
     pp_path: str,
     orb_path: str,
-    structure: Atoms,
+    structure: Dict,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -82,7 +82,7 @@ def run_nve(
     # Prepare input files
     _prepare_nve_input(
         software=software_lower,
-        structure=structure,
+        structure=Atoms.fromdict(structure),
         parameters=parameters,
         pp_path=pp_path,
         orb_path=orb_path,

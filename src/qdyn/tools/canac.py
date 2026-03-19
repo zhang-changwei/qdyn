@@ -74,7 +74,7 @@ def extract_eigvals_and_nacs(
         tdolaps = data['tdolaps']
         eigenvalues = data['eigenvalues']
     else:
-        check_list = np.zeros(nstep, dtype=np.bool)
+        check_list = np.zeros(nstep, dtype=bool)
         tdolaps = np.zeros((nstep, nbasis, nbasis), dtype=olapT)
         eigenvalues = np.zeros((nstep, nbasis), dtype=np.float64)
 
@@ -247,7 +247,7 @@ def calc_tdolap_wrapper(
 
     # read coefficients
     normalize = True if (software == 'vasp' and not is_alle) else False
-    if software in ['vasp', 'sista']:
+    if software in ['vasp', 'siesta']:
         cic_t = np.stack(
             [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
             for band_idx in range(bmin, bmax+1)],
