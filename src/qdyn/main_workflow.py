@@ -317,7 +317,8 @@ class MainWorkflow:
             jobs['nvt'] = [job_nvt]
 
             # update flag
-            is_last_step = True if next_step not in input.steps else False
+            is_last_step = (True if next_step not in input.steps and 'nvt' in input.steps
+                            else False)
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
@@ -384,7 +385,8 @@ class MainWorkflow:
             jobs['nve'] = [job_nve]
 
             # update flag
-            is_last_step = True if next_step not in input.steps else False
+            is_last_step = (True if next_step not in input.steps and 'nve' in input.steps
+                            else False)
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
@@ -457,7 +459,8 @@ class MainWorkflow:
                 jobs['scf'] = jobs_scf
 
                 # update flag
-                is_last_step = True if next_step not in input.steps else False
+                is_last_step = (True if next_step not in input.steps and 'scf' in input.steps
+                                else False)
                 if is_last_step:
                     flag = f'gen_input_{next_step}'
 
@@ -516,7 +519,8 @@ class MainWorkflow:
             jobs['pre_namd'] = [job_pre_namd]
 
             # update flag
-            is_last_step = True if next_step not in input.steps else False
+            is_last_step = (True if next_step not in input.steps and 'pre_namd' in input.steps
+                            else False)
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
@@ -589,7 +593,8 @@ class MainWorkflow:
             jobs['namd'] = [job_namd]
 
             # update flag
-            is_last_step = True if next_step not in input.steps else False
+            is_last_step = (True if next_step not in input.steps and 'namd' in input.steps
+                            else False)
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
