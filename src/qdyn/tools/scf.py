@@ -58,7 +58,7 @@ def run_scf(
     software : str
         Software name ('vasp', etc.).
     parameters : SCFInputT
-        SCF calculation parameters including nscf, md_step, batch_size.
+        SCF calculation parameters including scf_step, md_step, batch_size.
     pp_path : str
         Path to pseudopotential files.
     orb_path : str
@@ -85,12 +85,10 @@ def run_scf(
 
     batch_size = parameters.batch_size
     md_step = parameters.md_step
-    nscf = parameters.nscf
+    scf_step = parameters.scf_step
 
-    # Calculate total frames to process
-    # Select the last nscf frames if nscf is specified
-    if nscf is not None and nscf > 0:
-        total_frames = min(nscf, md_step)
+    if scf_step is not None and scf_step > 0:
+        total_frames = min(scf_step, md_step)
     else:
         total_frames = md_step
 

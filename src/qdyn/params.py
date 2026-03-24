@@ -100,4 +100,28 @@ ipt_files = {
 stru_files = {
     'vasp': 'POSCAR',
 }
+
+# PBE
+potcar_default = {
+    'H': 'H',
+    'He': 'He',
+    'Li': 'Li_sv',
+    'Be': 'Be',
+    'B': 'B',
+    'C': 'C',
+    'N': 'N',
+    'O': 'O',
+    'F': 'F',
+    'Ne': 'Ne',
+    'Na': 'Na_pv',
+    'Mg': 'Mg',
+    'Al': 'Al',
+    'Si': 'Si',
+    'P': 'P',
+    'S': 'S',
+    'Cl': 'Cl',
+    'Ar': 'Ar',
+    'K': 'K_sv',
+    'Ca': 'Ca_sv',
+}
 __all__ = ['params_default']
