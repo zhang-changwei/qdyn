@@ -18,6 +18,7 @@ dependencies = [
     "pymatgen>=2025.10.7",
     "pydantic>=2.12.5",
     "pyvaspwfc",
+    "natsort>=8.4.0",
 ]
 
 [project.optional-dependencies]

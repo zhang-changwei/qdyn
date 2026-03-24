@@ -21,36 +21,11 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
-
-
-def _lazy_import_run_nvt():
-    from .tools.nvt import run_nvt
-
-    return run_nvt
-
-
-def _lazy_import_run_nve():
-    from .tools.nve import run_nve
-
-    return run_nve
-
-
-def _lazy_import_run_scf():
-    from .tools.scf import run_scf
-
-    return run_scf
-
-
-def _lazy_import_run_pre_namd():
-    from .tools.prepare_namd import run_pre_namd
-
-    return run_pre_namd
-
-
-def _lazy_import_run_namd():
-    from .tools.namd import run_namd
-
-    return run_namd
+from .tools.nvt import run_nvt
+from .tools.nve import run_nve
+from .tools.scf import run_scf
+from .tools.prepare_namd import run_pre_namd
+from .tools.namd import run_namd
 
 
 class ValidationError(Exception):
@@ -80,7 +55,7 @@ class QueryError(Exception):
 class MainWorkflow:
 
     def __init__(self, config_path: Optional[str] = None):
-        self.config = self._load_config(config_path)
+        self.config, self.jf_config = self._load_config(config_path)
         self.task_ids: List[str] = []
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
@@ -96,7 +71,8 @@ class MainWorkflow:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_config(config_path: Optional[str]) -> Dict:
+    def _load_config(config_path: Optional[str]) -> Tuple[Dict, Dict]:
+
         path = config_path or os.environ.get('QDYN_CONFIG') or 'config/qdyn.yaml'
         path = os.path.abspath(path)
         if not os.path.exists(path):
@@ -107,7 +83,18 @@ class MainWorkflow:
         with open(path) as f:
             cfg = yaml.safe_load(f)
         logging.info(f"Loaded config from {path}.")
-        return cfg
+
+        path = cfg.get('basic', {}).get('jf_project_path', '')
+        if path and os.path.exists(path):
+            with open(path) as f:
+                jf_cfg = yaml.safe_load(f)
+            logging.info(f"Found jobflow-remote project config at {path}.")
+        else:
+            raise ConfigError(
+                f"Jobflow-remote project config not found: {path}\n"
+                f"Set basic.jf_project_path in qdyn.yaml to a valid path."
+            )
+        return cfg, jf_cfg
 
     def _get_config(self, *keys: str):
         """Traverse self.config by key path, raising ConfigError if any key is missing.
@@ -137,9 +124,9 @@ class MainWorkflow:
 
     def _ensure_job_controller(self) -> JobController:
         """Initialize the jobflow-remote controller on demand."""
-        self._configure_jobflow_remote()
         if self.jc is None:
             try:
+                self._configure_jobflow_remote()
                 self.jc = JobController.from_project_name()
             except Exception as exc:
                 raise ConfigError(
@@ -213,11 +200,11 @@ class MainWorkflow:
         if stru:
             try:
                 ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-            except:
+            except Exception as exc:
                 raise ValidationError(
                     f"Provided structure string could not be parsed "
                     f"by ASE with format '{stru_format}'."
-                )
+                ) from exc
 
     # ------------------------------------------------------------------
     # Core logic
@@ -256,7 +243,6 @@ class MainWorkflow:
 
         # step 1: NVT
         if 'nvt' in input.steps or flag == 'gen_input_nvt':
-            run_nvt = _lazy_import_run_nvt()
             prev_step = ''
             next_step = 'nve'
             if prev_step in input.steps:
@@ -265,11 +251,11 @@ class MainWorkflow:
                 try:
                     prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                     structure = self.get_job_output(prev_job_uuid)['stru']
-                except:
+                except Exception as exc:
                     raise ResumeError(
                         f"Previous job for step '{prev_step}' not found or has no output. "
                         f"Cannot resume nvt."
-                    )
+                    ) from exc
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
             else:
@@ -302,12 +288,13 @@ class MainWorkflow:
             job_nvt = set_run_config(
                 job_nvt,
                 exec_config=ExecutionConfig(
-                    modules=self.config['module'][software],
+                    modules=self.config['modules'][software],
                     export=self.config['export'][software],
-                    pre_run=None,
+                    pre_run=self.config['pre_run'][software],
                     post_run=None,
                 ),
                 resources={
+                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
@@ -324,7 +311,6 @@ class MainWorkflow:
 
         # step 2: NVE
         if 'nve' in input.steps or flag == 'gen_input_nve':
-            run_nve = _lazy_import_run_nve()
             prev_step = 'nvt'
             next_step = 'scf'
             if prev_step in input.steps:
@@ -333,11 +319,11 @@ class MainWorkflow:
                 try:
                     prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                     structure = self.get_job_output(prev_job_uuid)['stru']
-                except:
+                except Exception as exc:
                     raise ResumeError(
                         f"Previous job for step '{prev_step}' not found or has no output. "
                         f"Cannot resume nve."
-                    )
+                    ) from exc
             elif stru:
                 structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
             else:
@@ -370,12 +356,13 @@ class MainWorkflow:
             job_nve = set_run_config(
                 job_nve,
                 exec_config=ExecutionConfig(
-                    modules=self.config['module'][software],
+                    modules=self.config['modules'][software],
                     export=self.config['export'][software],
-                    pre_run=None,
+                    pre_run=self.config['pre_run'][software],
                     post_run=None,
                 ),
                 resources={
+                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
@@ -392,7 +379,6 @@ class MainWorkflow:
 
         # step 3: SCF
         if 'scf' in input.steps or flag == 'gen_input_scf':
-            run_scf = _lazy_import_run_scf()
             if software == 'abacus':
                 # no need for scf calc if using abacus
                 pass
@@ -405,11 +391,11 @@ class MainWorkflow:
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                         structures = self.get_job_output(prev_job_uuid)['strus']
-                    except:
+                    except Exception as exc:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
                             f"Cannot resume scf."
-                        )
+                        ) from exc
                 elif stru:
                     strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
                     structures = [s.todict() for s in strus_ase] # type: ignore
@@ -444,12 +430,13 @@ class MainWorkflow:
                     jobs_scf[i] = set_run_config(
                         jobs_scf[i],
                         exec_config=ExecutionConfig(
-                            modules=self.config['module'][software],
+                            modules=self.config['modules'][software],
                             export=self.config['export'][software],
-                            pre_run=None,
+                            pre_run=self.config['pre_run'][software],
                             post_run=None,
                         ),
                         resources={
+                            **self.jf_config['workers']['local_slurm'].get('resources', {}),
                             'partition': self.config['machine']['partition'],
                             'nodes': nodes,
                             'ntasks_per_node': ntasks_per_node,
@@ -466,7 +453,6 @@ class MainWorkflow:
 
         # step 4: PRE_NAMD
         if 'pre_namd' in input.steps or flag == 'gen_input_pre_namd':
-            run_pre_namd = _lazy_import_run_pre_namd()
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
@@ -480,11 +466,11 @@ class MainWorkflow:
                     for prev_job_uuid in prev_jobs:
                         output = self.get_job_output(prev_job_uuid)
                         run_dirs.extend(output['run_dir'])
-                except:
+                except Exception as exc:
                     raise ResumeError(
                         f"Previous job(s) for step '{prev_step}' not found or has no output. "
                         f"Cannot resume pre_namd."
-                    )
+                    ) from exc
             else:
                 raise ValidationError(
                     f"PRE_NAMD step requires '{prev_step}' output. Include '{prev_step}' "
@@ -504,12 +490,16 @@ class MainWorkflow:
             job_pre_namd = set_run_config(
                 job_pre_namd,
                 exec_config=ExecutionConfig(
-                    modules=self.config['module']['python'],
-                    export={**self.config['export']['python'], 'OMP_NUM_THREADS': '4'},
-                    pre_run=None,
+                    modules=self.config['modules']['python'],
+                    export={
+                        **self.config['export']['python'], 
+                        'OMP_NUM_THREADS': '4'
+                    },
+                    pre_run=self.config['pre_run']['python'],
                     post_run=None,
                 ),
                 resources={
+                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
                     'nodes': 1,
                     'ntasks_per_node': 1,
@@ -526,7 +516,6 @@ class MainWorkflow:
 
         # step 4: NAMD
         if 'namd' in input.steps or flag == 'gen_input_namd':
-            run_namd = _lazy_import_run_namd()
             prev_step = 'pre_namd'
             next_step = ''
             if prev_step in input.steps:
@@ -535,11 +524,11 @@ class MainWorkflow:
                 try:
                     prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                     prev_output = self.get_job_output(prev_job_uuid)
-                except:
+                except Exception as exc:
                     raise ResumeError(
                         f"Previous job for step '{prev_step}' not found or has no output. "
                         f"Cannot resume namd."
-                    )
+                    ) from exc
             else:
                 raise ValidationError(
                     "NAMD step requires PRE_NAMD output. Include 'pre_namd' in steps, "
@@ -575,15 +564,16 @@ class MainWorkflow:
             job_namd = set_run_config(
                 job_namd,
                 exec_config=ExecutionConfig(
-                    modules=self.config['module']['namd'],
+                    modules=self.config['modules']['namd'],
                     export={
                         **self.config['export']['namd'],
                         'OMP_NUM_THREADS': str(cpus_per_task),
                     },
-                    pre_run=None,
+                    pre_run=self.config['pre_run']['namd'],
                     post_run=None,
                 ),
                 resources={
+                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,

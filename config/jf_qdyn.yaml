@@ -1,0 +1,29 @@
+name: jf_qdyn
+workers:
+  local_slurm: # Don't change the name of the worker
+    type: local
+    scheduler_type: slurm
+    work_dir: /data/home/cwzhang/src/qdyn/runs
+    resources:
+      partition: chu
+      time: 48:00:00
+    max_jobs: 10
+queue:
+  store:
+    type: MongoStore
+    host: 127.0.0.1
+    port: 60529 # Set to your MongoDB port
+    database: jf_qdyn
+    collection_name: jobs
+  flows_collection: flows
+  auxiliary_collection: jf_auxiliary
+jobstore:
+  docs_store:
+    type: JSONStore
+    paths: /data/home/cwzhang/src/qdyn/data/docs.json
+    read_only: false
+runner:
+  delay_checkout: 5
+  delay_check_run_status: 5
+  delay_advance_status: 5
+  delay_update_batch: 5

@@ -4,46 +4,51 @@
 #   QDYN_CONFIG=/path/to/qdyn.yaml python main.py --server
 
 basic:
-  jf_project_path: ""
-  jf_project_name: ""
+  jf_project_path: "config/jf_qdyn.yaml"
+  jf_project_name: "jf_qdyn"
   user_db_path: "data/qdyn_users.db"
+  mongo_dir: "mongo/"
 
 machine:
   # SLURM partition (queue) to submit jobs to
-  partition: queue1-1
+  partition: chu
 
   # CPU cores per node
   cpus_per_node: 64
 
-module: 
-  vasp: ['compiler/intel/2021.3.0', 'mpi/intelmpi/2021.3.0']
+# Execution Configs
+modules: 
+  vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
   python: []
   namd: []
 
 export: 
-  vasp:
-    PATH: 'balabala'
-    LD_LIBRARY_PATH: 'balabala'
-  python:
-    PATH: 'balabala'
+  vasp: {}
+  python: {}
   namd: {}
 
+pre_run:
+  vasp: 'source ~/src/qdyn/.venv/bin/activate'
+  python: 'source ~/src/qdyn/.venv/bin/activate'
+  namd: 'source ~/src/qdyn/.venv/bin/activate'
 
+# Resource Files
 pp_path:
-  vasp: ''
+  vasp: '~/src/vasp-pp'
 
 orb_path:
   vasp: ''
-  
+
+# Slurm Job Resources
 nvt:
   vasp:
-    nodes: 2
+    nodes: 1
     ntasks_per_node: 64
     cpus_per_task: 1
 
 nve:
   vasp:
-    nodes: 2
+    nodes: 1
     ntasks_per_node: 64
     cpus_per_task: 1
 
