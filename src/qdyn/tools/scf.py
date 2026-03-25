@@ -445,29 +445,20 @@ def _validate_scf_output(software: str):
             if not os.path.isfile('OUTCAR'):
                 raise RuntimeError("SCF calculation failed: OUTCAR not found.")
 
-            # Read only the tail of OUTCAR for efficiency
-            file_size = os.path.getsize('OUTCAR')
-            tail_size = min(8192, file_size)
             with open('OUTCAR', 'rb') as f:
-                f.seek(-tail_size, os.SEEK_END)
-                content = f.read().decode('utf-8', errors='ignore')
-                # Skip partial first line if we didn't read the whole file
-                if file_size > tail_size:
-                    idx = content.find('\n')
-                    if idx != -1:
-                        content = content[idx + 1 :]
+                content = f.read()
 
             # Check completion marker
-            if 'Total CPU' not in content:
+            if b'Total CPU' not in content:
                 raise RuntimeError(
                     "SCF calculation failed: OUTCAR does not contain 'Total CPU' marker. "
                     "The calculation may not have completed successfully."
                 )
 
             # Check SCF convergence
-            if 'reached required accuracy' not in content:
+            if b'reached required accuracy' not in content:
                 # Look for common convergence failure markers
-                if 'WARNING in EDDAV' in content or 'ZBRENT: fatal error' in content:
+                if b'WARNING in EDDAV' in content or b'ZBRENT: fatal error' in content:
                     raise RuntimeError(
                         "SCF calculation failed: SCF did not converge. "
                         "Check OUTCAR for convergence errors."

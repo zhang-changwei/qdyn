@@ -79,7 +79,7 @@ def run_pre_namd(
 
     # Sort directories by scf index to ensure chronological order
     # (different batches may have different run_dir UUIDs)
-    all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('_')[-1]))
+    all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('scf_')[-1]))
 
     vbm, cbm = extract_band_edges(
         software=software_lower,

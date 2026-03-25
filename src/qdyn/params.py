@@ -1,8 +1,8 @@
 _incar = {
     'ISTART': 0,
     'ISPIN': 1,
-    'LREAL': False,
-    'PREC': 'Accurate',
+    'LREAL': 'Auto',
+    'PREC': 'Normal',
     'LWAVE': False,
     'LCHARG': False,
     'NWRITE': 1,

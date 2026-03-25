@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from typing import Dict, Tuple, Optional
 
 import matplotlib
@@ -182,7 +183,7 @@ def plot_md_results(
 
 
 def parallel_wht(
-    runDirs: list,
+    runDirs: list[str],
     whichAtoms: Optional[np.ndarray],
     software: str,
     nproc: Optional[int] = None,
@@ -302,8 +303,8 @@ def extract_wht_with_cache(
     # Check for cached results
     if (
         not force_recalculate
-        and os.path.isfile(cache_file_wht)
-        and os.path.isfile(cache_file_enr)
+        and os.path.isfile(os.path.expanduser(cache_file_wht))
+        and os.path.isfile(os.path.expanduser(cache_file_enr))
     ):
         Wht = np.load(cache_file_wht)
         Enr = np.load(cache_file_enr)
@@ -392,7 +393,7 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
         )
 
     nelm = 60  # default value in vasp
-    if os.path.isfile('INCAR'):
+    try:
         with open('INCAR', 'r') as f:
             for line in f:
                 if 'NELM' in line.upper():
@@ -400,9 +401,14 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
                     if len(parts) >= 3:
                         try:
                             nelm = float(parts[2])
+                            break
                         except ValueError:
-                            pass
-                    break
+                            logging.warning(
+                                'Effective NELM value not found in INCAR, use default value  in vasp NELM=60.'
+                            )
+    except OSError as e:
+        logging.warning(f'Failed to open INCAR: {e}, using default NELM=60')
+
     steps = []
     temperatures = []
     total_energies = []
@@ -413,8 +419,7 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
     with open(oszicar_path, 'r') as f:
         lines = f.readlines()
 
-    for i in range(len(lines)):
-        line = lines[i]
+    for i, line in enumerate(lines):
         if 'T=' in line:
             values = line.split()
             try:
@@ -436,8 +441,10 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
                 potential_energies.append(E_pot)
                 kinetic_energies.append(E_kin)
                 converged.append(step_converged)
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError) as e:
+                logging.warning(
+                    f'Skipping line {i+1} due to parsing error: {e}\n{line.strip()}'
+                )
 
     if len(steps) == 0:
         raise ValueError("No valid MD steps found in OSZICAR file.")

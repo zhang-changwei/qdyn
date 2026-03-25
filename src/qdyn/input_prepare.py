@@ -2,7 +2,7 @@ import io
 import os
 import glob
 import shutil
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Tuple, Optional, Union
 
 import ase.io
 import numpy as np
@@ -43,12 +43,10 @@ def prepare_vasp_inputs(
     ase.io.write('POSCAR', structure, format='vasp')
 
     # Write KPOINTS
-    if kspacing is not None:
-        prepare_kpoints(structure, kspacing)
+    prepare_kpoints(structure, kspacing)
 
     # Write POTCAR
-    if pp_path:
-        prepare_potcar(structure, pp_path)
+    prepare_potcar(structure, pp_path)
 
     # Write INCAR
     prepare_incar(incar_dict=incar_dict, incar_params=incar_params)
@@ -81,8 +79,22 @@ def prepare_kpoints(structure: Atoms, kspacing: float):
         f.write("0.0 0.0 0.0\n")
 
 
-def symmetric_kpoints(structure: Atoms, kpoints: list[float]) -> list[int]:
-    return [int(k) + 1 for k in kpoints]
+def symmetric_kpoints(structure: Atoms, kpoints: list[float]) -> List[int]:
+    kpoints_rev = [int(k + 0.5) for k in kpoints]
+    mask = has_vacuum(structure)
+    for i in range(3):
+        if mask[i]:
+            kpoints_rev[i] = 1
+    return kpoints_rev
+
+
+def has_vacuum(stru: Atoms, threshold: float = 10.0) -> Tuple[bool, bool, bool]:
+    frac = stru.get_scaled_positions()
+    frac_min = np.min(frac, axis=0)
+    frac_max = np.max(frac, axis=0)
+    cell_length = stru.cell.lengths()
+    thickness = cell_length * (1 - (frac_max - frac_min))
+    return thickness > threshold
 
 
 def prepare_potcar(structure: Atoms, pp_path: str):
@@ -96,38 +108,36 @@ def prepare_potcar(structure: Atoms, pp_path: str):
         Path to VASP pseudopotential directory.
     """
     # Get unique elements in order of appearance
+    pp_path = os.path.expanduser(pp_path)
     symbols = structure.get_chemical_symbols()
     unique_symbols = []
     for s in symbols:
         if s not in unique_symbols:
             unique_symbols.append(s)
 
-    if os.path.isdir(pp_path):
-        with open('POTCAR', 'w') as outf:
-            for symbol in unique_symbols:
-                # Try common POTCAR naming conventions
-                try:
-                    potcars = glob.glob(os.path.join(pp_path, "*POTCAR*"))
+    with open('POTCAR', 'w') as outf:
+        for symbol in unique_symbols:
+            # Try common POTCAR naming conventions
+            try:
+                potcars = glob.glob(os.path.join(pp_path, "*POTCAR*"))
 
-                    potcar_file = None
-                    for candidate in potcars:
-                        if symbol in candidate:
-                            potcar_file = candidate
-                            break
-                    if potcar_file is None:
-                        raise FileNotFoundError
-                except:
-                    potcar_file = os.path.join(
-                        pp_path, potcar_default[symbol], 'POTCAR'
-                    )
+                potcar_file = None
+                for candidate in potcars:
+                    if symbol in candidate:
+                        potcar_file = candidate
+                        break
+                if potcar_file is None:
+                    raise FileNotFoundError
+            except Exception:
+                potcar_file = os.path.join(pp_path, potcar_default[symbol], 'POTCAR')
 
-                if not os.path.isfile(potcar_file):
-                    raise FileNotFoundError(
-                        f"POTCAR for element {symbol} not found in {pp_path}. "
-                    )
+            if not os.path.isfile(potcar_file):
+                raise FileNotFoundError(
+                    f"POTCAR for element {symbol} not found in {pp_path}. "
+                )
 
-                with open(potcar_file, 'r') as inf:
-                    shutil.copyfileobj(inf, outf)
+            with open(potcar_file, 'r') as inf:
+                shutil.copyfileobj(inf, outf)
 
 
 def prepare_incar(
