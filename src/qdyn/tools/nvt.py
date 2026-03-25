@@ -1,5 +1,6 @@
 import os
 import shutil
+import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
@@ -163,19 +164,34 @@ def run_nvt(
 
             # Backup current round files
             backup_dir = f"nvt_attempt_{attempt}"
+            md_filename = f'md_attempt_{attempt}.dat'
+            image_filename = f'nvt_results_attempt_{attempt}.png'
             os.makedirs(backup_dir, exist_ok=True)
             for f in backup_files[software_lower]:
                 if os.path.isfile(f):
                     shutil.copy(f, os.path.join(backup_dir, f))
-            if os.path.isfile(f'nvt_results_attempt_{attempt}.png'):
-                shutil.move(
-                    f'nvt_results_attempt_{attempt}.png',
-                    os.path.join(backup_dir, f'nvt_results_attempt_{attempt}.png'),
+                else:
+                    logging.warning(
+                        f'File {f} not found, backup files may be uncomplete.'
+                    )
+            if os.path.isfile(md_filename):
+                md_dstpath = os.path.join(backup_dir, md_filename)
+                shutil.move(md_filename, md_dstpath)
+                md_files[attempt] = os.path.abspath(md_dstpath)
+            else:
+                logging.warning(
+                    f'File {md_filename} not found, backup files may be uncomplete.'
                 )
-            if os.path.isfile(f'md_attempt_{attempt}.dat'):
+            if os.path.isfile(image_filename):
+                image_dstpath = os.path.join(backup_dir, image_filename)
                 shutil.move(
-                    f'md_attempt_{attempt}.dat',
-                    os.path.join(backup_dir, f'md_attempt_{attempt}.dat'),
+                    image_filename,
+                    image_dstpath,
+                )
+                images[attempt] = os.path.abspath(image_dstpath)
+            else:
+                logging.warning(
+                    f'File {image_filename} not found, backup files may be uncomplete.'
                 )
 
     return {

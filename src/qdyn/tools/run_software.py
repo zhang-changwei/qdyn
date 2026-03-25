@@ -42,8 +42,24 @@ def run_vasp(nprocs: int, is_alle: Optional[bool] = False) -> None:
         # Use vasp_gam for single K-point, otherwise vasp_std
         if kx == 1 and ky == 1 and kz == 1:
             vasp_exe = 'vasp_gam'
+            with open('INCAR', 'r') as f:
+                lines = f.readlines()
+            with open('INCAR', 'w') as incar:
+                for line in lines:
+                    if line.strip().startswith('KPAR'):
+                        incar.write('KPAR = 1\n')
+                    else:
+                        incar.write(line)
         else:
             vasp_exe = 'vasp_std'
+            with open('INCAR', 'r') as f:
+                lines = f.readlines()
+            with open('INCAR', 'w') as incar:
+                for line in lines:
+                    if line.strip().startswith('KPAR'):
+                        incar.write('KPAR = 2\n')
+                    else:
+                        incar.write(line)
 
     # Launch VASP
     subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
