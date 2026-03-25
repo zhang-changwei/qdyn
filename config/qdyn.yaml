@@ -8,6 +8,7 @@ basic:
   jf_project_name: "jf_qdyn"
   user_db_path: "data/qdyn_users.db"
   mongo_dir: "mongo/"
+  port: 8000
 
 machine:
   # SLURM partition (queue) to submit jobs to
@@ -20,12 +21,16 @@ machine:
 modules: 
   vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
   python: []
-  namd: []
+  namd: ['compiler/oneAPI/2023.2.0']
 
 export: 
-  vasp: {}
-  python: {}
-  namd: {}
+  vasp:
+    PYTHONPATH: '~/src/qdyn/src:$PYTHONPATH'
+  python:
+    PYTHONPATH: '~/src/qdyn/src:$PYTHONPATH'
+  namd: 
+    PYTHONPATH: '~/src/qdyn/src:$PYTHONPATH'
+    PATH: '~/src/Hefei-NAMD-DEV-2025.01:$PATH'
 
 pre_run:
   vasp: 'source ~/src/qdyn/.venv/bin/activate'

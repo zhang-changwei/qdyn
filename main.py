@@ -131,13 +131,23 @@ def serve(config_path):
     import sys
     import uvicorn
     from qdyn.app import app
-    app.state.config_path = config_path
+
     logging.basicConfig(
         stream=sys.stdout,
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+
+    config_path = (
+        config_path or os.environ.get("QDYN_CONFIG") or "config/qdyn.yaml"
+    )
+    assert Path(config_path).is_file(), f"Config file not found: {config_path}"
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    port = config['basic'].get('port', 8000)
+    app.state.config_path = config_path
+
+    uvicorn.run(app, host='0.0.0.0', port=port)
 
 
 if __name__ == '__main__':

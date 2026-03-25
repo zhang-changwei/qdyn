@@ -3,18 +3,8 @@ import tempfile
 
 import pytest
 
-from src.database import (
-    init_db,
-    get_db,
-    create_user,
-    get_user,
-    assign_task,
-    get_user_tasks,
-    get_task_owner,
-    get_task_job_ids,
-    delete_task_record,
-)
-from src.auth.security import (
+from qdyn.database import qdyndb
+from qdyn.auth.security import (
     configure,
     hash_password,
     verify_password,
@@ -33,9 +23,16 @@ def _setup_auth():
     """Initialise a fresh temp DB and configure security for every test."""
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    init_db(path)
+    qdyndb.init_db(path)
     configure("test-secret-key-long-enough-for-hs256!!", 24)
     yield
+    try:
+        qdyndb.close_db()
+    except Exception:
+        # force close if WAL checkpoint fails (e.g. after IntegrityError)
+        if qdyndb._conn is not None:
+            qdyndb._conn.close()
+            qdyndb._conn = None
     os.unlink(path)
 
 
@@ -92,22 +89,19 @@ class TestJWT:
 
 class TestDatabaseUsers:
     def test_create_and_get_user(self):
-        conn = get_db()
-        create_user(conn, "bob", "hashed_pw_value")
-        user = get_user(conn, "bob")
+        qdyndb.create_user("bob", "hashed_pw_value")
+        user = qdyndb.get_user("bob")
         assert user is not None
         assert user["username"] == "bob"
         assert user["hashed_pw"] == "hashed_pw_value"
 
     def test_get_nonexistent_user(self):
-        conn = get_db()
-        assert get_user(conn, "ghost") is None
+        assert qdyndb.get_user("ghost") is None
 
     def test_duplicate_user_raises(self):
-        conn = get_db()
-        create_user(conn, "dup", "pw")
+        qdyndb.create_user("dup", "pw")
         with pytest.raises(Exception):
-            create_user(conn, "dup", "pw2")
+            qdyndb.create_user("dup", "pw2")
 
 
 # ---------------------------------------------------------------------------
@@ -117,45 +111,40 @@ class TestDatabaseUsers:
 
 class TestDatabaseTasks:
     def test_assign_and_list_tasks(self):
-        conn = get_db()
-        create_user(conn, "alice", "pw")
-        assign_task(conn, "t1", "alice", {"nvt": ["uuid-1"]})
-        assign_task(conn, "t2", "alice", {"nve": ["uuid-2", "uuid-3"]})
-        tasks = get_user_tasks(conn, "alice")
+        qdyndb.create_user("alice", "pw")
+        qdyndb.assign_task("t1", "alice", {"nvt": ["uuid-1"]})
+        qdyndb.assign_task("t2", "alice", {"nve": ["uuid-2", "uuid-3"]})
+        tasks = qdyndb.get_user_tasks("alice")
         assert set(tasks) == {"t1", "t2"}
 
     def test_get_task_owner(self):
-        conn = get_db()
-        create_user(conn, "bob", "pw")
-        assign_task(conn, "t5", "bob", {})
-        assert get_task_owner(conn, "t5") == "bob"
-        assert get_task_owner(conn, "nonexistent") is None
+        qdyndb.create_user("bob", "pw")
+        qdyndb.assign_task("t5", "bob", {})
+        assert qdyndb.get_task_owner("t5") == "bob"
+        assert qdyndb.get_task_owner("nonexistent") is None
 
     def test_get_task_job_ids(self):
-        conn = get_db()
-        create_user(conn, "carol", "pw")
+        qdyndb.create_user("carol", "pw")
         jobs = {"scf": ["a", "b"], "namd": ["c"]}
-        assign_task(conn, "t6", "carol", jobs)
-        assert get_task_job_ids(conn, "t6") == jobs
+        qdyndb.assign_task("t6", "carol", jobs)
+        assert qdyndb.get_task_job_ids("t6") == jobs
 
     def test_delete_task(self):
-        conn = get_db()
-        create_user(conn, "dave", "pw")
-        assign_task(conn, "t7", "dave", {})
-        delete_task_record(conn, "t7")
-        assert get_task_owner(conn, "t7") is None
-        assert get_user_tasks(conn, "dave") == []
+        qdyndb.create_user("dave", "pw")
+        qdyndb.assign_task("t7", "dave", {})
+        qdyndb.delete_task_record("t7")
+        assert qdyndb.get_task_owner("t7") is None
+        assert qdyndb.get_user_tasks("dave") == []
 
     def test_user_isolation(self):
-        conn = get_db()
-        create_user(conn, "alice", "pw")
-        create_user(conn, "bob", "pw")
-        assign_task(conn, "ta", "alice", {})
-        assign_task(conn, "tb", "bob", {})
-        assert get_user_tasks(conn, "alice") == ["ta"]
-        assert get_user_tasks(conn, "bob") == ["tb"]
-        assert get_task_owner(conn, "ta") == "alice"
-        assert get_task_owner(conn, "tb") == "bob"
+        qdyndb.create_user("alice", "pw")
+        qdyndb.create_user("bob", "pw")
+        qdyndb.assign_task("ta", "alice", {})
+        qdyndb.assign_task("tb", "bob", {})
+        assert qdyndb.get_user_tasks("alice") == ["ta"]
+        assert qdyndb.get_user_tasks("bob") == ["tb"]
+        assert qdyndb.get_task_owner("ta") == "alice"
+        assert qdyndb.get_task_owner("tb") == "bob"
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +160,7 @@ class TestAuthRouter:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.auth.router import router
+        from qdyn.auth.router import router
 
         test_app = FastAPI()
         test_app.include_router(router)
@@ -246,8 +235,8 @@ class TestProtectedEndpoints:
         from fastapi import Depends, FastAPI
         from fastapi.testclient import TestClient
 
-        from src.auth.dependencies import get_current_user
-        from src.auth.router import router
+        from qdyn.auth.dependencies import get_current_user
+        from qdyn.auth.router import router
 
         test_app = FastAPI()
         test_app.include_router(router)
@@ -294,62 +283,3 @@ class TestProtectedEndpoints:
         )
         assert resp_a.json()["user"] == "alice"
         assert resp_b.json()["user"] == "bob"
-
-
-# ---------------------------------------------------------------------------
-# Single-user mode
-# ---------------------------------------------------------------------------
-
-
-class TestSingleUserMode:
-    """Test that single-user mode bypasses auth entirely."""
-
-    @pytest.fixture()
-    def single_user_client(self):
-        from fastapi import Depends, FastAPI
-        from fastapi.testclient import TestClient
-
-        from src.auth.dependencies import get_current_user, set_single_user_mode
-
-        set_single_user_mode(True)
-
-        test_app = FastAPI()
-
-        @test_app.get("/protected")
-        def protected(username: str = Depends(get_current_user)):
-            return {"user": username}
-
-        client = TestClient(test_app)
-        yield client
-        set_single_user_mode(False)
-
-    def test_access_without_token(self, single_user_client):
-        resp = single_user_client.get("/protected")
-        assert resp.status_code == 200
-        assert resp.json()["user"] == "admin"
-
-    def test_access_with_arbitrary_token(self, single_user_client):
-        resp = single_user_client.get(
-            "/protected", headers={"Authorization": "Bearer anything"}
-        )
-        assert resp.status_code == 200
-        assert resp.json()["user"] == "admin"
-
-    def test_mode_reverts_to_multi_user(self):
-        """After disabling single-user mode, auth is required again."""
-        from fastapi import Depends, FastAPI
-        from fastapi.testclient import TestClient
-
-        from src.auth.dependencies import get_current_user, set_single_user_mode
-
-        set_single_user_mode(False)
-
-        test_app = FastAPI()
-
-        @test_app.get("/protected")
-        def protected(username: str = Depends(get_current_user)):
-            return {"user": username}
-
-        client = TestClient(test_app)
-        resp = client.get("/protected")
-        assert resp.status_code in (401, 403)

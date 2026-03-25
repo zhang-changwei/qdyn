@@ -22,15 +22,19 @@ uv sync
 3. Generate jf project configuration `jf project generate jf_qdyn`
 4. Start jf `python main.py --jf`  
 
+```
 export PYTHONPATH=$HOME/src/qdyn/src:$PYTHONPATH
-export JFREMOTE_PROJECTS_FOLDER=/data/home/cwzhang/src/qdyn/jf_config
+export JFREMOTE_PROJECTS_FOLDER=$HOME/src/qdyn/config
 export JFREMOTE_PROJECT=jf_qdyn
+```
 
 * Check MongoDB / Jobflow status
-`ps -u cwzhang -o pid,cmd | grep mongo`
-`jf project list -w`
-`jf runner status`
-`jf runner info`
+```
+ps -u cwzhang -o pid,cmd | grep mongo
+jf project list -w
+jf runner status
+jf runner info
+```
 
 # How to contribute
 

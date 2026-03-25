@@ -141,11 +141,11 @@ class InputT(BaseModel):
 
     basic_input: BasicInputT
     scheduler_config: SchedulerConfigT
-    nvt_input: NVTInputT
-    nve_input: NVEInputT
-    scf_input: SCFInputT
-    prenamd_input: PreNAMDInputT
-    namd_input: NAMDInputT
+    nvt_input: Optional[NVTInputT] = None
+    nve_input: Optional[NVEInputT] = None
+    scf_input: Optional[SCFInputT] = None
+    prenamd_input: Optional[PreNAMDInputT] = None
+    namd_input: Optional[NAMDInputT] = None
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
     stru: Optional[str] = ''

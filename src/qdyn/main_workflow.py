@@ -115,12 +115,20 @@ class MainWorkflow:
         """Apply optional jobflow-remote settings from qdyn.yaml before first use."""
         basic_cfg = self.config.get('basic', {})
         project_path = basic_cfg.get('jf_project_path', '')
-        if project_path:
-            SETTINGS.projects_folder = os.path.abspath(os.path.expanduser(project_path))
-
         project_name = basic_cfg.get('jf_project_name', '')
-        if project_name:
-            SETTINGS.project = project_name
+        if not project_path or not os.path.exists(project_path):
+            raise ConfigError(
+                f"Jobflow-remote project config not found: {project_path}\n"
+                f"Set basic.jf_project_path in qdyn.yaml to a valid path."
+            )
+        if not project_name:
+            raise ConfigError(
+                f"Jobflow-remote project name not specified in qdyn.yaml.\n"
+                f"Set basic.jf_project_name to the project name defined in your jobflow-remote config."
+            )
+
+        SETTINGS.projects_folder = str(Path(project_path).parent.expanduser().resolve())
+        SETTINGS.project = project_name
 
     def _ensure_job_controller(self) -> JobController:
         """Initialize the jobflow-remote controller on demand."""
@@ -135,14 +143,6 @@ class MainWorkflow:
                     "or configure ~/.jfremote before using remote job features."
                 ) from exc
         return self.jc
-
-    @staticmethod
-    def _validate_positive_nodes(nodes: int, step: str) -> None:
-        """Ensure node count is positive."""
-        if nodes <= 0:
-            raise ValidationError(
-                f"{step}.nodes must be a positive integer or omitted to use the default."
-            )
 
     # ------------------------------------------------------------------
     # Pre-flight validation
@@ -242,7 +242,7 @@ class MainWorkflow:
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
         # step 1: NVT
-        if 'nvt' in input.steps or flag == 'gen_input_nvt':
+        if ('nvt' in input.steps or flag == 'gen_input_nvt') and input.nvt_input is not None:
             prev_step = ''
             next_step = 'nve'
             if prev_step in input.steps:
@@ -269,15 +269,17 @@ class MainWorkflow:
                 if input.nvt_input.nodes is not None
                 else self.config['nvt'][software]['nodes']
             )
-            self._validate_positive_nodes(nodes, 'nvt')
+            assert nodes > 0, "[NVT] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = self.config['nvt'][software]['ntasks_per_node']
             cpus_per_task = self.config['nvt'][software]['cpus_per_task']
+            pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
+            orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
             job_nvt = run_nvt(
                 software=software,
                 parameters=input.nvt_input,
-                pp_path=self.config['pp_path'][software],
-                orb_path=self.config['orb_path'][software],
+                pp_path=pp_path,
+                orb_path=orb_path,
                 structure=structure,
                 nodes=nodes,
                 ntasks_per_node=ntasks_per_node,
@@ -310,7 +312,7 @@ class MainWorkflow:
                 flag = f'gen_input_{next_step}'
 
         # step 2: NVE
-        if 'nve' in input.steps or flag == 'gen_input_nve':
+        if ('nve' in input.steps or flag == 'gen_input_nve') and input.nve_input is not None:
             prev_step = 'nvt'
             next_step = 'scf'
             if prev_step in input.steps:
@@ -337,15 +339,17 @@ class MainWorkflow:
                 if input.nve_input.nodes is not None
                 else self.config['nve'][software]['nodes']
             )
-            self._validate_positive_nodes(nodes, 'nve')
+            assert nodes > 0, "[NVE] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = self.config['nve'][software]['ntasks_per_node']
             cpus_per_task = self.config['nve'][software]['cpus_per_task']
+            pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
+            orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
             job_nve = run_nve(
                 software=software,
                 parameters=input.nve_input,
-                pp_path=self.config['pp_path'][software],
-                orb_path=self.config['orb_path'][software],
+                pp_path=pp_path,
+                orb_path=orb_path,
                 structure=structure,
                 nodes=nodes,
                 ntasks_per_node=ntasks_per_node,
@@ -378,7 +382,7 @@ class MainWorkflow:
                 flag = f'gen_input_{next_step}'
 
         # step 3: SCF
-        if 'scf' in input.steps or flag == 'gen_input_scf':
+        if ('scf' in input.steps or flag == 'gen_input_scf') and input.scf_input is not None:
             if software == 'abacus':
                 # no need for scf calc if using abacus
                 pass
@@ -410,15 +414,17 @@ class MainWorkflow:
                     if input.scf_input.nodes is not None
                     else self.config['scf'][software]['nodes']
                 )
-                self._validate_positive_nodes(nodes, 'scf')
+                assert nodes > 0, "[SCF] nodes must be a positive integer or omitted to use the default."
                 ntasks_per_node = self.config['scf'][software]['ntasks_per_node']
                 cpus_per_task = self.config['scf'][software]['cpus_per_task']
+                pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
+                orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
                 jobs_scf = run_scf(
                     software=software,
                     parameters=input.scf_input,
-                    pp_path=self.config['pp_path'][software],
-                    orb_path=self.config['orb_path'][software],
+                    pp_path=pp_path,
+                    orb_path=orb_path,
                     structures=structures, # type: ignore
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
@@ -452,7 +458,7 @@ class MainWorkflow:
                     flag = f'gen_input_{next_step}'
 
         # step 4: PRE_NAMD
-        if 'pre_namd' in input.steps or flag == 'gen_input_pre_namd':
+        if ('pre_namd' in input.steps or flag == 'gen_input_pre_namd') and input.prenamd_input is not None:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
@@ -515,7 +521,7 @@ class MainWorkflow:
                 flag = f'gen_input_{next_step}'
 
         # step 4: NAMD
-        if 'namd' in input.steps or flag == 'gen_input_namd':
+        if ('namd' in input.steps or flag == 'gen_input_namd') and input.namd_input is not None:
             prev_step = 'pre_namd'
             next_step = ''
             if prev_step in input.steps:
@@ -546,7 +552,7 @@ class MainWorkflow:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
-                self._validate_positive_nodes(nodes, 'namd')
+                assert nodes > 0, "[NAMD] nodes must be a positive integer or omitted to use the default."
                 ntasks_per_node = self.config['machine']['cpus_per_node']
                 cpus_per_task = 1
 
