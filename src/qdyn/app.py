@@ -11,7 +11,7 @@ from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .database import qdyndb
 from .input import InputT
-from .main_workflow import MainWorkflow, ValidationError, ConfigError, ResumeError
+from .main_workflow import MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -149,14 +149,22 @@ def list_task_jobs(task_id: str, username: str = Depends(get_current_user)):
     """List jobs (grouped by step) for a given task."""
     _verify_ownership(task_id, username)
     m = _manager()
-    return m.list_task_jobs(task_id)
+    try:
+        ids = m.list_task_jobs(task_id)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
+    return ids
 
 
 @app.delete("/tasks/{task_id}", status_code=204)
-def delete_task(task_id: str, username: str = Depends(get_current_user)):
+def stop_task(task_id: str, username: str = Depends(get_current_user)):
     """Delete a task record."""
-    pass
-    # TODO
+    _verify_ownership(task_id, username)
+    m = _manager()
+    try:
+        m.stop_task(task_id)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
 
 
 @app.get("/tasks/{task_id}/jobs/{job_uuid}/output")
@@ -169,13 +177,21 @@ def get_job_output(
     _verify_ownership(task_id, username)
     m = _manager()
 
-    job_ids = m.list_task_jobs(task_id)
+    try:
+        job_ids = m.list_task_jobs(task_id)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
     jobs_flatten = []
     for job_list in job_ids.values():
         jobs_flatten.extend(job_list)
     if job_uuid not in jobs_flatten:
         raise HTTPException(status_code=404, detail="Job not found in this task")
 
-    output = m.get_job_output(job_uuid)
+    try:
+        output = m.get_job_output(job_uuid)
+    except ConfigError as e:
+        raise HTTPException(status_code=500, detail=f"Server config error: {e}")
+    except QueryError as e:
+        raise HTTPException(status_code=404, detail=f"Jobflow-remote query error: {e}")
 
     return output

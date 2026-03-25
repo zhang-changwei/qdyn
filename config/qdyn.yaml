@@ -15,7 +15,7 @@ machine:
   partition: chu
 
   # CPU cores per node
-  cpus_per_node: 64
+  cpus_per_node: 96
 
 # Execution Configs
 modules: 
@@ -45,23 +45,27 @@ orb_path:
   vasp: ''
 
 # Slurm Job Resources
+# Read https://matgenix.github.io/qtoolkit/user/resources.html
 nvt:
   vasp:
     nodes: 1
-    ntasks_per_node: 64
+    ntasks_per_node: 96
     cpus_per_task: 1
+    exclusive: true
 
 nve:
   vasp:
     nodes: 1
-    ntasks_per_node: 64
+    ntasks_per_node: 96
     cpus_per_task: 1
+    exclusive: true
 
 scf:
   vasp:
     nodes: 1
-    ntasks_per_node: 64
+    ntasks_per_node: 96
     cpus_per_task: 1
+    exclusive: true
 
 
 auth:

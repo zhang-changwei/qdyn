@@ -298,9 +298,9 @@ class MainWorkflow:
                 resources={
                     **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
+                    **self.config['nvt'][software],
                     'nodes': nodes,
-                    'ntasks_per_node': ntasks_per_node,
-                    'cpus_per_task': cpus_per_task,
+                    'job_name': 'qdyn_nvt',
                 },
             )
             jobs['nvt'] = [job_nvt]
@@ -368,9 +368,9 @@ class MainWorkflow:
                 resources={
                     **self.jf_config['workers']['local_slurm'].get('resources', {}),
                     'partition': self.config['machine']['partition'],
+                    **self.config['nve'][software],
                     'nodes': nodes,
-                    'ntasks_per_node': ntasks_per_node,
-                    'cpus_per_task': cpus_per_task,
+                    'job_name': 'qdyn_nve',
                 },
             )
             jobs['nve'] = [job_nve]
@@ -444,9 +444,9 @@ class MainWorkflow:
                         resources={
                             **self.jf_config['workers']['local_slurm'].get('resources', {}),
                             'partition': self.config['machine']['partition'],
+                            **self.config['scf'][software],
                             'nodes': nodes,
-                            'ntasks_per_node': ntasks_per_node,
-                            'cpus_per_task': cpus_per_task,
+                            'job_name': f'qdyn_scf',
                         },
                     )
                 jobs['scf'] = jobs_scf
@@ -510,6 +510,7 @@ class MainWorkflow:
                     'nodes': 1,
                     'ntasks_per_node': 1,
                     'cpus_per_task': ncpus,
+                    'job_name': 'qdyn_prenamd',
                 },
             )
             jobs['pre_namd'] = [job_pre_namd]
@@ -584,6 +585,7 @@ class MainWorkflow:
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
+                    'job_name': 'qdyn_namd',
                 },
             )
             jobs['namd'] = [job_namd]
@@ -595,6 +597,7 @@ class MainWorkflow:
                 flag = f'gen_input_{next_step}'
 
         return jobs
+
 
     def submit(
         self,
@@ -631,24 +634,45 @@ class MainWorkflow:
 
         return task_id, job_ids
 
-    def remove_task(self, task_id: str):
-        """Remove a task from local tracking.
 
-        TODO: Clarify scope — should this only drop the in-memory record, or
-        also cancel running remote jobs and/or purge outputs from the
-        jobstore?  Different cleanup levels may warrant separate methods.
+    def stop_task(self, task_id: str) -> None:
+        """Request termination of all jobs for a task via jobflow-remote.
+
+        This delegates to ``JobController.stop_job`` for each job UUID
+        belonging to the task so that the underlying queue adapter
+        (Slurm, PBS, etc.) performs the actual cancellation. Task and
+        job metadata in SQLite and in the jobflow store are preserved.
         """
-        pass
+
+        # Validate task existence first (may raise ValidationError).
+        job_ids = self.list_task_jobs(task_id)
+
+        jc = self._ensure_job_controller()
+
+        # Flatten step -> [job_uuid] to a single list, and stop in
+        # reverse order (later jobs first) to respect dependencies.
+        jobs_flatten: list[str] = []
+        for job_list in job_ids.values():
+            jobs_flatten.extend(job_list)
+
+        for job_uuid in jobs_flatten[::-1]:
+            try:
+                jc.stop_job(job_id=job_uuid)
+            except Exception as exc:
+                pass
+
 
     def list_tasks(self) -> List[str]:
         """Return all task IDs known to this instance (local-memory view)."""
         return list(self.task_ids)
+
 
     def list_task_jobs(self, task_id: str) -> Dict[str, List[str]]:
         """Return job UUIDs grouped by step for a given task."""
         if task_id not in self.task_ids:
             raise ValidationError(f"Task '{task_id}' not found.")
         return self.job_ids[task_id]
+
 
     def get_job_status(self, job_uuid: str) -> str:
         """Query job status."""
@@ -660,17 +684,19 @@ class MainWorkflow:
             raise QueryError(f"Job '{job_uuid}' not found.")
         return job_info.state.value
 
+
     def get_job_output(self, job_uuid: str):
         """Retrieve a completed job's output from the jobstore."""
         jc = self._ensure_job_controller()
+
         status = self.get_job_status(job_uuid)
         if status != 'COMPLETED':
             raise QueryError(
                 f"Job '{job_uuid}' is not completed. Current status: {status}"
             )
         out = jc.get_job_output(job_id=job_uuid)
-
         return out
+
 
     def restore_from_db(self, conn: sqlite3.Connection) -> int:
         """Restore task_ids and job_ids from the SQLite database.
