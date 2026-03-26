@@ -10,6 +10,7 @@ trajectory. It supports:
 
 import os
 import re
+import logging
 import shutil
 from copy import deepcopy
 from pathlib import Path
@@ -277,6 +278,7 @@ def _run_scf_task(
 
         except Exception as e:
             # Mark as failed
+            logging.error(f"SCF calculation failed for frame {global_idx}: {e}")
             _set_status(subdir, STATUS_FAIL)
             failed.append(global_idx)
             # Don't propagate CHGCAR from failed calculation
@@ -453,16 +455,16 @@ def _validate_scf_output(software: str):
                 )
 
             # Check SCF convergence
-            if b'reached required accuracy' not in content:
+            if b'aborting loop because EDIFF is reached' not in content:
                 # Look for common convergence failure markers
-                if b'WARNING in EDDAV' in content or b'ZBRENT: fatal error' in content:
-                    raise RuntimeError(
-                        "SCF calculation failed: SCF did not converge. "
-                        "Check OUTCAR for convergence errors."
-                    )
+                # if b'WARNING in EDDAV' in content or b'ZBRENT: fatal error' in content:
+                #     raise RuntimeError(
+                #         "SCF calculation failed: SCF did not converge. "
+                #         "Check OUTCAR for convergence errors."
+                #     )
                 raise RuntimeError(
                     "SCF calculation failed: SCF did not converge. "
-                    "OUTCAR does not contain 'reached required accuracy' marker."
+                    "OUTCAR does not contain 'aborting loop because EDIFF is reached' marker."
                 )
 
             # Check WAVECAR file size
