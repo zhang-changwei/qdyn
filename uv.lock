@@ -1087,8 +1087,8 @@ wheels = [
 
 [[package]]
 name = "jobflow-remote"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
+version = "1.0.0.post26+gb3e7694"
+source = { git = "https://github.com/bud-primordium/jobflow-remote.git?rev=b3e7694#b3e76941f5a66f45991ba536fd9c33d2d155d31b" }
 dependencies = [
     { name = "fabric", marker = "sys_platform == 'linux'" },
     { name = "flufl-lock", marker = "sys_platform == 'linux'" },
@@ -1106,10 +1106,6 @@ dependencies = [
     { name = "supervisor", marker = "sys_platform == 'linux'" },
     { name = "tomlkit", marker = "sys_platform == 'linux'" },
     { name = "typer", marker = "sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/3a/7b221460fb458cebf9aa1592ea2004eb52d1176e4d4ca34500f00e3537a4/jobflow_remote-1.0.0.tar.gz", hash = "sha256:0fc119a2ee101bd159888dda27cbf21b62dd690e3585217b2ec4b528c8ceb213", size = 190914, upload-time = "2026-01-14T22:18:00.42Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/e4/7f010ae6cdecdb895400eb6095feac38ff4f5632d23238ca2a186bda80a1/jobflow_remote-1.0.0-py3-none-any.whl", hash = "sha256:9ee8d41bf7f3f0d2839e00c266ef45eed3ab3f2f319b18c75e8ced090b717475", size = 211297, upload-time = "2026-01-14T22:17:59.015Z" },
 ]
 
 [[package]]
@@ -2898,7 +2894,7 @@ requires-dist = [
     { name = "easydict", marker = "extra == 'ml'", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "jobflow", specifier = ">=0.3.1" },
-    { name = "jobflow-remote", specifier = ">=1.0.0" },
+    { name = "jobflow-remote", git = "https://github.com/bud-primordium/jobflow-remote.git?rev=b3e7694" },
     { name = "lightning", marker = "extra == 'ml'", specifier = ">=2.6.1" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "natsort", specifier = ">=8.4.0" },

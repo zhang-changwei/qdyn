@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10, <3.13"
 dependencies = [
     "jobflow>=0.3.1",
-    "jobflow-remote>=1.0.0",
+    # Temporary pin for upstream PR #466 (https://github.com/Matgenix/jobflow-remote/pull/466)
+    # This fork mirrors the PR content; switch back to upstream after merge.
+    "jobflow-remote @ git+https://github.com/bud-primordium/jobflow-remote.git@b3e7694",
     "fastapi>=0.135.1",
     "uvicorn>=0.41.0",
     "pyjwt>=2.8.0",
