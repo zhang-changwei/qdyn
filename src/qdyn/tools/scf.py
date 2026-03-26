@@ -84,13 +84,7 @@ def run_scf(
     """
 
     batch_size = parameters.batch_size
-    md_step = parameters.md_step
-    scf_step = parameters.scf_step
-
-    if scf_step is not None and scf_step > 0:
-        total_frames = min(scf_step, md_step)
-    else:
-        total_frames = md_step
+    total_frames = parameters.scf_step
 
     jobs = []
 

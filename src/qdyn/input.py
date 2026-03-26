@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, List, Optional, Any
 
 import numpy as np
@@ -113,12 +113,7 @@ class SCFInputT(BaseModel):
     scf_thr: float = 1e-6
 
     # job control
-    md_step: int = Field(
-        1000, description="Number of MD steps (frames) in the structure file"
-    )
-    scf_step: Optional[int] = Field(
-        None, description="Number of SCF frames to calculate"
-    )
+    scf_step: int = Field(1000, description="Number of SCF frames to calculate")
 
     batch_size: int = Field(
         100,
@@ -127,13 +122,6 @@ class SCFInputT(BaseModel):
 
     is_alle: bool = Field(False, description="Whether to use all-electron vasp")
     parameters: str = Field('', description="Additional INCAR parameters string")
-
-    @model_validator(mode='after')
-    def set_scf_step_default(self) -> "SCFInputT":
-        # 如果用户没有显式传入 scf_step，则根据 md_step 计算
-        if self.scf_step is None:
-            self.scf_step = self.md_step // 2
-        return self
 
 
 class InputT(BaseModel):
