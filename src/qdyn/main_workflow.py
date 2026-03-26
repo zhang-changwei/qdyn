@@ -300,7 +300,6 @@ class MainWorkflow:
                     'partition': self.config['machine']['partition'],
                     **self.config['nvt'][software],
                     'nodes': nodes,
-                    'job_name': 'qdyn_nvt',
                 },
             )
             jobs['nvt'] = [job_nvt]
@@ -370,7 +369,6 @@ class MainWorkflow:
                     'partition': self.config['machine']['partition'],
                     **self.config['nve'][software],
                     'nodes': nodes,
-                    'job_name': 'qdyn_nve',
                 },
             )
             jobs['nve'] = [job_nve]
@@ -446,7 +444,6 @@ class MainWorkflow:
                             'partition': self.config['machine']['partition'],
                             **self.config['scf'][software],
                             'nodes': nodes,
-                            'job_name': f'qdyn_scf',
                         },
                     )
                 jobs['scf'] = jobs_scf
@@ -510,7 +507,6 @@ class MainWorkflow:
                     'nodes': 1,
                     'ntasks_per_node': 1,
                     'cpus_per_task': ncpus,
-                    'job_name': 'qdyn_prenamd',
                 },
             )
             jobs['pre_namd'] = [job_pre_namd]
@@ -585,7 +581,6 @@ class MainWorkflow:
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
-                    'job_name': 'qdyn_namd',
                 },
             )
             jobs['namd'] = [job_namd]
@@ -595,6 +590,11 @@ class MainWorkflow:
                             else False)
             if is_last_step:
                 flag = f'gen_input_{next_step}'
+
+        if not jobs:
+            raise ValidationError(
+                "No valid steps with input provided. Please check your input and config."
+            )
 
         return jobs
 

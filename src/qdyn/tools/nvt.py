@@ -90,6 +90,7 @@ def run_nvt(
 
     software_lower = software.lower()
 
+    structure.pop('momenta', None)
     current_structure = Atoms.fromdict(structure)
     nprocs = nodes * ntasks_per_node
     images = []
