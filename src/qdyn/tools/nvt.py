@@ -1,7 +1,6 @@
 import os
 import shutil
 import logging
-import re
 from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
@@ -91,6 +90,7 @@ def run_nvt(
 
     software_lower = software.lower()
 
+    structure.pop('momenta', None)
     current_structure = Atoms.fromdict(structure)
     nprocs = nodes * ntasks_per_node
     images = []
@@ -256,21 +256,6 @@ def _prepare_nvt_input(
                 incar_dict=input,
                 incar_params=parameters.parameters,
             )
-            try:
-                with open("POSCAR", "r") as poscar_file:
-                    lines = poscar_file.readlines()
-                    line7 = lines[6].strip()
-                    numbers = re.findall(r'\d+', line7)
-                    natom = sum(int(num) for num in numbers)
-                    truncated_lines = lines[: natom + 8]
-
-                with open("POSCAR", "w") as poscar_file:
-                    poscar_file.writelines(truncated_lines)
-
-            except (FileNotFoundError, IndexError, ValueError) as e:
-                logging.warning(
-                    f"Failed to delete velocities in POSCAR: {e}. Please make sure there is no velocity in POSCAR."
-                )
         case _:
             raise NotImplementedError(
                 f"Software {software} is not supported for NVT input preparation yet."

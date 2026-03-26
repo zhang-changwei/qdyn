@@ -183,7 +183,10 @@ def _run_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    selected_structures = [Atoms.fromdict(s) for s in structures[-scf_step:]]
+    selected_structures = []
+    for s in structures[-scf_step:]:
+        s.pop('momenta', None)
+        selected_structures.append(Atoms.fromdict(s))
 
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)

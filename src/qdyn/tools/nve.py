@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import ase.io
 from ase import Atoms
 from jobflow import job
+import numpy as np
 
 from ..input import NVEInputT
 from ..params import params_default, md_tracks
@@ -78,6 +79,7 @@ def run_nve(
 
     software_lower = software.lower()
     nprocs = nodes * ntasks_per_node
+    structure['momenta'] = np.array(structure['momenta'])
 
     # Prepare input files
     _prepare_nve_input(

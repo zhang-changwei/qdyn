@@ -34,6 +34,7 @@ ps -u cwzhang -o pid,cmd | grep mongo
 jf project list -w
 jf runner status
 jf runner info
+jf job list
 ```
 
 # How to contribute
