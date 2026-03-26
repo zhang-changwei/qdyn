@@ -55,7 +55,7 @@ def extract_eigvals_and_nacs(
 
     if software == 'abacus':
         wfc_path = Path(run_dirs[0]) / 'WFC'
-        nstep = len(os.listdir(wfc_path)) - 1
+        nstep = len(list(wfc_path.glob('wfck1g*'))) - 1
         run_dirs = [run_dirs[0]] * (nstep + 1) # all the same dir
     else:
         nstep = len(run_dirs) - 1
@@ -243,7 +243,7 @@ def calc_tdolap_wrapper(
     # validations
     if software == 'vasp':
         assert wfc_A._nbands == wfc_B._nbands, "Number of bands mismatch between two steps."
-        assert wfc_A._nplws == wfc_B._nplws, "Number of plane waves mismatch between two steps." # type: ignore
+        assert wfc_A._nplws[ikpt-1] == wfc_B._nplws[ikpt-1], "Number of plane waves mismatch between two steps." # type: ignore
 
     # read coefficients
     normalize = True if (software == 'vasp' and not is_alle) else False

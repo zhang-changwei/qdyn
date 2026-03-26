@@ -37,7 +37,7 @@ STATUS_ENDED = 'ENDED'
 STATUS_FAIL = 'FAIL'
 
 
-def run_scf(
+def qdyn_scf(
     software: str,
     parameters: SCFInputT,
     pp_path: str,
@@ -97,7 +97,7 @@ def run_scf(
         frame_start = batch_idx
         frame_end = batch_end
 
-        j = _run_scf_task(
+        j = qdyn_scf_task(
             software=software,
             parameters=parameters,
             pp_path=pp_path,
@@ -116,7 +116,7 @@ def run_scf(
 
 
 @job
-def _run_scf_task(
+def qdyn_scf_task(
     software: str,
     parameters: SCFInputT,
     pp_path: str,

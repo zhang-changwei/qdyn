@@ -18,7 +18,7 @@ from .dephase import calculate_dephasing_time
 
 
 @job
-def run_pre_namd(
+def qdyn_pre_namd(
     software: str,
     parameters: PreNAMDInputT,
     run_dirs: List[str],

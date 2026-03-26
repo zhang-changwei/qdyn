@@ -21,11 +21,11 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
-from .tools.nvt import run_nvt
-from .tools.nve import run_nve
-from .tools.scf import run_scf
-from .tools.prepare_namd import run_pre_namd
-from .tools.namd import run_namd
+from .tools.nvt import qdyn_nvt
+from .tools.nve import qdyn_nve
+from .tools.scf import qdyn_scf
+from .tools.prepare_namd import qdyn_pre_namd
+from .tools.namd import qdyn_namd
 
 
 class ValidationError(Exception):
@@ -275,7 +275,7 @@ class MainWorkflow:
             pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
             orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
-            job_nvt = run_nvt(
+            job_nvt = qdyn_nvt(
                 software=software,
                 parameters=input.nvt_input,
                 pp_path=pp_path,
@@ -344,7 +344,7 @@ class MainWorkflow:
             pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
             orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
-            job_nve = run_nve(
+            job_nve = qdyn_nve(
                 software=software,
                 parameters=input.nve_input,
                 pp_path=pp_path,
@@ -418,7 +418,7 @@ class MainWorkflow:
                 pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
                 orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
 
-                jobs_scf = run_scf(
+                jobs_scf = qdyn_scf(
                     software=software,
                     parameters=input.scf_input,
                     pp_path=pp_path,
@@ -461,14 +461,14 @@ class MainWorkflow:
             if prev_step in input.steps:
                 run_dirs = []
                 for idx in range(len(jobs[prev_step])):
-                    run_dirs.extend(jobs[prev_step][idx].output['run_dir'])
+                    run_dirs.append(jobs[prev_step][idx].output['run_dir'])
             elif first_step == 'pre_namd' and resume:
                 try:
                     prev_jobs = self.job_ids[prev_task_id][prev_step]
                     run_dirs = []
                     for prev_job_uuid in prev_jobs:
                         output = self.get_job_output(prev_job_uuid)
-                        run_dirs.extend(output['run_dir'])
+                        run_dirs.append(output['run_dir'])
                 except Exception as exc:
                     raise ResumeError(
                         f"Previous job(s) for step '{prev_step}' not found or has no output. "
@@ -482,7 +482,7 @@ class MainWorkflow:
                 )
 
             ncpus = self.config['machine']['cpus_per_node']
-            job_pre_namd = run_pre_namd(
+            job_pre_namd = qdyn_pre_namd(
                 software=software,
                 parameters=input.prenamd_input,
                 run_dirs=run_dirs,
@@ -553,7 +553,7 @@ class MainWorkflow:
                 ntasks_per_node = self.config['machine']['cpus_per_node']
                 cpus_per_task = 1
 
-            job_namd = run_namd(
+            job_namd = qdyn_namd(
                 parameters=input.namd_input,
                 eigtxt=eigtxt,
                 natxt=natxt,

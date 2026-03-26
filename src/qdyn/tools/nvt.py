@@ -28,7 +28,7 @@ MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergenc
 
 
 @job
-def run_nvt(
+def qdyn_nvt(
     software: str,
     parameters: NVTInputT,
     pp_path: str,

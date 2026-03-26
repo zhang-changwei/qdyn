@@ -15,7 +15,7 @@ from typing import List
 from ..input import NAMDInputT
 
 @job
-def run_namd(
+def qdyn_namd(
     parameters: NAMDInputT,
     eigtxt: str,
     natxt: str,
@@ -136,13 +136,14 @@ def plot_fssh(energies: npt.NDArray, lhole: bool = False):
 
     shprop = data[:, 2:] # shape (namdtime, nbasis)
     time = data[:, 0]
+    time -= time[0]
     avg_energy = data[:, 1]
     namdtime = shprop.shape[0]
 
     ens = np.zeros([namdtime, nbasis], dtype=np.float64)
     ini_times = [int(f.split('.')[-1]) for f in f_shprop]
     for start in ini_times:
-        stop = start + namdtime
+        stop = start + namdtime - 1
         ens += energies[start - 1: stop]
     ens /= len(ini_times)
 
@@ -160,7 +161,10 @@ def plot_fssh(energies: npt.NDArray, lhole: bool = False):
 
     ax.plot(time, avg_energy, '--', color='blue', lw=1.5, alpha=0.6,
             label=f'Average {"Hole" if lhole else "Electron"} Energy')
-    kmap = ax.scatter(time, ens, c=shprop, cmap='hot_r', vmin=0, vmax=1,
+    x = np.zeros_like(ens)
+    for i in range(nbasis):
+        x[:, i] = time
+    kmap = ax.scatter(x, ens, c=shprop, cmap='hot_r', vmin=0, vmax=1,
                       s=15, alpha=0.8, lw=0)
     plt.colorbar(kmap, cax=ax_cbar, orientation='vertical',
                  ticks=np.linspace(0, 1, 6, endpoint=True))

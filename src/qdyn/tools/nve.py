@@ -21,7 +21,7 @@ from .run_software import run_software
 
 
 @job
-def run_nve(
+def qdyn_nve(
     software: str,
     parameters: NVEInputT,
     pp_path: str,
