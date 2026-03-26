@@ -1,6 +1,7 @@
 import os
 import shutil
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Literal, Optional, Tuple
 from copy import deepcopy
@@ -10,7 +11,7 @@ import numpy as np
 
 
 from ase import Atoms
-from jobflow import job
+from jobflow import job  # type: ignore
 
 from ..input import NVTInputT
 from ..params import params_default, backup_files
@@ -177,7 +178,7 @@ def run_nvt(
             if os.path.isfile(md_filename):
                 md_dstpath = os.path.join(backup_dir, md_filename)
                 shutil.move(md_filename, md_dstpath)
-                md_files[attempt] = os.path.abspath(md_dstpath)
+                md_files[attempt - 1] = os.path.abspath(md_dstpath)
             else:
                 logging.warning(
                     f'File {md_filename} not found, backup files may be uncomplete.'
@@ -188,7 +189,7 @@ def run_nvt(
                     image_filename,
                     image_dstpath,
                 )
-                images[attempt] = os.path.abspath(image_dstpath)
+                images[attempt - 1] = os.path.abspath(image_dstpath)
             else:
                 logging.warning(
                     f'File {image_filename} not found, backup files may be uncomplete.'
@@ -255,6 +256,21 @@ def _prepare_nvt_input(
                 incar_dict=input,
                 incar_params=parameters.parameters,
             )
+            try:
+                with open("POSCAR", "r") as poscar_file:
+                    lines = poscar_file.readlines()
+                    line7 = lines[6].strip()
+                    numbers = re.findall(r'\d+', line7)
+                    natom = sum(int(num) for num in numbers)
+                    truncated_lines = lines[: natom + 8]
+
+                with open("POSCAR", "w") as poscar_file:
+                    poscar_file.writelines(truncated_lines)
+
+            except (FileNotFoundError, IndexError, ValueError) as e:
+                logging.warning(
+                    f"Failed to delete velocities in POSCAR: {e}. Please make sure there is no velocity in POSCAR."
+                )
         case _:
             raise NotImplementedError(
                 f"Software {software} is not supported for NVT input preparation yet."
@@ -346,7 +362,7 @@ def _process_nvt_output(
         image = plot_md_results(md_data, plot_filename, target_temp)
 
     return (
-        current_structure,
+        current_structure,  # type: ignore
         scf_converged,
         temp_converged,
         max_deviation,
