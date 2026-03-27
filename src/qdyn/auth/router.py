@@ -1,8 +1,9 @@
 import sqlite3
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..database import qdyndb
+from .dependencies import get_current_user
 from .models import UserCreate, Token
 from .security import hash_password, verify_password, create_access_token
 
@@ -32,3 +33,11 @@ def login(body: UserCreate):
         )
     token = create_access_token(body.username)
     return Token(access_token=token)
+
+
+@router.get("/me")
+async def get_current_user_info(
+    username: str = Depends(get_current_user)
+):
+    """Get current logged-in user information."""
+    return {"username": username}

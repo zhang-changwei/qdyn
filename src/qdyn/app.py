@@ -1,15 +1,21 @@
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi import status as http_status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from qdyn import __version__
 
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .database import qdyndb
+from .frontend_api import create_frontend_router
 from .input import InputT
 from .main_workflow import MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError
 
@@ -61,14 +67,65 @@ async def lifespan(app: FastAPI):
     qdyndb.close_db()
 
 
-app = FastAPI(title="QDYN Job Manager", lifespan=lifespan)
-app.include_router(auth_router)
-
+# ---------------------------------------------------------------------------
+# Manager accessor function (must be defined before frontend router creation)
+# ---------------------------------------------------------------------------
 
 def _manager() -> MainWorkflow:
+    """Get the MainWorkflow instance, raising RuntimeError if not initialized."""
     if manager is None:
         raise RuntimeError("MainWorkflow not initialized yet.")
     return manager
+
+
+app = FastAPI(title="QDYN Job Manager", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# CORS middleware for frontend communication
+# ---------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router)
+
+
+# ---------------------------------------------------------------------------
+# Health check endpoint
+# ---------------------------------------------------------------------------
+
+class HealthResponse(BaseModel):
+    """Health check response model."""
+    status: str  # "ok" | "degraded"
+    version: str
+    timestamp: float
+
+
+@app.get("/healthz", response_model=HealthResponse, tags=["system"])
+async def health_check() -> HealthResponse:
+    """
+    Health check endpoint for monitoring and load balancers.
+
+    Returns the current service status, version, and timestamp.
+    """
+    return HealthResponse(
+        status="ok",
+        version=__version__,
+        timestamp=time.time(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Frontend API router
+# ---------------------------------------------------------------------------
+
+# Create and mount the frontend API router with manager injection
+frontend_router = create_frontend_router(_manager)
+app.include_router(frontend_router)
 
 
 # --- helpers ---
