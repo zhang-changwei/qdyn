@@ -55,3 +55,26 @@ git merge local
 # Finally push
 git push
 ```
+
+# Frontend
+
+## Start backend server
+
+```bash
+PYTHONPATH=src uv run python main.py --server --port 8001
+```
+
+## Start frontend dev server
+
+```bash
+cd frontend && npm install
+VITE_API_PORT=8001 npx vite --host 0.0.0.0
+```
+
+## Build for production
+
+```bash
+cd frontend && npm run build
+```
+
+The built assets will be in `frontend/dist/`, served by FastAPI at static file hosting in production mode.
