@@ -127,7 +127,7 @@ def start_jf(config_path):
 
 
 
-def serve(config_path):
+def serve(config_path, port_override=None):
     import sys
     import uvicorn
     from qdyn.app import app
@@ -144,7 +144,7 @@ def serve(config_path):
     assert Path(config_path).is_file(), f"Config file not found: {config_path}"
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    port = config['basic'].get('port', 8000)
+    port = port_override or config['basic'].get('port', 8000)
     app.state.config_path = config_path
 
     uvicorn.run(app, host='0.0.0.0', port=port)
@@ -160,10 +160,12 @@ if __name__ == '__main__':
                         help='Start the job-manager server')
     parser.add_argument('--config', default=None, metavar='PATH',
                         help='Path to qdyn.yaml (default: $QDYN_CONFIG or ./qdyn.yaml)')
+    parser.add_argument('--port', type=int, default=None, metavar='PORT',
+                        help='Server port (default: basic.port in config or 8000)')
     args = parser.parse_args()
 
     if args.server:
-        serve(args.config)
+        serve(args.config, args.port)
     elif args.mongod:
         start_mongod(args.config)
     elif args.jf:
