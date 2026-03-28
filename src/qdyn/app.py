@@ -169,6 +169,8 @@ def _submit_with_tracking(
         raise HTTPException(status_code=500, detail=f"Server config error: {e}")
     except ResumeError as e:
         raise HTTPException(status_code=404, detail=f"Resume error: {e}")
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=f"Not supported: {e}")
 
     qdyndb.assign_task(task_id, username, job_ids)
     return task_id
@@ -211,17 +213,6 @@ def list_task_jobs(task_id: str, username: str = Depends(get_current_user)):
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {e}")
     return ids
-
-
-@app.delete("/tasks/{task_id}", status_code=204)
-def stop_task(task_id: str, username: str = Depends(get_current_user)):
-    """Delete a task record."""
-    _verify_ownership(task_id, username)
-    m = _manager()
-    try:
-        m.stop_task(task_id)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
 
 
 @app.get("/tasks/{task_id}/jobs/{job_uuid}/output")

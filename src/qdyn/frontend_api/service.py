@@ -11,9 +11,9 @@ from collections.abc import Callable
 from typing import Dict, List, Optional
 
 from ..database import qdyndb
-from ..main_workflow import MainWorkflow
+from ..main_workflow import MainWorkflow, QueryError
 from .models import (
-    JobStatusDetailResponse,
+    JobErrorResponse,
     JobStatusItem,
     TaskJobsStatusResponse,
     TaskSummary,
@@ -200,6 +200,85 @@ def get_job_error_summary(
     #
     # For now, return a placeholder indicating the feature is not implemented.
     return None
+
+
+def get_job_error_detail(
+    task_id: str,
+    job_uuid: str,
+    manager_getter: Callable[[], MainWorkflow],
+) -> JobErrorResponse:
+    """
+    Retrieve structured error details for a specific job.
+
+    Queries jobflow-remote's JobInfo for the job's error traceback and
+    extracts a human-readable message from the first line of the traceback.
+
+    Args:
+        task_id: The task identifier (for ownership validation context).
+        job_uuid: The job UUID to query.
+        manager_getter: A callable that returns the MainWorkflow instance.
+
+    Returns:
+        A JobErrorResponse with structured error information.
+    """
+    manager = manager_getter()
+    jc = manager._ensure_job_controller()
+
+    try:
+        job_info = jc.get_job_info(job_id=job_uuid)
+    except Exception as exc:
+        # Real query failure (backend error, connection issue, etc.) should return 500
+        # This is different from "job not found in task" which returns 404
+        raise QueryError(f"Query failed for job '{job_uuid}': {exc}")
+
+    if job_info is None:
+        # This shouldn't happen if the query succeeded, but handle defensively
+        raise QueryError(f"Job '{job_uuid}' not found during post-query verification.")
+
+    raw_state = job_info.state.value
+
+    # Check for error information in both remote.error and top-level error
+    # Use nested getattr to safely handle job_info without a remote attribute
+    error_traceback = getattr(getattr(job_info, "remote", None), "error", None) or getattr(job_info, "error", None)
+
+    if not error_traceback:
+        return JobErrorResponse(
+            state=raw_state,
+            available=False,
+        )
+
+    # Extract the first line of the traceback as the short message
+    message = _extract_error_message(error_traceback)
+
+    return JobErrorResponse(
+        state=raw_state,
+        available=True,
+        message=message,
+        traceback=error_traceback,
+    )
+
+
+def _extract_error_message(traceback_str: str) -> str:
+    """
+    Extract a short, human-readable error message from a traceback string.
+
+    Looks for the last non-empty line of the traceback (typically the
+    exception message), or falls back to the first non-empty line.
+
+    Args:
+        traceback_str: The full traceback string.
+
+    Returns:
+        A short error message string.
+    """
+    lines = traceback_str.strip().splitlines()
+    # Try the last non-empty line first (the exception message line)
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    # Fallback
+    return traceback_str.strip()[:200]
 
 
 # -----------------------------------------------------------------------------

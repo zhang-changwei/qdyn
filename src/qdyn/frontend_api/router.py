@@ -7,16 +7,21 @@ to avoid circular imports with app.py.
 """
 
 from collections.abc import Callable
+from functools import wraps
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
-from ..main_workflow import MainWorkflow
+from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
+    JobErrorResponse,
     JobStatusDetailResponse,
+    StopFailedItem,
+    StopResultResponse,
     StructureValidationInfo,
     StructureValidationRequest,
     StructureValidationResponse,
@@ -59,6 +64,18 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     def verify_task_ownership_local(task_id: str, username: str) -> None:
         """Verify that the task belongs to the user, raising HTTPException if not."""
         api_verify_task_ownership(task_id, username)
+
+    def handle_query_errors(func):
+        """Decorator to convert QueryError to HTTP 404 and ValidationError to HTTP 422."""
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except QueryError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except ValidationError as e:
+                raise HTTPException(status_code=422, detail=f"Validation error: {e}")
+        return wrapper
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/summary - Task summary list
@@ -151,8 +168,9 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     @router.get(
         "/tasks/{task_id}/jobs/{job_uuid}/status",
         summary="Get single job status",
-        description="Retrieve detailed status for a specific job, including error summary if failed.",
+        description="Retrieve detailed status for a specific job. For detailed error info, use /error endpoint.",
     )
+    @handle_query_errors
     async def get_job_status_detail(
         task_id: str,
         job_uuid: str,
@@ -194,6 +212,130 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         )
 
         return success_response(detail.model_dump())
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/error - Job error detail
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/error",
+        response_model=JobErrorResponse,
+        summary="Get job error details",
+        description="Retrieve structured error information for a specific job.",
+    )
+    async def get_job_error(
+        task_id: str,
+        job_uuid: str,
+        username: str = Depends(get_current_user),
+    ) -> JobErrorResponse:
+        """
+        Get structured error details for a failed job.
+
+        Returns a structured object with state, availability flag,
+        short message, and full traceback.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID to query.
+
+        Returns:
+            A JobErrorResponse with error details.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        try:
+            return service.get_job_error_detail(task_id, job_uuid, manager_getter)
+        except QueryError as e:
+            # Convert "job not found in task" to 404
+            if "not found in task" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            # Convert other query failures to 500
+            else:
+                raise HTTPException(status_code=500, detail=str(e))
+
+    # -------------------------------------------------------------------------
+    # POST /frontend/tasks/{task_id}/stop - Stop task
+    # -------------------------------------------------------------------------
+
+    @router.post(
+        "/tasks/{task_id}/stop",
+        response_model=StopResultResponse,
+        summary="Stop a task",
+        description="Stop all running/waiting jobs for a task. Returns per-job results.",
+    )
+    @handle_query_errors
+    async def stop_task(
+        task_id: str,
+        username: str = Depends(get_current_user),
+    ) -> StopResultResponse:
+        """
+        Stop all stoppable jobs for a task.
+
+        Jobs in COMPLETED, FAILED, or other terminal states are skipped.
+        Returns lists of stopped, skipped, and failed-to-stop job UUIDs.
+
+        Args:
+            task_id: The task identifier.
+
+        Returns:
+            A StopResultResponse with per-job outcomes.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        manager = manager_getter()
+        result = manager.stop_task_jobs(task_id)
+
+        # Convert the dictionary result to StopResultResponse
+        failed_items = [
+            StopFailedItem(uuid=f["uuid"], error=f["error"])
+            for f in result["failed"]
+        ]
+
+        return StopResultResponse(
+            stopped=result["stopped"],
+            skipped=result["skipped"],
+            failed=failed_items,
+        )
+
+    # -------------------------------------------------------------------------
+    # DELETE /frontend/tasks/{task_id} - Delete task
+    # -------------------------------------------------------------------------
+
+    @router.delete(
+        "/tasks/{task_id}",
+        status_code=204,
+        summary="Delete a task",
+        description="Stop running jobs and delete local task records.",
+    )
+    @handle_query_errors
+    async def delete_task(
+        task_id: str,
+        username: str = Depends(get_current_user),
+    ) -> Response:
+        """
+        Delete a task: stop all running jobs, then remove local records.
+
+        If any job fails to stop, the local record is preserved and an
+        error is returned with details about which jobs could not be stopped.
+
+        Args:
+            task_id: The task identifier.
+
+        Returns:
+            204 No Content on success.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        try:
+            manager = manager_getter()
+            manager.delete_task_record(task_id)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+            )
+
+        return Response(status_code=204)
 
     # -------------------------------------------------------------------------
     # POST /frontend/structures/validate - POSCAR validation

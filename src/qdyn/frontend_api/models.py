@@ -8,7 +8,7 @@ plus derived status for UI consumption.
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JobStatusItem(BaseModel):
@@ -58,7 +58,7 @@ class TaskSummary(BaseModel):
     derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "ERROR"
     total_jobs: int
     # Optional: names of failed jobs for quick identification
-    failed_job_names: List[str] = []
+    failed_job_names: List[str] = Field(default_factory=list)
 
 
 class TaskSummaryListResponse(BaseModel):
@@ -66,6 +66,30 @@ class TaskSummaryListResponse(BaseModel):
 
     total: int
     items: List[TaskSummary]
+
+
+class JobErrorResponse(BaseModel):
+    """Structured error information for a failed job."""
+
+    state: str
+    available: bool
+    message: Optional[str] = None
+    traceback: Optional[str] = None
+
+
+class StopFailedItem(BaseModel):
+    """Information about a job that failed to stop."""
+
+    uuid: str
+    error: str
+
+
+class StopResultResponse(BaseModel):
+    """Result of a stop operation, showing per-job outcomes."""
+
+    stopped: List[str] = Field(default_factory=list)
+    skipped: List[str] = Field(default_factory=list)
+    failed: List[StopFailedItem] = Field(default_factory=list)
 
 
 class StructureValidationRequest(BaseModel):

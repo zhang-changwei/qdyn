@@ -52,6 +52,21 @@ class QueryError(Exception):
     pass
 
 
+# States that can be stopped via jc.stop_job()
+# States where the job has been submitted to the compute queue and can be cancelled.
+# WAITING and READY jobs are not yet on the queue, so they cannot (and need not) be stopped.
+_STOPPABLE_STATES = {
+    "SUBMITTED",
+    "CHECKED_OUT",
+    "UPLOADED",
+    "BATCH_SUBMITTED",
+    "BATCH_RUNNING",
+    "RUNNING",
+    "RUN_FINISHED",
+    "DOWNLOADED",
+}
+
+
 class MainWorkflow:
 
     def __init__(self, config_path: Optional[str] = None):
@@ -158,7 +173,8 @@ class MainWorkflow:
         prev_task_id: str,
     ) -> None:
         """Validate inputs before building the workflow. Raises
-        ValidationError or ResumeError with a clear message."""
+        ValidationError, ResumeError, or NotImplementedError with a
+        clear message."""
         software = input.basic_input.software
         if not (software == 'vasp' and method == 'namd'):
             raise NotImplementedError(
@@ -635,33 +651,6 @@ class MainWorkflow:
         return task_id, job_ids
 
 
-    def stop_task(self, task_id: str) -> None:
-        """Request termination of all jobs for a task via jobflow-remote.
-
-        This delegates to ``JobController.stop_job`` for each job UUID
-        belonging to the task so that the underlying queue adapter
-        (Slurm, PBS, etc.) performs the actual cancellation. Task and
-        job metadata in SQLite and in the jobflow store are preserved.
-        """
-
-        # Validate task existence first (may raise ValidationError).
-        job_ids = self.list_task_jobs(task_id)
-
-        jc = self._ensure_job_controller()
-
-        # Flatten step -> [job_uuid] to a single list, and stop in
-        # reverse order (later jobs first) to respect dependencies.
-        jobs_flatten: list[str] = []
-        for job_list in job_ids.values():
-            jobs_flatten.extend(job_list)
-
-        for job_uuid in jobs_flatten[::-1]:
-            try:
-                jc.stop_job(job_id=job_uuid)
-            except Exception as exc:
-                pass
-
-
     def list_tasks(self) -> List[str]:
         """Return all task IDs known to this instance (local-memory view)."""
         return list(self.task_ids)
@@ -707,3 +696,85 @@ class MainWorkflow:
             self.task_ids.append(tid)
             self.job_ids[tid] = json.loads(row["job_ids"])
         return len(rows)
+
+    def stop_task_jobs(self, task_id: str) -> Dict[str, List[str] | List[Dict[str, str]]]:
+        """
+        Stop all stoppable jobs for a task with detailed per-job results.
+
+        Returns a dictionary with keys: 'stopped', 'skipped', 'failed'
+        where each key maps to a list of job UUIDs or failed job info.
+        """
+        # Validate task existence first (may raise ValidationError)
+        job_ids = self.list_task_jobs(task_id)
+
+        jc = self._ensure_job_controller()
+
+        stopped: List[str] = []
+        skipped: List[str] = []
+        failed: List[Dict[str, str]] = []
+
+        # Flatten step -> [job_uuid] to a single list
+        jobs_flatten: list[str] = []
+        for job_list in job_ids.values():
+            jobs_flatten.extend(job_list)
+
+        for job_uuid in jobs_flatten[::-1]:  # reverse order to respect dependencies
+            # Query the current state of the job
+            try:
+                job_info = jc.get_job_info(job_id=job_uuid)
+                if job_info is None:
+                    # Job not found - assume it's already been cleaned up
+                    skipped.append(job_uuid)
+                    continue
+                raw_state = job_info.state.value
+            except Exception as exc:
+                # Query failed - this is a real error
+                failed.append({"uuid": job_uuid, "error": f"Query failed: {exc}"})
+                continue
+
+            # Only stop jobs that are in a stoppable state
+            if raw_state not in _STOPPABLE_STATES:
+                skipped.append(job_uuid)
+                continue
+
+            # Attempt to stop the job
+            try:
+                jc.stop_job(job_id=job_uuid)
+                stopped.append(job_uuid)
+            except Exception as exc:
+                failed.append({"uuid": job_uuid, "error": str(exc)})
+
+        return {
+            "stopped": stopped,
+            "skipped": skipped,
+            "failed": failed
+        }
+
+    def delete_task_record(self, task_id: str) -> None:
+        """
+        Delete a task's local records after ensuring all stoppable jobs are stopped.
+
+        If any jobs fail to stop, raises RuntimeError with details.
+        """
+        # First try to stop all stoppable jobs
+        stop_result = self.stop_task_jobs(task_id)
+
+        # If any stop failed, abort deletion
+        if stop_result["failed"]:
+            failed_details = "; ".join(
+                f"{f['uuid']}: {f['error']}" for f in stop_result["failed"]
+            )
+            raise RuntimeError(
+                f"Cannot delete task: {len(stop_result['failed'])} job(s) failed to stop. "
+                f"Details: {failed_details}"
+            )
+
+        # Delete local database records
+        from .database import qdyndb
+        qdyndb.delete_task_record(task_id)
+
+        # Remove from in-memory tracking
+        if task_id in self.task_ids:
+            self.task_ids.remove(task_id)
+        if task_id in self.job_ids:
+            del self.job_ids[task_id]
