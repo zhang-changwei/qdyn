@@ -10,7 +10,31 @@
         <span class="task-id" :title="task.task_id">
           {{ truncatedTaskId }}
         </span>
-        <StatusBadge :status="task.derived_status" />
+        <div class="task-header-right">
+          <!-- Action buttons -->
+          <div class="card-actions" @click.stop>
+            <el-button
+              v-if="isRunning"
+              type="warning"
+              plain
+              size="small"
+              :loading="stopping"
+              @click="handleStop"
+            >
+              Stop
+            </el-button>
+            <el-button
+              type="danger"
+              plain
+              size="small"
+              :loading="deleting"
+              @click="handleDelete"
+            >
+              Delete
+            </el-button>
+          </div>
+          <StatusBadge :status="task.derived_status" />
+        </div>
       </div>
 
       <div class="task-meta">
@@ -41,9 +65,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Timer, List, User, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import { stopTask, deleteTask } from '@/api/tasks'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
 
@@ -51,7 +77,15 @@ const props = defineProps<{
   task: TaskSummary
 }>()
 
+const emit = defineEmits<{
+  (e: 'task-deleted', taskId: string): void
+  (e: 'task-stopped', taskId: string): void
+}>()
+
 const router = useRouter()
+
+const stopping = ref(false)
+const deleting = ref(false)
 
 const truncatedTaskId = computed((): string => {
   const id = props.task.task_id
@@ -79,8 +113,74 @@ const failedJobsDisplay = computed((): string => {
   return `${names.slice(0, 2).join(', ')} +${names.length - 2} more`
 })
 
+// Whether the task has running/waiting jobs (shows Stop button)
+const isRunning = computed((): boolean => {
+  return props.task.derived_status === 'RUNNING' || props.task.derived_status === 'PENDING'
+})
+
 function handleClick(): void {
   router.push({ name: 'task-detail', params: { taskId: props.task.task_id } })
+}
+
+async function handleStop(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      'All running computations will be cancelled. Results from completed steps will be preserved.',
+      'Confirm Stop',
+      {
+        confirmButtonText: 'Stop',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return // User cancelled
+  }
+
+  stopping.value = true
+  try {
+    const result = await stopTask(props.task.task_id)
+    if (result.failed.length > 0) {
+      const failedDetails = result.failed.map(f => `${f.uuid.slice(0, 8)}: ${f.error}`).join(', ')
+      ElMessage.warning(`Some jobs failed to stop: ${failedDetails}`)
+    } else {
+      ElMessage.success('Task stopped successfully')
+    }
+    emit('task-stopped', props.task.task_id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to stop task'
+    ElMessage.error(message)
+  } finally {
+    stopping.value = false
+  }
+}
+
+async function handleDelete(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      'All running computations will be cancelled and the task record will be removed.',
+      'Confirm Delete',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'error'
+      }
+    )
+  } catch {
+    return // User cancelled
+  }
+
+  deleting.value = true
+  try {
+    await deleteTask(props.task.task_id)
+    ElMessage.success('Task deleted')
+    emit('task-deleted', props.task.task_id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to delete task'
+    ElMessage.error(message)
+  } finally {
+    deleting.value = false
+  }
 }
 </script>
 
@@ -104,6 +204,17 @@ function handleClick(): void {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.task-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .task-id {

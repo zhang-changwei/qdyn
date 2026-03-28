@@ -51,11 +51,13 @@ import { ElMessage } from 'element-plus'
 
 const emit = defineEmits<{
   (e: 'file-loaded', content: string): void
+  (e: 'clear'): void
 }>()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragover = ref(false)
 const fileName = ref('')
+const currentFileToken = ref<string | null>(null) // Track current file to prevent race condition
 
 function triggerFileInput(): void {
   fileInputRef.value?.click()
@@ -93,16 +95,37 @@ function handleFileChange(event: Event): void {
 }
 
 function processFile(file: File): void {
+  // Generate a unique token for this file to prevent race conditions
+  const fileToken = Date.now().toString()
+  currentFileToken.value = fileToken
+
   if (!isValidPoscarFile(file)) {
     ElMessage.error('Please upload a valid POSCAR file')
+    // Clear local state immediately for invalid files
+    fileName.value = ''
+    if (fileInputRef.value) {
+      fileInputRef.value.value = ''
+    }
+    emit('clear')
     return
   }
 
   const reader = new FileReader()
   reader.onload = (e): void => {
+    // Only process if this is still the current file
+    if (currentFileToken.value !== fileToken) {
+      return // This is an outdated file read
+    }
+
     const content = e.target?.result as string
     if (!content || content.trim().length === 0) {
       ElMessage.error('File is empty')
+      // Clear local state immediately for empty files
+      fileName.value = ''
+      if (fileInputRef.value) {
+        fileInputRef.value.value = ''
+      }
+      emit('clear')
       return
     }
 
@@ -112,7 +135,16 @@ function processFile(file: File): void {
   }
 
   reader.onerror = (): void => {
-    ElMessage.error('Failed to read file')
+    // Only show error if this is still the current file
+    if (currentFileToken.value === fileToken) {
+      ElMessage.error('Failed to read file')
+      // Clear local state immediately for read errors
+      fileName.value = ''
+      if (fileInputRef.value) {
+        fileInputRef.value.value = ''
+      }
+      emit('clear')
+    }
   }
 
   reader.readAsText(file)
@@ -132,9 +164,11 @@ function isValidPoscarFile(file: File): boolean {
 
 function clearFile(): void {
   fileName.value = ''
+  currentFileToken.value = null // Invalidate any pending file reads
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
   }
+  emit('clear')
 }
 </script>
 

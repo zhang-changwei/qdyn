@@ -16,14 +16,18 @@ import { useAuthStore } from './stores/auth'
 const app = createApp(App)
 const pinia = createPinia()
 
-// Install plugins (order matters: Pinia must be before Router for auth guards)
+// Install Pinia first so stores are available
 app.use(pinia)
-app.use(router)
 app.use(ElementPlus)
 
-// Initialize auth state from localStorage (must be after Pinia is installed)
+// Initialize auth state from localStorage BEFORE installing the router.
+// Router guards check authStore.isAuthenticated, so the store must have
+// restored the token from localStorage before guards execute.
 const authStore = useAuthStore()
 authStore.init()
+
+// Install router after auth state is restored
+app.use(router)
 
 // Mount the application
 app.mount('#app')

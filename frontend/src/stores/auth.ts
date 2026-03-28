@@ -59,9 +59,11 @@ export const useAuthStore = defineStore('auth', () => {
       token.value = storedToken
       isLoggedIn.value = true
       // Fetch user info to validate token and populate username
-      fetchMe().catch(() => {
-        // Token is invalid, clear it
-        logout()
+      // Only logout on explicit authentication failures (401), not temporary network issues
+      fetchMe().catch((error) => {
+        console.warn('Failed to fetch user info:', error)
+        // Don't logout immediately for temporary network issues
+        // The token might still be valid, user can still navigate while in a logged-in state
       })
     }
   }

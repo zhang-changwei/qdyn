@@ -14,6 +14,7 @@
  * - fetchTaskList(): Get task summary list
  * - fetchTaskDetail(taskId): Get task detail
  * - fetchJobsStatus(taskId): Get all jobs status for a task
+ * - fetchJobsStatusSilent(taskId): Get jobs status without setting loading/error (for polling)
  */
 
 import { defineStore } from 'pinia'
@@ -50,41 +51,6 @@ export const useTasksStore = defineStore('tasks', () => {
   const error = ref<string | null>(null)
 
   // ============================================
-  // Helper Functions
-  // ============================================
-
-  /**
-   * Derive a simple status label from derived_status
-   * For use in UI components that need a single status string
-   */
-  function getStatusLabel(derivedStatus: string): string {
-    const statusMap: Record<string, string> = {
-      RUNNING: 'Running',
-      COMPLETED: 'Completed',
-      FAILED: 'Failed',
-      PENDING: 'Pending',
-      PAUSED: 'Paused',
-      ERROR: 'Error'
-    }
-    return statusMap[derivedStatus] || derivedStatus
-  }
-
-  /**
-   * Get status type for Element Plus tag component
-   */
-  function getStatusType(derivedStatus: string): '' | 'success' | 'warning' | 'info' | 'danger' {
-    const typeMap: Record<string, '' | 'success' | 'warning' | 'info' | 'danger'> = {
-      RUNNING: 'warning',
-      COMPLETED: 'success',
-      FAILED: 'danger',
-      PENDING: 'info',
-      PAUSED: '',
-      ERROR: 'danger'
-    }
-    return typeMap[derivedStatus] || 'info'
-  }
-
-  // ============================================
   // Actions
   // ============================================
 
@@ -111,7 +77,7 @@ export const useTasksStore = defineStore('tasks', () => {
 
   /**
    * Fetch task detail by ID
-   * Updates currentTask state on success
+   * Updates both currentTask and currentJobsStatus state on success
    */
   async function fetchTaskDetail(taskId: string): Promise<TaskDetail> {
     loading.value = true
@@ -120,6 +86,7 @@ export const useTasksStore = defineStore('tasks', () => {
     try {
       const response = await getTaskDetail(taskId)
       currentTask.value = response
+      currentJobsStatus.value = response
       return response
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch task detail'
@@ -132,7 +99,7 @@ export const useTasksStore = defineStore('tasks', () => {
 
   /**
    * Fetch all jobs status for a task
-   * Updates currentJobsStatus state on success
+   * Updates both currentJobsStatus and currentTask state on success
    */
   async function fetchJobsStatus(taskId: string): Promise<TaskJobsStatusResponse> {
     loading.value = true
@@ -141,6 +108,10 @@ export const useTasksStore = defineStore('tasks', () => {
     try {
       const response = await getTaskJobsStatus(taskId)
       currentJobsStatus.value = response
+      // Also update currentTask to keep status in sync
+      if (currentTask.value) {
+        currentTask.value = response
+      }
       return response
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch jobs status'
@@ -148,6 +119,25 @@ export const useTasksStore = defineStore('tasks', () => {
       throw err
     } finally {
       loading.value = false
+    }
+  }
+
+  /**
+   * Fetch all jobs status for a task silently (for polling).
+   * Does NOT update loading or error state.
+   */
+  async function fetchJobsStatusSilent(taskId: string): Promise<TaskJobsStatusResponse> {
+    try {
+      const response = await getTaskJobsStatus(taskId)
+      currentJobsStatus.value = response
+      // Also update currentTask to keep status in sync
+      if (currentTask.value) {
+        currentTask.value = response
+      }
+      return response
+    } catch {
+      // Silently ignore polling errors
+      throw new Error('Polling failed')
     }
   }
 
@@ -177,13 +167,11 @@ export const useTasksStore = defineStore('tasks', () => {
     currentJobsStatus,
     loading,
     error,
-    // Helper Functions
-    getStatusLabel,
-    getStatusType,
     // Actions
     fetchTaskList,
     fetchTaskDetail,
     fetchJobsStatus,
+    fetchJobsStatusSilent,
     clearCurrentTask,
     clearAll
   }

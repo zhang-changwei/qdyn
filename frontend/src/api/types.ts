@@ -1,9 +1,5 @@
 /**
  * TypeScript type definitions matching backend Pydantic models
- *
- * References:
- * - Plan v3.3 §2.5: Task status models (JobStatusItem, TaskJobsStatusResponse, etc.)
- * - Plan v3.3 §2.2: Unified response format
  */
 
 // ============================================
@@ -23,7 +19,7 @@ export interface ApiResponse<T> {
 }
 
 // ============================================
-// Job Status Types (§2.5)
+// Job Status Types
 // ============================================
 
 /**
@@ -78,7 +74,7 @@ export interface TaskJobsStatusResponse {
 }
 
 // ============================================
-// Task Summary Types (§2.5)
+// Task Summary Types
 // ============================================
 
 /**
@@ -159,6 +155,43 @@ export interface HealthResponse {
   status: 'ok' | 'degraded'
   version: string
   timestamp: number
+}
+
+// ============================================
+// Job Error Types
+// ============================================
+
+/**
+ * Job error detail response
+ * Returned by GET /frontend/tasks/{taskId}/jobs/{jobUuid}/error
+ */
+export interface JobErrorResponse {
+  state: string
+  available: boolean
+  message: string | null
+  traceback: string | null
+}
+
+// ============================================
+// Task Operation Types
+// ============================================
+
+/**
+ * Stop failed item - describes a single job that failed to stop
+ */
+export interface StopFailedItem {
+  uuid: string
+  error: string
+}
+
+/**
+ * Stop result response
+ * Returned by POST /frontend/tasks/{taskId}/stop
+ */
+export interface StopResultResponse {
+  stopped: string[]
+  skipped: string[]
+  failed: StopFailedItem[]
 }
 
 // ============================================

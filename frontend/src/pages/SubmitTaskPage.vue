@@ -21,7 +21,10 @@
         <template #header>
           <span class="section-title">1. Structure (POSCAR)</span>
         </template>
-        <PoscarUploader @file-loaded="handlePoscarLoaded" />
+        <PoscarUploader
+          @file-loaded="handlePoscarLoaded"
+          @clear="handlePoscarCleared"
+        />
         <el-alert
           v-if="poscarValidation"
           :title="poscarValidation.valid ? 'Structure valid' : 'Validation failed'"
@@ -40,7 +43,7 @@
           <span class="section-title">2. Workflow Steps</span>
         </template>
         <el-form-item prop="steps">
-          <StepSelector v-model="formData.steps" />
+          <StepSelector v-model="formData.steps" :resume="false" />
         </el-form-item>
       </el-card>
 
@@ -52,7 +55,14 @@
         <el-form-item label="NAMD Method">
           <el-radio-group v-model="formData.method">
             <el-radio value="namd">NAMD (Standard)</el-radio>
-            <el-radio value="n2amd">N2AMD</el-radio>
+            <el-tooltip
+              content="Not yet supported, coming soon"
+              placement="top"
+            >
+              <span class="disabled-radio-wrapper">
+                <el-radio value="n2amd" disabled>N2AMD</el-radio>
+              </span>
+            </el-tooltip>
           </el-radio-group>
         </el-form-item>
       </el-card>
@@ -422,6 +432,7 @@ const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const poscarContent = ref('')
 const poscarValidation = ref<ValidatePoscarResponse | null>(null)
+const poscarVersion = ref(0) // Used to prevent race condition in validation
 
 // --- Default input objects matching backend Pydantic models exactly ---
 
@@ -587,17 +598,31 @@ watch(
 
 async function handlePoscarLoaded(content: string): Promise<void> {
   poscarContent.value = content
+  poscarVersion.value++ // Increment version to track this request
+  const currentVersion = poscarVersion.value
   poscarValidation.value = null
 
   try {
     const result = await validatePoscar(content)
-    poscarValidation.value = result
+    // Only update validation if this is the latest request
+    if (poscarVersion.value === currentVersion) {
+      poscarValidation.value = result
+    }
   } catch (error) {
-    poscarValidation.value = {
-      valid: false,
-      error: error instanceof Error ? error.message : 'Validation failed'
+    // Only update error if this is the latest request
+    if (poscarVersion.value === currentVersion) {
+      poscarValidation.value = {
+        valid: false,
+        error: error instanceof Error ? error.message : 'Validation failed'
+      }
     }
   }
+}
+
+function handlePoscarCleared(): void {
+  poscarContent.value = ''
+  poscarValidation.value = null
+  poscarVersion.value++ // Increment version to invalidate pending validations
 }
 
 function goBack(): void {
@@ -728,5 +753,10 @@ async function handleSubmit(): Promise<void> {
 
 :deep(.el-select) {
   width: 100%;
+}
+
+.disabled-radio-wrapper {
+  display: inline-block;
+  /* Remove pointer-events: none to allow tooltip to work */
 }
 </style>

@@ -8,7 +8,6 @@
  */
 
 import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
-import { ElMessage } from 'element-plus'
 
 const TOKEN_KEY = 'qdyn_token'
 
@@ -57,51 +56,12 @@ http.interceptors.response.use(
       if (currentPath !== '/login') {
         window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`
       }
-    } else {
-      // Extract error message from response or use default
-      const message = extractErrorMessage(error)
-      ElMessage.error(message)
     }
 
     return Promise.reject(error)
   }
 )
 
-/**
- * Extract human-readable error message from Axios error
- */
-function extractErrorMessage(error: AxiosError): string {
-  if (error.response?.data) {
-    const data = error.response.data as { detail?: string; message?: string; error?: { message?: string } }
-
-    // FastAPI validation error format
-    if (data.detail) {
-      return data.detail
-    }
-
-    // Custom error format from /frontend/* endpoints
-    if (data.error?.message) {
-      return data.error.message
-    }
-
-    // Fallback to message field
-    if (data.message) {
-      return data.message
-    }
-  }
-
-  // Network error
-  if (error.message === 'Network Error') {
-    return 'Network error. Please check your connection.'
-  }
-
-  // Timeout
-  if (error.code === 'ECONNABORTED') {
-    return 'Request timeout. Please try again.'
-  }
-
-  return error.message || 'An unexpected error occurred'
-}
 
 export default http
 export { TOKEN_KEY }

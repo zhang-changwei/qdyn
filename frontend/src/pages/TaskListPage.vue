@@ -4,11 +4,21 @@
     <el-header class="page-header">
       <div class="header-content">
         <h1 class="page-title">QDYN Tasks</h1>
-        <div class="user-info">
-          <span class="username">{{ authStore.username }}</span>
-          <el-button type="danger" plain @click="handleLogout">
-            Logout
+        <div class="header-right">
+          <!-- Refresh button -->
+          <el-button
+            plain
+            :loading="refreshing"
+            @click="refreshTaskList"
+          >
+            <el-icon><Refresh /></el-icon>
           </el-button>
+          <div class="user-info">
+            <span class="username">{{ authStore.username }}</span>
+            <el-button type="danger" plain @click="handleLogout">
+              Logout
+            </el-button>
+          </div>
         </div>
       </div>
     </el-header>
@@ -26,28 +36,20 @@
         />
       </div>
 
-      <!-- Task list -->
+      <!-- Task list (shown when data is available, even if a refresh later failed) -->
       <div v-else-if="taskList && taskList.items.length > 0" class="task-grid">
         <TaskCard
           v-for="task in taskList.items"
           :key="task.task_id"
           :task="task"
+          @task-deleted="onTaskDeleted"
+          @task-stopped="onTaskStopped"
         />
       </div>
 
-      <!-- Empty state -->
-      <el-empty
-        v-else
-        description="No tasks found. Submit your first task to get started."
-      >
-        <el-button type="primary" @click="goToSubmit">
-          Submit Task
-        </el-button>
-      </el-empty>
-
-      <!-- Error state -->
+      <!-- Error state (shown only when no data is available, takes priority over empty state) -->
       <el-result
-        v-if="error && !taskList"
+        v-else-if="error"
         icon="error"
         :title="error"
       >
@@ -57,6 +59,16 @@
           </el-button>
         </template>
       </el-result>
+
+      <!-- Empty state (shown when data loaded successfully but list is empty) -->
+      <el-empty
+        v-else
+        description="No tasks found. Submit your first task to get started."
+      >
+        <el-button type="primary" @click="goToSubmit">
+          Submit Task
+        </el-button>
+      </el-empty>
     </el-main>
 
     <!-- Floating action button -->
@@ -73,9 +85,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useTasksStore } from '@/stores/tasks'
 import TaskCard from '@/components/TaskCard.vue'
@@ -88,15 +100,20 @@ const taskList = computed(() => tasksStore.taskList)
 const loading = computed(() => tasksStore.loading)
 const error = computed(() => tasksStore.error)
 
+const refreshing = ref(false)
+
 onMounted(() => {
   refreshTaskList()
 })
 
 async function refreshTaskList(): Promise<void> {
+  refreshing.value = true
   try {
     await tasksStore.fetchTaskList()
   } catch {
     // Error is already stored in tasksStore.error
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -106,6 +123,16 @@ function handleLogout(): void {
 
 function goToSubmit(): void {
   router.push({ name: 'submit-task' })
+}
+
+// Handle task deletion from TaskCard
+function onTaskDeleted(_taskId: string): void {
+  refreshTaskList()
+}
+
+// Handle task stopped from TaskCard
+function onTaskStopped(_taskId: string): void {
+  refreshTaskList()
 }
 </script>
 
@@ -134,6 +161,12 @@ function goToSubmit(): void {
   margin: 0;
   font-size: 20px;
   color: var(--el-text-color-primary);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .user-info {

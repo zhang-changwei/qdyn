@@ -1,11 +1,14 @@
 /**
  * Task API module
  *
- * Endpoints (all under /frontend prefix, wrapped in { success, data }):
+ * Endpoints (all under /frontend prefix):
  * - GET /frontend/tasks/summary - Get task summary list
  * - GET /frontend/tasks/{taskId} - Get task detail
  * - GET /frontend/tasks/{taskId}/jobs/status - Get all jobs status for a task
  * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/status - Get single job detail
+ * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/error - Get job error details
+ * - POST /frontend/tasks/{taskId}/stop - Stop all running jobs
+ * - DELETE /frontend/tasks/{taskId} - Delete a task
  */
 
 import http from './http'
@@ -14,7 +17,9 @@ import type {
   TaskSummaryListResponse,
   TaskDetail,
   TaskJobsStatusResponse,
-  JobStatusDetailResponse
+  JobStatusDetailResponse,
+  JobErrorResponse,
+  StopResultResponse
 } from './types'
 
 /**
@@ -80,4 +85,32 @@ export async function getJobStatusDetail(taskId: string, jobUuid: string): Promi
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/status`
   )
   return normalizeResponse(response.data)
+}
+
+/**
+ * Fetch job error details for a failed job
+ */
+export async function fetchJobError(taskId: string, jobUuid: string): Promise<JobErrorResponse> {
+  const response = await http.get<ApiResponse<JobErrorResponse> | JobErrorResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/error`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Stop all running/waiting jobs for a task
+ */
+export async function stopTask(taskId: string): Promise<StopResultResponse> {
+  const response = await http.post<ApiResponse<StopResultResponse> | StopResultResponse>(
+    `/frontend/tasks/${taskId}/stop`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Delete a task: stop running jobs and remove local records
+ * Returns void on success (204 No Content)
+ */
+export async function deleteTask(taskId: string): Promise<void> {
+  await http.delete(`/frontend/tasks/${taskId}`)
 }

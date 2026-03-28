@@ -29,7 +29,8 @@
 
     <div class="step-hint">
       <el-text type="info" size="small">
-        Steps must be selected in order: nvt, nvt + nve, nvt + nve + scf, etc.
+        <span v-if="resume">Resume mode: Select any steps freely. Validation will be handled by the backend.</span>
+        <span v-else>Steps must be selected in order: nvt, nvt + nve, nvt + nve + scf, etc.</span>
       </el-text>
     </div>
   </div>
@@ -39,9 +40,12 @@
 import { computed } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: string[]
-}>()
+  resume?: boolean
+}>(), {
+  resume: false
+})
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string[]): void
@@ -65,6 +69,11 @@ const stepOrder = computed((): string[] => {
 })
 
 function isStepSelectable(step: string): boolean {
+  // In resume mode, allow flexible selection of any step
+  if (props.resume) {
+    return true
+  }
+
   if (props.modelValue.length === 0) {
     return step === 'nvt'
   }
@@ -91,6 +100,30 @@ function isPreviousStepSelected(step: string): boolean {
 
 function handleUpdate(newValue: string[]): void {
   const sortedValue = sortSteps(newValue)
+
+  // Auto-trim: when a step is deselected, remove all subsequent steps
+  // Exception: in resume mode, allow flexible selection
+  if (!props.resume && sortedValue.length < props.modelValue.length) {
+    // Find which step was removed
+    const removedSteps = props.modelValue.filter(s => !sortedValue.includes(s))
+    if (removedSteps.length > 0) {
+      // Find the earliest removed step index
+      let minRemovedIndex = stepOrder.value.length
+      for (const removed of removedSteps) {
+        const idx = stepOrder.value.indexOf(removed)
+        if (idx < minRemovedIndex) {
+          minRemovedIndex = idx
+        }
+      }
+      // Keep only steps before the earliest removed step
+      const trimmed = sortedValue.filter(
+        s => stepOrder.value.indexOf(s) < minRemovedIndex
+      )
+      emit('update:modelValue', trimmed)
+      return
+    }
+  }
+
   emit('update:modelValue', sortedValue)
 }
 
