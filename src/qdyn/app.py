@@ -61,6 +61,13 @@ async def lifespan(app: FastAPI):
     restored = manager.restore_from_db(qdyndb.get_db())
     logging.info(f"Restored {restored} tasks from database.")
 
+    # Pre-warm MongoDB connection at startup so the first request is fast
+    try:
+        manager._ensure_job_controller()
+        logging.info("MongoDB connection pre-warmed successfully.")
+    except Exception as exc:
+        logging.warning(f"Failed to pre-warm MongoDB connection: {exc}")
+
     yield
 
     # cleanup

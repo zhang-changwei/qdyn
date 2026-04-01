@@ -6,6 +6,7 @@ implementing a unified response format and dependency injection pattern
 to avoid circular imports with app.py.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 from functools import wraps
@@ -118,7 +119,10 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         @wraps(func)
         async def wrapper(*args, **kwargs):
             try:
-                return await func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                if asyncio.iscoroutine(result):
+                    return await result
+                return result
             except QueryError as e:
                 raise HTTPException(status_code=404, detail=str(e))
             except ValidationError as e:
@@ -135,7 +139,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get task summary list",
         description="Retrieve a list of task summaries for the authenticated user.",
     )
-    async def get_task_summaries(
+    def get_task_summaries(
         username: str = Depends(get_current_user),
     ) -> TaskSummaryListResponse:
         """
@@ -161,7 +165,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get task detail",
         description="Retrieve detailed status for all jobs under a specific task.",
     )
-    async def get_task_detail(
+    def get_task_detail(
         task_id: str,
         username: str = Depends(get_current_user),
     ) -> TaskJobsStatusResponse:
@@ -188,7 +192,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get all job statuses for a task",
         description="Retrieve the status of all jobs under a specific task.",
     )
-    async def get_task_jobs_status(
+    def get_task_jobs_status(
         task_id: str,
         username: str = Depends(get_current_user),
     ) -> Dict[str, Any]:
@@ -219,7 +223,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         description="Retrieve detailed status for a specific job. For detailed error info, use /error endpoint.",
     )
     @handle_query_errors
-    async def get_job_status_detail(
+    def get_job_status_detail(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -271,7 +275,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get job error details",
         description="Retrieve structured error information for a specific job.",
     )
-    async def get_job_error(
+    def get_job_error(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -312,7 +316,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         description="Stop all running/waiting jobs for a task. Returns per-job results.",
     )
     @handle_query_errors
-    async def stop_task(
+    def stop_task(
         task_id: str,
         username: str = Depends(get_current_user),
     ) -> StopResultResponse:
@@ -356,7 +360,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         description="Stop running jobs and delete local task records.",
     )
     @handle_query_errors
-    async def delete_task(
+    def delete_task(
         task_id: str,
         username: str = Depends(get_current_user),
     ) -> Response:
@@ -394,7 +398,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Validate POSCAR structure",
         description="Pre-validate a POSCAR structure string before submission.",
     )
-    async def validate_structure(
+    def validate_structure(
         payload: StructureValidationRequest,
         username: str = Depends(get_current_user),
     ) -> Dict[str, Any]:
@@ -452,7 +456,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="List files in a job's run directory",
         description="Retrieve a list of whitelisted files from a job's run directory.",
     )
-    async def list_job_files_endpoint(
+    def list_job_files_endpoint(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -488,7 +492,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Download a file from a job's run directory",
         description="Serve a single whitelisted file from the job's run directory.",
     )
-    async def get_job_file_endpoint(
+    def get_job_file_endpoint(
         task_id: str,
         job_uuid: str,
         filename: str,
@@ -537,7 +541,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get job progress",
         description="Retrieve progress information for a running or completed job.",
     )
-    async def get_job_progress_endpoint(
+    def get_job_progress_endpoint(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -568,7 +572,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get job input parameters",
         description="Retrieve parsed INCAR and KPOINTS for a specific job.",
     )
-    async def get_job_input_params_endpoint(
+    def get_job_input_params_endpoint(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -599,7 +603,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get job result images",
         description="Retrieve result images for a completed job.",
     )
-    async def get_job_images_endpoint(
+    def get_job_images_endpoint(
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
@@ -630,7 +634,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         summary="Get MD timeseries data",
         description="Retrieve full MD time-series data (temperature, energies) for NVT/NVE jobs.",
     )
-    async def get_job_md_timeseries_endpoint(
+    def get_job_md_timeseries_endpoint(
         task_id: str,
         job_uuid: str,
         attempt: int | None = Query(None, ge=1),

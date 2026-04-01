@@ -57,6 +57,7 @@
         <el-table
           v-if="jobsStatus && jobsStatus.jobs.length > 0"
           :data="sortedJobs"
+          row-key="uuid"
           stripe
           @expand-change="handleExpandChange"
         >
@@ -209,8 +210,18 @@
                           <el-descriptions-item
                             v-for="(val, key) in jobInputParams.get(row.uuid)!.incar!"
                             :key="key"
-                            :label="String(key)"
                           >
+                            <template #label>
+                              <el-tooltip
+                                v-if="INCAR_DESCRIPTIONS[String(key)]"
+                                :content="INCAR_DESCRIPTIONS[String(key)]"
+                                placement="top"
+                                :show-after="300"
+                              >
+                                <span class="incar-key-with-desc">{{ key }}</span>
+                              </el-tooltip>
+                              <span v-else>{{ key }}</span>
+                            </template>
                             {{ val }}
                           </el-descriptions-item>
                         </el-descriptions>
@@ -316,6 +327,7 @@ import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobPro
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
+import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
 import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse, JobInputParamsResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
@@ -987,6 +999,11 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .incar-table :deep(.el-descriptions__content) {
   font-family: monospace;
   font-size: 12px;
+}
+
+.incar-key-with-desc {
+  border-bottom: 1px dashed var(--el-text-color-secondary);
+  cursor: help;
 }
 
 .kpoints-pre {

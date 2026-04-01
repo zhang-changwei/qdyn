@@ -78,47 +78,65 @@
           <h4 class="step-params-title">NVT Parameters</h4>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="Initial Temperature (K)">
+              <el-form-item>
+                <template #label>
+                  <span>Initial Temperature (K) <el-tooltip content="Initial temperature in K" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nvt_input.temp_begin"
                   :min="1"
                   :max="10000"
+                  :step="50"
                   :precision="1"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Final Temperature (K)">
+              <el-form-item>
+                <template #label>
+                  <span>Final Temperature (K) <el-tooltip content="Final temperature in K" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nvt_input.temp_end"
                   :min="1"
                   :max="10000"
+                  :step="50"
                   :precision="1"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="MD Time Step (fs)">
+              <el-form-item>
+                <template #label>
+                  <span>MD Time Step (fs) <el-tooltip content="MD time step in fs" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nvt_input.md_dt"
                   :min="0.1"
                   :max="10"
-                  :precision="2"
+                  :step="0.5"
+                  :precision="1"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Number of MD Steps">
+              <el-form-item>
+                <template #label>
+                  <span>Number of MD Steps <el-tooltip content="Number of MD steps" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nvt_input.md_step"
                   :min="100"
                   :max="100000"
-                  :step="100"
+                  :step="500"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="K-point Spacing (1/A)">
+              <el-form-item>
+                <template #label>
+                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nvt_input.kspacing"
                   :min="0.01"
@@ -129,7 +147,10 @@
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Thermostat">
+              <el-form-item>
+                <template #label>
+                  <span>Thermostat <el-tooltip content="MD thermostat method" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-select v-model="formData.nvt_input.md_thermostat">
                   <el-option label="Rescale V" value="rescale_v" />
                   <el-option label="NHC" value="nhc" />
@@ -137,14 +158,13 @@
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="SCF Threshold">
-                <el-input-number
-                  v-model="formData.nvt_input.scf_thr"
-                  :min="1e-8"
-                  :max="1e-3"
-                  :precision="8"
-                  :step="1e-7"
-                />
+              <el-form-item>
+                <template #label>
+                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
+                <el-select v-model="formData.nvt_input.scf_thr">
+                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
+                </el-select>
               </el-form-item>
             </el-col>
           </el-row>
@@ -156,27 +176,37 @@
           <h4 class="step-params-title">NVE Parameters</h4>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="MD Time Step (fs)">
+              <el-form-item>
+                <template #label>
+                  <span>MD Time Step (fs) <el-tooltip content="MD time step in fs" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nve_input.md_dt"
                   :min="0.1"
                   :max="10"
-                  :precision="2"
+                  :step="0.5"
+                  :precision="1"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Number of MD Steps">
+              <el-form-item>
+                <template #label>
+                  <span>Number of MD Steps <el-tooltip content="Number of MD steps" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nve_input.md_step"
                   :min="100"
                   :max="100000"
-                  :step="100"
+                  :step="500"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="K-point Spacing (1/A)">
+              <el-form-item>
+                <template #label>
+                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.nve_input.kspacing"
                   :min="0.01"
@@ -187,14 +217,13 @@
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="SCF Threshold">
-                <el-input-number
-                  v-model="formData.nve_input.scf_thr"
-                  :min="1e-8"
-                  :max="1e-3"
-                  :precision="8"
-                  :step="1e-7"
-                />
+              <el-form-item>
+                <template #label>
+                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
+                <el-select v-model="formData.nve_input.scf_thr">
+                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
+                </el-select>
               </el-form-item>
             </el-col>
           </el-row>
@@ -206,25 +235,36 @@
           <h4 class="step-params-title">SCF Parameters</h4>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="Number of SCF Frames">
+              <el-form-item>
+                <template #label>
+                  <span>Number of SCF Frames <el-tooltip content="Number of SCF frames to calculate" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.scf_input.scf_step"
                   :min="1"
                   :max="10000"
+                  :step="100"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Batch Size">
+              <el-form-item>
+                <template #label>
+                  <span>Batch Size <el-tooltip content="Number of frames per batch task. Smaller batches mean more parallel tasks." placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.scf_input.batch_size"
                   :min="1"
                   :max="500"
+                  :step="10"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="K-point Spacing (1/A)">
+              <el-form-item>
+                <template #label>
+                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input-number
                   v-model="formData.scf_input.kspacing"
                   :min="0.01"
@@ -235,18 +275,20 @@
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="SCF Threshold">
-                <el-input-number
-                  v-model="formData.scf_input.scf_thr"
-                  :min="1e-8"
-                  :max="1e-3"
-                  :precision="8"
-                  :step="1e-7"
-                />
+              <el-form-item>
+                <template #label>
+                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
+                <el-select v-model="formData.scf_input.scf_thr">
+                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
+                </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="All-electron VASP">
+              <el-form-item>
+                <template #label>
+                  <span>All-electron VASP <el-tooltip content="Whether to use all-electron vasp" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-switch v-model="formData.scf_input.is_alle" />
               </el-form-item>
             </el-col>
@@ -259,18 +301,24 @@
           <h4 class="step-params-title">Pre-NAMD Parameters</h4>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="Band Min">
+              <el-form-item>
+                <template #label>
+                  <span>Band Min <el-tooltip content="Lower band index. Use VBM, VBM-2, VBM+1, or integer" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input
                   v-model="formData.prenamd_input.bmin"
-                  placeholder="VBM or integer"
+                  placeholder="e.g. VBM, VBM-2, 10"
                 />
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="Band Max">
+              <el-form-item>
+                <template #label>
+                  <span>Band Max <el-tooltip content="Upper band index. Use CBM, CBM+4, VBM+10, or integer" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
+                </template>
                 <el-input
                   v-model="formData.prenamd_input.bmax"
-                  placeholder="CBM or integer"
+                  placeholder="e.g. CBM, CBM+4, 20"
                 />
               </el-form-item>
             </el-col>
@@ -369,8 +417,8 @@
               <el-form-item label="NAMD Time Steps">
                 <el-input-number
                   v-model="formData.namd_input.namdtime"
-                  :min="1"
-                  :step="10000"
+                  :min="1000"
+                  :step="100000"
                 />
               </el-form-item>
             </el-col>
@@ -411,11 +459,15 @@ import { ref, reactive, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
 import { validatePoscar } from '@/api/structures'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
+
+// SCF convergence threshold options (exponential steps)
+const scfThrOptions = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
 
 // Step-to-input mapping (MUST be defined at top level, NOT inside watch)
 const stepToInputMap: Record<string, string> = {
@@ -757,6 +809,17 @@ async function handleSubmit(): Promise<void> {
 
 .disabled-radio-wrapper {
   display: inline-block;
-  /* Remove pointer-events: none to allow tooltip to work */
+}
+
+:deep(.param-label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+:deep(.param-help-icon) {
+  font-size: 14px;
+  color: var(--el-text-color-placeholder);
+  cursor: help;
 }
 </style>
