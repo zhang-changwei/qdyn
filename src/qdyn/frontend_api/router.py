@@ -6,12 +6,13 @@ implementing a unified response format and dependency injection pattern
 to avoid circular imports with app.py.
 """
 
+import logging
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
@@ -19,6 +20,9 @@ from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
     JobErrorResponse,
+    JobFilesResponse,
+    JobImagesResponse,
+    JobProgressResponse,
     JobStatusDetailResponse,
     StopFailedItem,
     StopResultResponse,
@@ -28,6 +32,8 @@ from .models import (
     TaskJobsStatusResponse,
     TaskSummaryListResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRouter:
@@ -64,6 +70,46 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     def verify_task_ownership_local(task_id: str, username: str) -> None:
         """Verify that the task belongs to the user, raising HTTPException if not."""
         api_verify_task_ownership(task_id, username)
+
+    def verify_job_belongs_to_task(task_id: str, job_uuid: str) -> None:
+        """Verify that job_uuid belongs to the given task.
+
+        Queries MainWorkflow.list_task_jobs() to collect all known job
+        UUIDs for the task and raises HTTPException(404) if the job is
+        not among them.  A 404 is also returned when the task itself
+        does not exist (list_task_jobs raises ValidationError).
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID to validate.
+
+        Raises:
+            HTTPException: 404 if the job is not part of the task.
+        """
+        manager = manager_getter()
+        try:
+            jobs_by_step = manager.list_task_jobs(task_id)
+        except (QueryError, ValidationError) as exc:
+            logger.warning(
+                "Task %s not found when verifying job %s: %s",
+                task_id, job_uuid, exc,
+            )
+            raise HTTPException(status_code=404, detail=str(exc))
+
+        all_uuids = {
+            uuid
+            for uuid_list in jobs_by_step.values()
+            for uuid in uuid_list
+        }
+
+        if job_uuid not in all_uuids:
+            logger.warning(
+                "Job %s does not belong to task %s", job_uuid, task_id,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job '{job_uuid}' not found in task '{task_id}'",
+            )
 
     def handle_query_errors(func):
         """Decorator to convert QueryError to HTTP 404 and ValidationError to HTTP 422."""
@@ -393,5 +439,152 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 "PARSE_ERROR",
                 f"Failed to parse structure: {str(exc)}",
             )
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files - List job files
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/files",
+        response_model=JobFilesResponse,
+        summary="List files in a job's run directory",
+        description="Retrieve a list of whitelisted files from a job's run directory.",
+    )
+    async def list_job_files_endpoint(
+        task_id: str,
+        job_uuid: str,
+        username: str = Depends(get_current_user),
+    ) -> JobFilesResponse:
+        """
+        List available files for a job.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+
+        Returns:
+            A JobFilesResponse with file list or available=False.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        run_dir = service.get_job_run_dir(manager, job_uuid)
+
+        if run_dir is None:
+            return JobFilesResponse(available=False)
+
+        files = service.list_job_files(run_dir, task_id, job_uuid)
+        return JobFilesResponse(available=True, files=files)
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files/{filename} - Serve file
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/files/{filename}",
+        summary="Download a file from a job's run directory",
+        description="Serve a single whitelisted file from the job's run directory.",
+    )
+    async def get_job_file_endpoint(
+        task_id: str,
+        job_uuid: str,
+        filename: str,
+        username: str = Depends(get_current_user),
+    ) -> Response:
+        """
+        Serve a single file from a job's run directory.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+            filename: The name of the file to retrieve.
+
+        Returns:
+            A FileResponse with the file contents.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        run_dir = service.get_job_run_dir(manager, job_uuid)
+
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="Job run directory not available")
+
+        try:
+            file_path, content_type = service.serve_job_file(run_dir, filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=content_type,
+            filename=filename,
+        )
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/progress - Job progress
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/progress",
+        response_model=JobProgressResponse,
+        summary="Get job progress",
+        description="Retrieve progress information for a running or completed job.",
+    )
+    async def get_job_progress_endpoint(
+        task_id: str,
+        job_uuid: str,
+        username: str = Depends(get_current_user),
+    ) -> JobProgressResponse:
+        """
+        Get progress for a job (MD steps or SCF convergence).
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+
+        Returns:
+            A JobProgressResponse with progress details.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        return service.get_job_progress(manager, job_uuid)
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/images - Job images
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/images",
+        response_model=JobImagesResponse,
+        summary="Get job result images",
+        description="Retrieve result images for a completed job.",
+    )
+    async def get_job_images_endpoint(
+        task_id: str,
+        job_uuid: str,
+        username: str = Depends(get_current_user),
+    ) -> JobImagesResponse:
+        """
+        Get result images for a completed job.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+
+        Returns:
+            A JobImagesResponse with image list.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        return service.get_job_images(manager, task_id, job_uuid)
 
     return router

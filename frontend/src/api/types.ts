@@ -221,6 +221,83 @@ export interface ValidatePoscarResponse {
 }
 
 // ============================================
+// Job Files, Progress, and Images Types
+// ============================================
+
+/**
+ * Single file entry from a job's run directory
+ */
+export interface JobFileItem {
+  name: string
+  size: number
+  url: string
+}
+
+/**
+ * Response listing available files in a job's run directory
+ */
+export interface JobFilesResponse {
+  available: boolean
+  files: JobFileItem[]
+}
+
+/**
+ * SCF batch-level frame statistics
+ */
+export interface SCFBatchInfo {
+  completed: number
+  converged: number
+  failed: number
+  running: number
+  pending: number
+}
+
+/**
+ * Details about the currently running SCF frame
+ */
+export interface SCFCurrentFrame {
+  name: string
+  global_index: number
+  status: string
+  electronic_step_current: number | null
+  electronic_step_limit: number | null
+  scf_algorithm: string | null
+  converged: boolean | null
+}
+
+/**
+ * Job progress response (MD steps or SCF convergence)
+ */
+export interface JobProgressResponse {
+  available: boolean
+  step_type: string | null
+  current_step: number
+  total_steps: number | null
+  percent: number | null
+  last_temp: number | null
+  last_energy: number | null
+  batch: SCFBatchInfo | null
+  current_frame: SCFCurrentFrame | null
+}
+
+/**
+ * Single image entry from a job's output
+ */
+export interface JobImageItem {
+  name: string
+  url: string
+}
+
+/**
+ * Response listing result images for a completed job
+ */
+export interface JobImagesResponse {
+  available: boolean
+  images: JobImageItem[]
+}
+
+// ============================================
+// ============================================
 // Input Types (matching backend Pydantic models)
 // ============================================
 

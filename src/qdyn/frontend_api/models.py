@@ -112,3 +112,76 @@ class StructureValidationResponse(BaseModel):
     valid: bool
     error: Optional[str] = None
     structure: Optional[StructureValidationInfo] = None
+
+
+# ============================================
+# Job Files, Progress, and Images Models
+# ============================================
+
+
+class JobFileItem(BaseModel):
+    """Single file entry from a job's run directory."""
+
+    name: str
+    size: int
+    url: str  # Relative URL, e.g. /frontend/tasks/{id}/jobs/{uuid}/files/{name}
+
+
+class JobFilesResponse(BaseModel):
+    """Response listing available files in a job's run directory."""
+
+    available: bool
+    files: List[JobFileItem] = Field(default_factory=list)
+
+
+class SCFBatchInfo(BaseModel):
+    """Batch-level frame statistics for an SCF job."""
+
+    completed: int = 0
+    converged: int = 0
+    failed: int = 0
+    running: int = 0
+    pending: int = 0
+
+
+class SCFCurrentFrame(BaseModel):
+    """Details about the currently running SCF frame."""
+
+    name: str = ""
+    global_index: int = 0
+    status: str = ""  # "RUNNING"
+    electronic_step_current: Optional[int] = None
+    electronic_step_limit: Optional[int] = None
+    scf_algorithm: Optional[str] = None
+    converged: Optional[bool] = None  # None=running, True/False=done
+
+
+class JobProgressResponse(BaseModel):
+    """Response describing a job's progress (MD steps or SCF convergence)."""
+
+    available: bool
+    step_type: Optional[str] = None  # "nvt" / "nve" / "scf" / "other"
+    current_step: int = 0
+    total_steps: Optional[int] = None
+    percent: Optional[float] = None
+    last_temp: Optional[float] = None  # NVT/NVE only
+    last_energy: Optional[float] = None
+    # SCF fine-grained fields
+    batch: Optional[SCFBatchInfo] = None
+    current_frame: Optional[SCFCurrentFrame] = None
+
+
+class JobImageItem(BaseModel):
+    """Single image entry from a job's output."""
+
+    name: str
+    url: str
+
+
+class JobImagesResponse(BaseModel):
+    """Response listing result images for a completed job."""
+
+    available: bool
+    images: List[JobImageItem] = Field(default_factory=list)
+
+

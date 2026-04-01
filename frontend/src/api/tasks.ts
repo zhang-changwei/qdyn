@@ -19,7 +19,10 @@ import type {
   TaskJobsStatusResponse,
   JobStatusDetailResponse,
   JobErrorResponse,
-  StopResultResponse
+  StopResultResponse,
+  JobFilesResponse,
+  JobProgressResponse,
+  JobImagesResponse
 } from './types'
 
 /**
@@ -113,4 +116,46 @@ export async function stopTask(taskId: string): Promise<StopResultResponse> {
  */
 export async function deleteTask(taskId: string): Promise<void> {
   await http.delete(`/frontend/tasks/${taskId}`)
+}
+
+/**
+ * List available files in a job's run directory
+ */
+export async function getJobFiles(taskId: string, jobUuid: string): Promise<JobFilesResponse> {
+  const response = await http.get<ApiResponse<JobFilesResponse> | JobFilesResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/files`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Download a specific file from a job's run directory.
+ * Returns a Blob that can be used with URL.createObjectURL().
+ */
+export async function getJobFile(taskId: string, jobUuid: string, filename: string): Promise<Blob> {
+  const response = await http.get(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/files/${encodeURIComponent(filename)}`,
+    { responseType: 'blob' }
+  )
+  return response.data
+}
+
+/**
+ * Get progress information for a running or completed job
+ */
+export async function getJobProgress(taskId: string, jobUuid: string): Promise<JobProgressResponse> {
+  const response = await http.get<ApiResponse<JobProgressResponse> | JobProgressResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/progress`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Get result images for a completed job
+ */
+export async function getJobImages(taskId: string, jobUuid: string): Promise<JobImagesResponse> {
+  const response = await http.get<ApiResponse<JobImagesResponse> | JobImagesResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/images`
+  )
+  return normalizeResponse(response.data)
 }

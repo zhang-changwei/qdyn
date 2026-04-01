@@ -58,7 +58,7 @@
           v-if="jobsStatus && jobsStatus.jobs.length > 0"
           :data="sortedJobs"
           stripe
-          @row-click="showJobDetail"
+          @expand-change="handleExpandChange"
         >
           <el-table-column prop="index" label="#" width="60" />
           <el-table-column prop="name" label="Job Name" min-width="200" />
@@ -77,7 +77,6 @@
               <el-text v-if="row.error" type="danger" truncated>
                 {{ row.error }}
               </el-text>
-              <!-- View error button for FAILED jobs -->
               <el-button
                 v-else-if="row.derived_state === 'FAILED' || row.derived_state === 'ERROR'"
                 type="danger"
@@ -90,47 +89,161 @@
               <span v-else class="no-error">-</span>
             </template>
           </el-table-column>
-        </el-table>
 
-        <!-- Expanded error details -->
-        <div
-          v-for="job in sortedJobs"
-          :key="'error-' + job.uuid"
-        >
-          <el-collapse-transition>
-            <div
-              v-if="expandedErrors.has(job.uuid)"
-              class="job-error-detail"
-            >
-              <div v-if="errorLoading.has(job.uuid)" class="error-loading">
-                <el-skeleton :rows="3" animated />
-              </div>
-              <div v-else-if="jobErrors.get(job.uuid)?.available" class="error-content">
-                <div class="error-message">
-                  <el-text type="danger" tag="div" size="small">
-                    {{ jobErrors.get(job.uuid)?.message }}
-                  </el-text>
+          <!-- Expand row: progress, error detail, images -->
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <div class="expand-content">
+                <!-- UUID display -->
+                <div class="uuid-section">
+                  <el-text size="small" type="info">UUID:</el-text>
+                  <el-text size="small" class="uuid-text">{{ row.uuid }}</el-text>
                 </div>
-                <el-collapse class="traceback-collapse">
-                  <el-collapse-item title="Traceback">
-                    <pre class="traceback-pre">{{ jobErrors.get(job.uuid)?.traceback }}</pre>
-                  </el-collapse-item>
-                </el-collapse>
-              </div>
-              <div v-else class="error-unavailable">
-                <el-text type="info">No error information available.</el-text>
-                <el-button
-                  type="text"
-                  size="small"
-                  @click="retryJobError(job)"
-                  style="margin-left: 8px;"
+
+                <!-- Error detail (FAILED/ERROR jobs) -->
+                <div v-if="expandedErrors.has(row.uuid)">
+                  <div v-if="errorLoading.has(row.uuid)" class="error-loading">
+                    <el-skeleton :rows="3" animated />
+                  </div>
+                  <div v-else-if="jobErrors.get(row.uuid)?.available" class="error-content">
+                    <div class="error-message">
+                      <el-text type="danger" tag="div" size="small">
+                        {{ jobErrors.get(row.uuid)?.message }}
+                      </el-text>
+                    </div>
+                    <el-collapse class="traceback-collapse">
+                      <el-collapse-item title="Traceback">
+                        <pre class="traceback-pre">{{ jobErrors.get(row.uuid)?.traceback }}</pre>
+                      </el-collapse-item>
+                    </el-collapse>
+                  </div>
+                  <div v-else class="error-unavailable">
+                    <el-text type="info">No error information available.</el-text>
+                    <el-button type="text" size="small" @click.stop="retryJobError(row)" style="margin-left: 8px;">
+                      Retry
+                    </el-button>
+                  </div>
+                </div>
+
+                <!-- Progress (RUNNING / COMPLETED) -->
+                <div v-if="jobProgress.get(row.uuid)?.available" class="progress-section">
+                  <el-progress
+                    v-if="jobProgress.get(row.uuid)?.percent != null"
+                    :percentage="Math.min(jobProgress.get(row.uuid)!.percent!, 100)"
+                    :stroke-width="18"
+                    :text-inside="true"
+                  />
+                  <el-progress
+                    v-else
+                    :percentage="100"
+                    :indeterminate="true"
+                    :stroke-width="18"
+                    status="warning"
+                  >
+                    <span>In progress...</span>
+                  </el-progress>
+                  <div class="progress-details">
+                    <template v-if="jobProgress.get(row.uuid)?.step_type === 'scf' && jobProgress.get(row.uuid)?.batch">
+                      <el-text size="small">
+                        Completed {{ jobProgress.get(row.uuid)?.current_step || 0 }} / {{ jobProgress.get(row.uuid)?.total_steps }} frames
+                      </el-text>
+                      <el-text
+                        v-if="jobProgress.get(row.uuid)!.batch!.failed > 0"
+                        size="small"
+                        type="danger"
+                        style="margin-left: 12px;"
+                      >
+                        {{ jobProgress.get(row.uuid)!.batch!.failed }} failed
+                      </el-text>
+                    </template>
+                    <template v-else>
+                      <el-text size="small">
+                        Step {{ jobProgress.get(row.uuid)?.current_step || 0 }}
+                        <template v-if="jobProgress.get(row.uuid)?.total_steps">
+                          / {{ jobProgress.get(row.uuid)?.total_steps }}
+                        </template>
+                      </el-text>
+                    </template>
+                    <el-text
+                      v-if="jobProgress.get(row.uuid)?.last_temp != null && (jobProgress.get(row.uuid)?.step_type === 'nvt' || jobProgress.get(row.uuid)?.step_type === 'nve')"
+                      size="small"
+                      style="margin-left: 16px;"
+                    >
+                      Temp: {{ jobProgress.get(row.uuid)?.last_temp?.toFixed(1) }} K
+                    </el-text>
+                    <el-text
+                      v-if="jobProgress.get(row.uuid)?.last_energy != null"
+                      size="small"
+                      style="margin-left: 16px;"
+                    >
+                      E: {{ jobProgress.get(row.uuid)?.last_energy?.toFixed(4) }} eV
+                    </el-text>
+                  </div>
+                  <!-- SCF electronic step (RUNNING only) -->
+                  <div v-if="row.derived_state === 'RUNNING' && jobProgress.get(row.uuid)?.current_frame" class="scf-estep-detail">
+                    <el-text size="small" type="warning">
+                      {{ jobProgress.get(row.uuid)!.current_frame!.name }}:
+                      electronic step
+                      {{ jobProgress.get(row.uuid)!.current_frame!.electronic_step_current ?? '?' }}
+                      <template v-if="jobProgress.get(row.uuid)!.current_frame!.electronic_step_limit != null">
+                        / {{ jobProgress.get(row.uuid)!.current_frame!.electronic_step_limit }}
+                      </template>
+                      <template v-if="jobProgress.get(row.uuid)!.current_frame!.scf_algorithm">
+                        ({{ jobProgress.get(row.uuid)!.current_frame!.scf_algorithm }})
+                      </template>
+                    </el-text>
+                  </div>
+                </div>
+
+                <!-- Result images (COMPLETED, loaded on expand) -->
+                <div
+                  v-if="row.derived_state === 'COMPLETED' && jobImages.get(row.uuid)?.images?.length"
+                  class="images-section"
                 >
-                  Retry
-                </el-button>
+                  <el-text size="small" type="info" style="margin-bottom: 8px;">Result Images</el-text>
+                  <div class="images-grid">
+                    <div
+                      v-for="img in jobImages.get(row.uuid)!.images"
+                      :key="img.url"
+                      v-lazy-image="() => onImageVisible(row.uuid, img)"
+                      class="result-image-wrapper"
+                    >
+                      <el-image
+                        v-if="imageBlobUrls.get(img.url)"
+                        :src="imageBlobUrls.get(img.url)!"
+                        :preview-src-list="jobImages.get(row.uuid)!.images.map(i => imageBlobUrls.get(i.url) || '').filter(u => u)"
+                        fit="contain"
+                        class="result-image"
+                        :alt="img.name"
+                      />
+                      <el-skeleton v-else :rows="0" animated class="result-image" />
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Output files section -->
+                <div
+                  v-if="jobFiles.get(row.uuid)?.files?.length"
+                  class="files-section"
+                >
+                  <el-divider content-position="left">Output Files</el-divider>
+                  <div class="files-grid">
+                    <div
+                      v-for="file in jobFiles.get(row.uuid)!.files"
+                      :key="file.name"
+                      class="file-item"
+                      @click="downloadFile(row, file.name)"
+                    >
+                      <el-icon><Document /></el-icon>
+                      <span class="file-name">{{ file.name }}</span>
+                      <span class="file-size">{{ formatFileSize(file.size) }}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </el-collapse-transition>
-        </div>
+            </template>
+          </el-table-column>
+        </el-table>
 
         <el-empty v-if="!jobsStatus || jobsStatus.jobs.length === 0" description="No jobs found" />
       </el-card>
@@ -141,52 +254,19 @@
       <el-button type="primary" @click="goBack">Go Back</el-button>
     </el-empty>
 
-    <!-- Job detail dialog -->
-    <el-dialog
-      v-model="jobDetailVisible"
-      :title="selectedJob?.name || 'Job Detail'"
-      width="600px"
-    >
-      <div v-if="jobDetailLoading" class="dialog-loading">
-        <el-skeleton :rows="4" animated />
-      </div>
-      <div v-else-if="selectedJobDetail" class="job-detail-content">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="UUID">
-            {{ selectedJobDetail.uuid }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Name">
-            {{ selectedJobDetail.name }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Raw State">
-            <el-tag>{{ selectedJobDetail.state }}</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="Status">
-            <StatusBadge :status="selectedJobDetail.derived_state" />
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobDetail.error" label="Error">
-            <el-text type="danger">{{ selectedJobDetail.error }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="selectedJobDetail.log_note" label="Note">
-            <el-text type="info">{{ selectedJobDetail.log_note }}</el-text>
-          </el-descriptions-item>
-        </el-descriptions>
-      </div>
-      <el-empty v-else description="Failed to load job detail" />
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ArrowLeft, Document } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { getJobStatusDetail, fetchJobError, stopTask, deleteTask } from '@/api/tasks'
+import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobImages } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
-import type { JobStatusItem, JobStatusDetailResponse, JobErrorResponse } from '@/api/types'
+import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
 
@@ -198,15 +278,17 @@ const task = computed(() => tasksStore.currentTask)
 const jobsStatus = computed(() => tasksStore.currentJobsStatus)
 const loading = computed(() => tasksStore.loading)
 
-const jobDetailVisible = ref(false)
-const jobDetailLoading = ref(false)
-const selectedJob = ref<JobStatusItem | null>(null)
-const selectedJobDetail = ref<JobStatusDetailResponse | null>(null)
 
 // Error expansion state
 const expandedErrors = ref<Set<string>>(new Set())
 const jobErrors = ref<Map<string, JobErrorResponse>>(new Map())
 const errorLoading = ref<Set<string>>(new Set())
+
+// Job progress, images, and files state
+const jobProgress = ref<Map<string, JobProgressResponse>>(new Map())
+const jobImages = ref<Map<string, JobImagesResponse>>(new Map())
+const jobFiles = ref<Map<string, JobFilesResponse>>(new Map())
+const imageBlobUrls = ref<Map<string, string>>(new Map())
 
 // Operation loading states
 const stopping = ref(false)
@@ -248,6 +330,8 @@ onMounted(async () => {
   try {
     // TaskDetail and TaskJobsStatusResponse are the same type, avoid duplicate requests
     await tasksStore.fetchTaskDetail(taskId.value)
+    // Load progress/images/files for existing jobs
+    await refreshJobExtras()
   } catch {
     // Error is handled by store
   }
@@ -262,6 +346,11 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('focus', handleFocus)
   window.removeEventListener('blur', handleBlur)
+  // Release all blob URLs to free memory
+  for (const url of imageBlobUrls.value.values()) {
+    URL.revokeObjectURL(url)
+  }
+  imageBlobUrls.value.clear()
   tasksStore.clearCurrentTask()
 })
 
@@ -319,6 +408,125 @@ async function retryJobError(job: JobStatusItem): Promise<void> {
   }
 
   await loadJobError(job, true)
+}
+
+// ============================================
+// Job progress, images, and files
+// ============================================
+
+async function loadJobProgress(job: JobStatusItem): Promise<void> {
+  try {
+    const progress = await getJobProgress(taskId.value, job.uuid)
+    jobProgress.value.set(job.uuid, progress)
+    jobProgress.value = new Map(jobProgress.value)
+  } catch {
+    // Silently ignore progress fetch errors
+  }
+}
+
+async function loadJobImages(job: JobStatusItem): Promise<void> {
+  if (jobImages.value.has(job.uuid)) return
+  try {
+    const images = await getJobImages(taskId.value, job.uuid)
+    jobImages.value.set(job.uuid, images)
+    jobImages.value = new Map(jobImages.value)
+  } catch {
+    // Silently ignore
+  }
+}
+
+/** Load blob URL for a single image on demand. */
+async function loadImageBlob(jobUuid: string, img: { url: string; name: string }): Promise<void> {
+  if (imageBlobUrls.value.has(img.url)) return
+  try {
+    const blob = await getJobFile(taskId.value, jobUuid, img.name)
+    const blobUrl = URL.createObjectURL(blob)
+    imageBlobUrls.value.set(img.url, blobUrl)
+    imageBlobUrls.value = new Map(imageBlobUrls.value)
+  } catch {
+    // Skip
+  }
+}
+
+/**
+ * Trigger lazy loading of a single image blob when its container
+ * becomes visible in the viewport.  Called by the IntersectionObserver
+ * wired up through ``v-lazy-image``.
+ */
+function onImageVisible(jobUuid: string, img: { url: string; name: string }): void {
+  loadImageBlob(jobUuid, img)
+}
+
+// Custom directive: v-lazy-image
+// Observes the element; when it enters the viewport the provided callback
+// is invoked once, then observation stops.
+const vLazyImage = {
+  mounted(el: HTMLElement, binding: { value: () => void }) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            binding.value()
+            observer.unobserve(el)
+          }
+        }
+      },
+      { rootMargin: '200px' }
+    )
+    observer.observe(el)
+    ;(el as any).__lazyObserver = observer
+  },
+  unmounted(el: HTMLElement) {
+    const observer = (el as any).__lazyObserver as IntersectionObserver | undefined
+    if (observer) {
+      observer.disconnect()
+    }
+  },
+}
+
+async function loadJobFiles(job: JobStatusItem): Promise<void> {
+  if (jobFiles.value.has(job.uuid)) return
+  try {
+    const files = await getJobFiles(taskId.value, job.uuid)
+    jobFiles.value.set(job.uuid, files)
+    jobFiles.value = new Map(jobFiles.value)
+  } catch {
+    // Silently ignore
+  }
+}
+
+function downloadFile(job: JobStatusItem, filename: string): void {
+  getJobFile(taskId.value, job.uuid, filename).then(blob => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }).catch(() => {
+    ElMessage.error(`Failed to download ${filename}`)
+  })
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// Fetch progress only for RUNNING jobs.
+// COMPLETED job progress is loaded on-demand when a row is expanded.
+async function refreshJobExtras(): Promise<void> {
+  if (!jobsStatus.value?.jobs) return
+  const promises: Promise<void>[] = []
+  for (const job of jobsStatus.value.jobs) {
+    if (job.derived_state === 'RUNNING') {
+      promises.push(loadJobProgress(job))
+    }
+  }
+  await Promise.allSettled(promises)
 }
 
 // ============================================
@@ -416,6 +624,8 @@ async function pollJobs(): Promise<void> {
   isPollingInProgress = true
   try {
     const result = await tasksStore.fetchJobsStatusSilent(taskId.value)
+    // Refresh progress/images/files alongside status polling
+    await refreshJobExtras()
     // Check if all jobs are now terminal -- if so, stop polling
     const activeStates = new Set(['RUNNING', 'PENDING'])
     const hasActive = result.jobs.some(
@@ -466,26 +676,32 @@ watch(hasRunningJobs, (newValue) => {
 })
 
 // ============================================
-// Navigation and job detail dialog
+// Navigation
 // ============================================
 
 function goBack(): void {
   router.push({ name: 'task-list' })
 }
 
-async function showJobDetail(job: JobStatusItem): Promise<void> {
-  selectedJob.value = job
-  jobDetailVisible.value = true
-  jobDetailLoading.value = true
-  selectedJobDetail.value = null
+function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): void {
+  const isExpanded = expandedRows.some(r => r.uuid === row.uuid)
+  if (!isExpanded) return
 
-  try {
-    const detail = await getJobStatusDetail(taskId.value, job.uuid)
-    selectedJobDetail.value = detail
-  } catch {
-    // Keep dialog open to show error state
-  } finally {
-    jobDetailLoading.value = false
+  // Load files on demand when any job row is expanded
+  loadJobFiles(row)
+
+  // Always reload progress for COMPLETED jobs on expand, so that
+  // jobs that transitioned from RUNNING -> COMPLETED show final state
+  // instead of stale cached data from the last poll cycle.
+  if (row.derived_state === 'COMPLETED') {
+    loadJobProgress(row)
+  }
+
+  // Load image list on demand when a COMPLETED job row is expanded.
+  // Individual image blobs are loaded lazily when they enter the viewport
+  // (see the IntersectionObserver setup in the template), not eagerly.
+  if (row.derived_state === 'COMPLETED') {
+    loadJobImages(row)
   }
 }
 </script>
@@ -539,14 +755,6 @@ async function showJobDetail(job: JobStatusItem): Promise<void> {
   margin-bottom: 24px;
 }
 
-:deep(.el-table__row) {
-  cursor: pointer;
-}
-
-:deep(.el-table__row:hover) {
-  background-color: var(--el-fill-color-light);
-}
-
 .no-error {
   color: var(--el-text-color-placeholder);
 }
@@ -594,11 +802,103 @@ async function showJobDetail(job: JobStatusItem): Promise<void> {
   padding: 4px 0;
 }
 
-.job-detail-content {
+/* Expand row content */
+.expand-content {
+  padding: 12px 16px;
+}
+
+.uuid-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.uuid-text {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  user-select: all;
+}
+
+.progress-section {
+  margin-bottom: 8px;
+}
+
+.images-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.progress-details {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+}
+
+.scf-estep-detail {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.images-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   padding: 8px 0;
 }
 
-.dialog-loading {
-  padding: 16px 0;
+.result-image-wrapper {
+  width: 280px;
+  height: 210px;
+}
+
+.result-image {
+  width: 280px;
+  height: 210px;
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+/* Files section in expand row */
+.files-section {
+  margin-top: 8px;
+}
+
+.files-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.file-item:hover {
+  background-color: var(--el-fill-color-light);
+}
+
+.file-name {
+  font-family: monospace;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
