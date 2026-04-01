@@ -195,6 +195,14 @@
                   </div>
                 </div>
 
+                <!-- MD Timeseries chart (NVT/NVE jobs) -->
+                <JobMdTimeseriesPanel
+                  v-if="isMdJob(row)"
+                  :task-id="taskId"
+                  :job-uuid="row.uuid"
+                  :step-type="jobProgress.get(row.uuid)?.step_type"
+                />
+
                 <!-- Result images (COMPLETED, loaded on expand) -->
                 <div
                   v-if="row.derived_state === 'COMPLETED' && jobImages.get(row.uuid)?.images?.length"
@@ -266,6 +274,7 @@ import { useTasksStore } from '@/stores/tasks'
 import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobImages } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
+import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
 import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
@@ -681,6 +690,11 @@ watch(hasRunningJobs, (newValue) => {
 
 function goBack(): void {
   router.push({ name: 'task-list' })
+}
+
+function isMdJob(job: JobStatusItem): boolean {
+  const stepType = jobProgress.value.get(job.uuid)?.step_type
+  return stepType === 'nvt' || stepType === 'nve'
 }
 
 function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): void {

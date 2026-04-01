@@ -297,6 +297,73 @@ export interface JobImagesResponse {
 }
 
 // ============================================
+// MD Timeseries Types
+// ============================================
+
+/**
+ * Metadata for a single NVT retry attempt
+ */
+export interface MDAttemptItem {
+  attempt: number
+  label: string
+  is_current: boolean
+  archived: boolean
+}
+
+/**
+ * Time-series arrays for an MD trajectory
+ */
+export interface MDSeriesData {
+  steps: number[]
+  time_fs: number[]
+  temperatures: number[]
+  total_energies: number[]
+  potential_energies: number[]
+  kinetic_energies: number[]
+  converged: boolean[]
+}
+
+/**
+ * Reference lines and annotation values for the chart
+ */
+export interface MDReferenceLines {
+  potim_fs: number | null
+  tebeg: number | null
+  teend: number | null
+  target_temperature: number | null
+  temperature_tolerance_low: number | null
+  temperature_tolerance_high: number | null
+  mean_total_energy: number | null
+  initial_total_energy: number | null
+  energy_drift_slope_ev_per_step: number | null
+}
+
+/**
+ * Summary statistics for the returned timeseries data
+ */
+export interface MDTimeseriesStats {
+  current_step: number
+  total_steps: number | null
+  original_points: number
+  returned_points: number
+  sampled: boolean
+}
+
+/**
+ * Response for the MD timeseries endpoint
+ */
+export interface JobMdTimeseriesResponse {
+  available: boolean
+  step_type: string | null
+  state: string | null
+  selected_attempt: number
+  attempts: MDAttemptItem[]
+  series: MDSeriesData | null
+  references: MDReferenceLines | null
+  stats: MDTimeseriesStats | null
+  warning: string | null
+}
+
 // ============================================
 // Input Types (matching backend Pydantic models)
 // ============================================

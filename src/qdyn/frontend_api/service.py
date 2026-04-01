@@ -19,8 +19,13 @@ from .models import (
     JobFileItem,
     JobImageItem,
     JobImagesResponse,
+    JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusItem,
+    MDAttemptItem,
+    MDReferenceLines,
+    MDSeriesData,
+    MDTimeseriesStats,
     SCFBatchInfo,
     SCFCurrentFrame,
     TaskJobsStatusResponse,
@@ -1062,3 +1067,373 @@ def get_job_images(
 
     return JobImagesResponse(available=True, images=items)
 
+
+# -----------------------------------------------------------------------------
+# MD Timeseries
+# -----------------------------------------------------------------------------
+
+
+def _parse_incar_numeric_value(incar_path: Path, key: str) -> float | None:
+    """Parse a numeric value from an INCAR file using exact key matching.
+
+    Uses a regex anchor so that e.g. ``key='NELM'`` does **not** match
+    ``NELMIN``.
+    """
+    import re
+
+    pattern = re.compile(
+        rf'^\s*{re.escape(key)}\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)',
+        re.IGNORECASE,
+    )
+    try:
+        with open(incar_path, 'r') as f:
+            for line in f:
+                m = pattern.match(line)
+                if m:
+                    return float(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
+def _resolve_md_attempt_files(
+    run_dir: Path,
+    step_type: str,
+    attempt: int | None,
+) -> tuple[Path, Path | None, int, list[MDAttemptItem]]:
+    """Discover NVT retry attempt directories and resolve file paths.
+
+    Returns
+    -------
+    tuple of (oszicar_path, incar_path_or_None, selected_attempt, attempts_list)
+    """
+    # Discover nvt_attempt_* directories
+    attempt_dirs: list[Path] = sorted(
+        run_dir.glob("nvt_attempt_*"),
+        key=lambda p: int(p.name.split("_")[-1]) if p.name.split("_")[-1].isdigit() else 0,
+    )
+
+    # Build attempt list
+    attempts: list[MDAttemptItem] = []
+    max_archived = 0
+    for d in attempt_dirs:
+        if not d.is_dir():
+            continue
+        try:
+            num = int(d.name.split("_")[-1])
+        except ValueError:
+            continue
+        if (d / "OSZICAR").is_file():
+            attempts.append(MDAttemptItem(
+                attempt=num,
+                label=f"Attempt {num}",
+                is_current=False,
+                archived=True,
+            ))
+            max_archived = max(max_archived, num)
+
+    # The root-directory OSZICAR is the "current / latest" attempt
+    current_num = max_archived + 1
+    root_oszicar = run_dir / "OSZICAR"
+    if root_oszicar.is_file():
+        attempts.append(MDAttemptItem(
+            attempt=current_num,
+            label=f"Attempt {current_num} (latest)" if attempts else f"Attempt {current_num}",
+            is_current=True,
+            archived=False,
+        ))
+
+    # NVE: no retry concept — one single attempt
+    if step_type == "nve":
+        if root_oszicar.is_file():
+            incar_path = (run_dir / "INCAR") if (run_dir / "INCAR").is_file() else None
+            return root_oszicar, incar_path, 1, [
+                MDAttemptItem(attempt=1, label="Attempt 1", is_current=True, archived=False),
+            ]
+        raise FileNotFoundError("OSZICAR not found in run_dir for NVE job.")
+
+    # Determine which attempt to serve
+    if attempt is None:
+        # Default: latest (root directory)
+        selected = current_num
+    else:
+        selected = attempt
+
+    # Resolve paths for the selected attempt
+    if selected == current_num and root_oszicar.is_file():
+        oszicar_path = root_oszicar
+        incar_path = (run_dir / "INCAR") if (run_dir / "INCAR").is_file() else None
+    else:
+        attempt_dir = run_dir / f"nvt_attempt_{selected}"
+        oszicar_path = attempt_dir / "OSZICAR"
+        if not oszicar_path.is_file():
+            raise FileNotFoundError(
+                f"OSZICAR not found for attempt {selected} "
+                f"(looked in {attempt_dir})."
+            )
+        incar_path = (attempt_dir / "INCAR") if (attempt_dir / "INCAR").is_file() else None
+
+    return oszicar_path, incar_path, selected, attempts
+
+
+def _sample_series(series: dict, max_points: int) -> dict:
+    """Down-sample series data using fixed-bucket min/max to preserve extremes.
+
+    For each bucket the point with the minimum and maximum temperature value
+    is kept, preserving peaks and troughs.  The result has at most
+    ``2 * num_buckets`` points (may be slightly less due to deduplication).
+    """
+    n = len(series['steps'])
+    if n <= max_points:
+        return series
+
+    # Reserve 2 slots for first/last points, rest goes to buckets
+    num_buckets = (max_points - 2) // 2
+    if num_buckets < 1:
+        num_buckets = 1
+    bucket_size = n / num_buckets
+
+    indices: list[int] = [0]  # Always include the first point
+    for b in range(num_buckets):
+        start = int(b * bucket_size)
+        end = int((b + 1) * bucket_size)
+        if start >= n:
+            break
+        end = min(end, n)
+
+        # Find min/max temperature indices within bucket
+        min_idx = start
+        max_idx = start
+        for i in range(start, end):
+            if series['temperatures'][i] < series['temperatures'][min_idx]:
+                min_idx = i
+            if series['temperatures'][i] > series['temperatures'][max_idx]:
+                max_idx = i
+
+        # Add in order to preserve temporal sequence
+        if min_idx <= max_idx:
+            indices.append(min_idx)
+            if max_idx != min_idx:
+                indices.append(max_idx)
+        else:
+            indices.append(max_idx)
+            if min_idx != max_idx:
+                indices.append(min_idx)
+
+    # Always include the very last point
+    if indices and indices[-1] != n - 1:
+        indices.append(n - 1)
+
+    # Deduplicate while preserving order
+    seen: set[int] = set()
+    unique: list[int] = []
+    for idx in indices:
+        if idx not in seen:
+            seen.add(idx)
+            unique.append(idx)
+
+    sampled: dict = {}
+    for key, arr in series.items():
+        sampled[key] = [arr[i] for i in unique]
+    return sampled
+
+
+def _calc_energy_drift_slope(
+    steps: list[int], total_energies: list[float]
+) -> float | None:
+    """Compute linear regression slope (eV/step) for total energy drift.
+
+    Uses real ionic step numbers as the independent variable so the slope
+    has correct physical units regardless of sampling.
+    """
+    n = len(total_energies)
+    if n < 2 or len(steps) != n:
+        return None
+    mean_x = sum(steps) / n
+    mean_y = sum(total_energies) / n
+    ss_xy = 0.0
+    ss_xx = 0.0
+    for x, y in zip(steps, total_energies):
+        dx = x - mean_x
+        ss_xy += dx * (y - mean_y)
+        ss_xx += dx * dx
+    if ss_xx == 0:
+        return 0.0
+    return ss_xy / ss_xx
+
+
+def _build_md_references(
+    step_type: str,
+    incar_path: Path | None,
+    series: dict,
+) -> MDReferenceLines:
+    """Assemble reference line data for the chart."""
+    potim: float | None = None
+    tebeg: float | None = None
+    teend: float | None = None
+
+    if incar_path is not None:
+        potim = _parse_incar_numeric_value(incar_path, "POTIM")
+        if step_type == "nvt":
+            tebeg = _parse_incar_numeric_value(incar_path, "TEBEG")
+            teend = _parse_incar_numeric_value(incar_path, "TEEND")
+
+    target_temp: float | None = None
+    tol_low: float | None = None
+    tol_high: float | None = None
+    if step_type == "nvt" and teend is not None:
+        target_temp = teend
+        tol_low = teend * 0.9
+        tol_high = teend * 1.1
+
+    mean_total: float | None = None
+    initial_total: float | None = None
+    drift: float | None = None
+    total_e = series.get('total_energies', [])
+    if total_e:
+        mean_total = sum(total_e) / len(total_e)
+        initial_total = total_e[0]
+        if step_type == "nve":
+            drift = _calc_energy_drift_slope(series.get('steps', []), total_e)
+
+    return MDReferenceLines(
+        potim_fs=potim,
+        tebeg=tebeg,
+        teend=teend,
+        target_temperature=target_temp,
+        temperature_tolerance_low=tol_low,
+        temperature_tolerance_high=tol_high,
+        mean_total_energy=mean_total,
+        initial_total_energy=initial_total,
+        energy_drift_slope_ev_per_step=drift,
+    )
+
+
+def get_job_md_timeseries(
+    manager: MainWorkflow,
+    job_uuid: str,
+    attempt: int | None,
+    max_points: int,
+) -> JobMdTimeseriesResponse:
+    """Build the full MD timeseries response for a job.
+
+    This is the main entry point called by the router.
+    """
+    from ..output_postprocess import parse_md_data_from_oszicar
+
+    # --- Resolve run_dir and step_type ---
+    jc = manager._ensure_job_controller()
+    try:
+        job_info = jc.get_job_info(job_id=job_uuid)
+    except Exception:
+        return JobMdTimeseriesResponse(available=False, warning="Failed to query job info.")
+
+    if job_info is None:
+        return JobMdTimeseriesResponse(available=False, warning="Job not found.")
+
+    raw_state = job_info.state.value
+    job_name = getattr(job_info, "name", "") or ""
+    raw_run_dir = getattr(job_info, "run_dir", None)
+    if not raw_run_dir:
+        return JobMdTimeseriesResponse(available=False, warning="Job run directory not available yet.")
+
+    run_dir = Path(str(raw_run_dir))
+    if not run_dir.is_dir():
+        return JobMdTimeseriesResponse(available=False, warning="Job run directory does not exist.")
+
+    step_type = _detect_step_type(job_name, run_dir)
+    if step_type not in ("nvt", "nve"):
+        return JobMdTimeseriesResponse(
+            available=False,
+            step_type=step_type,
+            warning=f"MD timeseries not applicable for step_type '{step_type}'.",
+        )
+
+    # --- Resolve attempt files ---
+    try:
+        oszicar_path, incar_path, selected_attempt, attempts = _resolve_md_attempt_files(
+            run_dir, step_type, attempt,
+        )
+    except FileNotFoundError as exc:
+        return JobMdTimeseriesResponse(
+            available=False,
+            step_type=step_type,
+            state=raw_state,
+            warning=str(exc),
+        )
+
+    # --- Parse OSZICAR ---
+    try:
+        raw_data = parse_md_data_from_oszicar(oszicar_path, incar_path)
+    except (FileNotFoundError, ValueError) as exc:
+        return JobMdTimeseriesResponse(
+            available=False,
+            step_type=step_type,
+            state=raw_state,
+            selected_attempt=selected_attempt,
+            attempts=attempts,
+            warning=str(exc),
+        )
+
+    original_points = len(raw_data['steps'])
+
+    # --- Build time_fs from POTIM ---
+    potim = None
+    if incar_path is not None:
+        potim = _parse_incar_numeric_value(incar_path, "POTIM")
+    if potim is not None and potim > 0:
+        time_fs = [s * potim for s in raw_data['steps']]
+    else:
+        # Fallback: use step number directly
+        time_fs = [float(s) for s in raw_data['steps']]
+
+    series_dict = {
+        'steps': raw_data['steps'],
+        'time_fs': time_fs,
+        'temperatures': raw_data['temperatures'],
+        'total_energies': raw_data['total_energies'],
+        'potential_energies': raw_data['potential_energies'],
+        'kinetic_energies': raw_data['kinetic_energies'],
+        'converged': raw_data['converged'],
+    }
+
+    # --- References (computed on full data BEFORE sampling) ---
+    references = _build_md_references(step_type, incar_path, series_dict)
+
+    # --- Sampling ---
+    sampled = original_points > max_points
+    if sampled:
+        series_dict = _sample_series(series_dict, max_points)
+
+    returned_points = len(series_dict['steps'])
+    # Override potim from the one we already parsed
+    if potim is not None:
+        references.potim_fs = potim
+
+    # --- NSW for total_steps ---
+    total_steps: int | None = None
+    if incar_path is not None:
+        nsw_val = _parse_incar_numeric_value(incar_path, "NSW")
+        if nsw_val is not None:
+            total_steps = int(nsw_val)
+
+    stats = MDTimeseriesStats(
+        current_step=raw_data['steps'][-1] if raw_data['steps'] else 0,
+        total_steps=total_steps,
+        original_points=original_points,
+        returned_points=returned_points,
+        sampled=sampled,
+    )
+
+    series = MDSeriesData(**series_dict)
+
+    return JobMdTimeseriesResponse(
+        available=True,
+        step_type=step_type,
+        state=raw_state,
+        selected_attempt=selected_attempt,
+        attempts=attempts,
+        series=series,
+        references=references,
+        stats=stats,
+    )

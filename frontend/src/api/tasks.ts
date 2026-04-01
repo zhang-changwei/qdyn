@@ -22,7 +22,8 @@ import type {
   StopResultResponse,
   JobFilesResponse,
   JobProgressResponse,
-  JobImagesResponse
+  JobImagesResponse,
+  JobMdTimeseriesResponse
 } from './types'
 
 /**
@@ -156,6 +157,21 @@ export async function getJobProgress(taskId: string, jobUuid: string): Promise<J
 export async function getJobImages(taskId: string, jobUuid: string): Promise<JobImagesResponse> {
   const response = await http.get<ApiResponse<JobImagesResponse> | JobImagesResponse>(
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/images`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Get MD timeseries data for an NVT/NVE job
+ */
+export async function getJobMdTimeseries(
+  taskId: string,
+  jobUuid: string,
+  params?: { attempt?: number; max_points?: number }
+): Promise<JobMdTimeseriesResponse> {
+  const response = await http.get<ApiResponse<JobMdTimeseriesResponse> | JobMdTimeseriesResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/md-timeseries`,
+    { params }
   )
   return normalizeResponse(response.data)
 }

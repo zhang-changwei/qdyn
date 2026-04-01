@@ -185,3 +185,65 @@ class JobImagesResponse(BaseModel):
     images: List[JobImageItem] = Field(default_factory=list)
 
 
+# ============================================
+# MD Timeseries Models
+# ============================================
+
+
+class MDAttemptItem(BaseModel):
+    """Metadata for a single NVT retry attempt."""
+
+    attempt: int
+    label: str
+    is_current: bool
+    archived: bool
+
+
+class MDSeriesData(BaseModel):
+    """Time-series arrays for an MD trajectory."""
+
+    steps: List[int]
+    time_fs: List[float]
+    temperatures: List[float]
+    total_energies: List[float]
+    potential_energies: List[float]
+    kinetic_energies: List[float]
+    converged: List[bool]
+
+
+class MDReferenceLines(BaseModel):
+    """Reference lines and annotation values for the chart."""
+
+    potim_fs: Optional[float] = None
+    tebeg: Optional[float] = None
+    teend: Optional[float] = None
+    target_temperature: Optional[float] = None
+    temperature_tolerance_low: Optional[float] = None
+    temperature_tolerance_high: Optional[float] = None
+    mean_total_energy: Optional[float] = None
+    initial_total_energy: Optional[float] = None
+    energy_drift_slope_ev_per_step: Optional[float] = None
+
+
+class MDTimeseriesStats(BaseModel):
+    """Summary statistics for the returned timeseries data."""
+
+    current_step: int
+    total_steps: Optional[int] = None
+    original_points: int
+    returned_points: int
+    sampled: bool
+
+
+class JobMdTimeseriesResponse(BaseModel):
+    """Response for the MD timeseries endpoint."""
+
+    available: bool
+    step_type: Optional[str] = None
+    state: Optional[str] = None
+    selected_attempt: int = 1
+    attempts: List[MDAttemptItem] = Field(default_factory=list)
+    series: Optional[MDSeriesData] = None
+    references: Optional[MDReferenceLines] = None
+    stats: Optional[MDTimeseriesStats] = None
+    warning: Optional[str] = None

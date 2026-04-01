@@ -22,6 +22,7 @@ from .models import (
     JobErrorResponse,
     JobFilesResponse,
     JobImagesResponse,
+    JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusDetailResponse,
     StopFailedItem,
@@ -586,5 +587,40 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         manager = manager_getter()
         return service.get_job_images(manager, task_id, job_uuid)
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/md-timeseries
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/md-timeseries",
+        response_model=JobMdTimeseriesResponse,
+        summary="Get MD timeseries data",
+        description="Retrieve full MD time-series data (temperature, energies) for NVT/NVE jobs.",
+    )
+    async def get_job_md_timeseries_endpoint(
+        task_id: str,
+        job_uuid: str,
+        attempt: int | None = Query(None, ge=1),
+        max_points: int = Query(2000, ge=200, le=20000),
+        username: str = Depends(get_current_user),
+    ) -> JobMdTimeseriesResponse:
+        """
+        Get MD timeseries data for a job.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+            attempt: NVT attempt number (None = latest).
+            max_points: Maximum data points to return.
+
+        Returns:
+            A JobMdTimeseriesResponse with timeseries data.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        return service.get_job_md_timeseries(manager, job_uuid, attempt, max_points)
 
     return router
