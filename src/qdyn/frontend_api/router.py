@@ -22,6 +22,7 @@ from .models import (
     JobErrorResponse,
     JobFilesResponse,
     JobImagesResponse,
+    JobInputParamsResponse,
     JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusDetailResponse,
@@ -556,6 +557,37 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         manager = manager_getter()
         return service.get_job_progress(manager, job_uuid)
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/input-params - Job input params
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/input-params",
+        response_model=JobInputParamsResponse,
+        summary="Get job input parameters",
+        description="Retrieve parsed INCAR and KPOINTS for a specific job.",
+    )
+    async def get_job_input_params_endpoint(
+        task_id: str,
+        job_uuid: str,
+        username: str = Depends(get_current_user),
+    ) -> JobInputParamsResponse:
+        """
+        Get INCAR key-value pairs and raw KPOINTS text for a job.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+
+        Returns:
+            A JobInputParamsResponse with parsed input parameters.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        return service.get_job_input_params(manager, job_uuid)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/images - Job images

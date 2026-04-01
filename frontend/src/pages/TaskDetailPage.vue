@@ -195,6 +195,47 @@
                   </div>
                 </div>
 
+                <!-- Input Parameters (INCAR + KPOINTS, lazy loaded) -->
+                <div
+                  v-if="jobInputParams.get(row.uuid)?.available"
+                  class="input-params-section"
+                >
+                  <el-collapse>
+                    <el-collapse-item title="Input Parameters">
+                      <!-- INCAR table -->
+                      <template v-if="jobInputParams.get(row.uuid)?.incar">
+                        <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">INCAR</el-text>
+                        <el-descriptions :column="2" border size="small" class="incar-table">
+                          <el-descriptions-item
+                            v-for="(val, key) in jobInputParams.get(row.uuid)!.incar!"
+                            :key="key"
+                            :label="String(key)"
+                          >
+                            {{ val }}
+                          </el-descriptions-item>
+                        </el-descriptions>
+                      </template>
+
+                      <!-- KPOINTS block -->
+                      <template v-if="jobInputParams.get(row.uuid)?.kpoints_text">
+                        <el-text size="small" type="info" tag="div" style="margin-top: 12px; margin-bottom: 6px; font-weight: 600;">KPOINTS</el-text>
+                        <pre class="kpoints-pre">{{ jobInputParams.get(row.uuid)!.kpoints_text }}</pre>
+                      </template>
+
+                      <!-- Warning -->
+                      <el-text
+                        v-if="jobInputParams.get(row.uuid)?.warning"
+                        size="small"
+                        type="warning"
+                        tag="div"
+                        style="margin-top: 8px;"
+                      >
+                        {{ jobInputParams.get(row.uuid)!.warning }}
+                      </el-text>
+                    </el-collapse-item>
+                  </el-collapse>
+                </div>
+
                 <!-- MD Timeseries chart (NVT/NVE jobs) -->
                 <JobMdTimeseriesPanel
                   v-if="isMdJob(row)"
@@ -271,11 +312,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobImages } from '@/api/tasks'
+import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobImages, getJobInputParams } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
-import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse } from '@/api/types'
+import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse, JobInputParamsResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
 
@@ -297,6 +338,7 @@ const errorLoading = ref<Set<string>>(new Set())
 const jobProgress = ref<Map<string, JobProgressResponse>>(new Map())
 const jobImages = ref<Map<string, JobImagesResponse>>(new Map())
 const jobFiles = ref<Map<string, JobFilesResponse>>(new Map())
+const jobInputParams = ref<Map<string, JobInputParamsResponse>>(new Map())
 const imageBlobUrls = ref<Map<string, string>>(new Map())
 
 // Operation loading states
@@ -504,6 +546,19 @@ async function loadJobFiles(job: JobStatusItem): Promise<void> {
   }
 }
 
+async function loadJobInputParams(job: JobStatusItem): Promise<void> {
+  // Allow retry if previously cached as unavailable (run_dir may not have existed yet)
+  const cached = jobInputParams.value.get(job.uuid)
+  if (cached?.available) return
+  try {
+    const params = await getJobInputParams(taskId.value, job.uuid)
+    jobInputParams.value.set(job.uuid, params)
+    jobInputParams.value = new Map(jobInputParams.value)
+  } catch {
+    // Silently ignore
+  }
+}
+
 function downloadFile(job: JobStatusItem, filename: string): void {
   getJobFile(taskId.value, job.uuid, filename).then(blob => {
     const url = URL.createObjectURL(blob)
@@ -701,8 +756,9 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   const isExpanded = expandedRows.some(r => r.uuid === row.uuid)
   if (!isExpanded) return
 
-  // Load files on demand when any job row is expanded
+  // Load files and input params on demand when any job row is expanded
   loadJobFiles(row)
+  loadJobInputParams(row)
 
   // Always reload progress for COMPLETED jobs on expand, so that
   // jobs that transitioned from RUNNING -> COMPLETED show final state
@@ -914,5 +970,33 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .file-size {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+/* Input parameters section */
+.input-params-section {
+  margin-bottom: 8px;
+}
+
+.incar-table :deep(.el-descriptions__label) {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.incar-table :deep(.el-descriptions__content) {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.kpoints-pre {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  background-color: var(--el-fill-color-light);
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin: 0;
 }
 </style>

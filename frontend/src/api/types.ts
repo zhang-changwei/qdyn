@@ -297,6 +297,21 @@ export interface JobImagesResponse {
 }
 
 // ============================================
+// Job Input Parameters Types
+// ============================================
+
+/**
+ * Response containing parsed INCAR and KPOINTS data for a job
+ * Returned by GET /frontend/tasks/{taskId}/jobs/{jobUuid}/input-params
+ */
+export interface JobInputParamsResponse {
+  available: boolean
+  incar: Record<string, string> | null
+  kpoints_text: string | null
+  warning: string | null
+}
+
+// ============================================
 // MD Timeseries Types
 // ============================================
 

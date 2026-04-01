@@ -190,6 +190,15 @@ class JobImagesResponse(BaseModel):
 # ============================================
 
 
+class JobInputParamsResponse(BaseModel):
+    """Response containing parsed INCAR and KPOINTS data for a job."""
+
+    available: bool
+    incar: Optional[Dict[str, str]] = None
+    kpoints_text: Optional[str] = None
+    warning: Optional[str] = None
+
+
 class MDAttemptItem(BaseModel):
     """Metadata for a single NVT retry attempt."""
 

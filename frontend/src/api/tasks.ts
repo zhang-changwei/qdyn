@@ -23,6 +23,7 @@ import type {
   JobFilesResponse,
   JobProgressResponse,
   JobImagesResponse,
+  JobInputParamsResponse,
   JobMdTimeseriesResponse
 } from './types'
 
@@ -147,6 +148,16 @@ export async function getJobFile(taskId: string, jobUuid: string, filename: stri
 export async function getJobProgress(taskId: string, jobUuid: string): Promise<JobProgressResponse> {
   const response = await http.get<ApiResponse<JobProgressResponse> | JobProgressResponse>(
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/progress`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Get parsed INCAR and KPOINTS for a job
+ */
+export async function getJobInputParams(taskId: string, jobUuid: string): Promise<JobInputParamsResponse> {
+  const response = await http.get<ApiResponse<JobInputParamsResponse> | JobInputParamsResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/input-params`
   )
   return normalizeResponse(response.data)
 }

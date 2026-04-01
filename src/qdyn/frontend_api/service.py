@@ -19,6 +19,7 @@ from .models import (
     JobFileItem,
     JobImageItem,
     JobImagesResponse,
+    JobInputParamsResponse,
     JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusItem,
@@ -566,6 +567,78 @@ def get_job_run_dir(
     if p.is_dir():
         return p
     return None
+
+
+def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
+    """Parse an INCAR file into a key-value dictionary.
+
+    Uses pymatgen's ``Incar`` parser for robust handling of semicolon-
+    separated multi-tag lines, inline comments, and edge cases.
+    Values are converted to strings for JSON serialization.
+    """
+    try:
+        from pymatgen.io.vasp import Incar
+
+        incar = Incar.from_file(str(incar_path))
+        return {str(k): str(v) for k, v in incar.items()}
+    except Exception as exc:
+        logger.warning("Failed to parse INCAR at %s: %s", incar_path, exc)
+        return {}
+
+
+def get_job_input_params(
+    manager: MainWorkflow, job_uuid: str
+) -> JobInputParamsResponse:
+    """Read INCAR and KPOINTS from a job's run directory.
+
+    Returns a ``JobInputParamsResponse`` with parsed data,
+    or ``available=False`` when the run directory is not ready.
+    """
+    run_dir = get_job_run_dir(manager, job_uuid)
+    if run_dir is None:
+        return JobInputParamsResponse(available=False)
+
+    # Security: only read files directly inside run_dir
+    incar_path = (run_dir / "INCAR").resolve()
+    kpoints_path = (run_dir / "KPOINTS").resolve()
+
+    # Verify paths are inside run_dir (prevent symlink escapes)
+    base = run_dir.resolve()
+    try:
+        incar_path.relative_to(base)
+        kpoints_path.relative_to(base)
+    except ValueError:
+        return JobInputParamsResponse(
+            available=False, warning="Path traversal detected"
+        )
+
+    incar: Optional[Dict[str, str]] = None
+    kpoints_text: Optional[str] = None
+    warnings: list[str] = []
+
+    # Parse INCAR
+    if incar_path.is_file():
+        incar = _parse_incar_file(incar_path)
+    else:
+        warnings.append("INCAR not found")
+
+    # Read KPOINTS
+    if kpoints_path.is_file():
+        try:
+            kpoints_text = kpoints_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            warnings.append(f"Failed to read KPOINTS: {exc}")
+    else:
+        warnings.append("KPOINTS not found")
+
+    warning_str = "; ".join(warnings) if warnings else None
+
+    return JobInputParamsResponse(
+        available=True,
+        incar=incar,
+        kpoints_text=kpoints_text,
+        warning=warning_str,
+    )
 
 
 def list_job_files(
