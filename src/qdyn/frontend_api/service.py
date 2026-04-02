@@ -162,7 +162,8 @@ def get_job_info_safe(
         QueryError: If the job cannot be found or queried.
     """
     manager = manager_getter()
-    raw_state = manager.get_job_status(job_uuid)
+    ji = manager.get_job_info(job_uuid)
+    raw_state = ji.state.value
 
     # Get job metadata from database to retrieve name and index
     job_ids = qdyndb.get_task_job_ids(task_id)
@@ -177,12 +178,20 @@ def get_job_info_safe(
             job_index = uuid_list.index(job_uuid)
             break
 
+    def _dt_str(val: object) -> Optional[str]:
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else str(val)
+
     return JobStatusItem(
         uuid=job_uuid,
         name=job_name,
         state=raw_state,
         derived_state=derive_job_state(raw_state),
         index=job_index,
+        created_on=_dt_str(getattr(ji, "created_on", None)),
+        start_time=_dt_str(getattr(ji, "start_time", None)),
+        end_time=_dt_str(getattr(ji, "end_time", None)),
     )
 
 
@@ -385,6 +394,12 @@ def get_task_detail(
     raw_status_counts: Dict[str, int] = {}
     failed_job_names: List[str] = []
 
+    def _dt_str(val: object) -> Optional[str]:
+        """Convert a datetime-like value to ISO string, or None."""
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else str(val)
+
     for step_name, uuid_list in job_ids.items():
         for idx, job_uuid in enumerate(uuid_list):
             ji = uuid_to_job_info.get(job_uuid)
@@ -397,6 +412,9 @@ def get_task_detail(
                     state=raw_state,
                     derived_state=derived,
                     index=idx,
+                    created_on=_dt_str(getattr(ji, "created_on", None)),
+                    start_time=_dt_str(getattr(ji, "start_time", None)),
+                    end_time=_dt_str(getattr(ji, "end_time", None)),
                 )
                 jobs.append(job_item)
                 raw_status_counts[raw_state] = raw_status_counts.get(raw_state, 0) + 1
@@ -429,11 +447,16 @@ def get_task_detail(
 
     derived_status = derive_task_status(raw_status_counts)
 
+    # Retrieve prev_task_id from task metadata (resume chain)
+    task_meta = qdyndb.get_task_metadata(task_id)
+    prev_task_id = task_meta.get("prev_task_id") if task_meta else None
+
     return TaskJobsStatusResponse(
         task_id=task_id,
         raw_status_counts=raw_status_counts,
         derived_status=derived_status,
         jobs=jobs,
+        prev_task_id=prev_task_id,
     )
 
 

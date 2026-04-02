@@ -16,6 +16,22 @@
         <div class="header-info">
           <h2 class="task-id">Task: {{ truncatedTaskId }}</h2>
           <StatusBadge :status="task.derived_status" />
+          <el-tag
+            v-if="task.prev_task_id"
+            type="info"
+            size="small"
+            class="resume-tag"
+          >
+            Resumed from:
+            <router-link
+              :to="{ name: 'task-detail', params: { taskId: task.prev_task_id } }"
+              class="resume-link"
+            >
+              {{ task.prev_task_id.length > 20
+                ? task.prev_task_id.slice(0, 12) + '...' + task.prev_task_id.slice(-8)
+                : task.prev_task_id }}
+            </router-link>
+          </el-tag>
         </div>
         <!-- Action buttons -->
         <div class="header-actions">
@@ -100,6 +116,24 @@
                 <div class="uuid-section">
                   <el-text size="small" type="info">UUID:</el-text>
                   <el-text size="small" class="uuid-text">{{ row.uuid }}</el-text>
+                </div>
+
+                <!-- Time information -->
+                <div v-if="row.created_on || row.start_time || row.end_time" class="time-section">
+                  <el-descriptions :column="2" size="small" border>
+                    <el-descriptions-item label="Created">
+                      {{ formatDateTime(row.created_on) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Started">
+                      {{ formatDateTime(row.start_time) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Ended">
+                      {{ formatDateTime(row.end_time) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="Duration">
+                      {{ computeDuration(row.start_time, row.end_time) }}
+                    </el-descriptions-item>
+                  </el-descriptions>
                 </div>
 
                 <!-- Error detail (FAILED/ERROR jobs) -->
@@ -788,6 +822,41 @@ function goBack(): void {
   router.push({ name: 'task-list' })
 }
 
+// ============================================
+// Time formatting helpers
+// ============================================
+
+function formatDateTime(isoStr: string | null | undefined): string {
+  if (!isoStr) return '-'
+  try {
+    const d = new Date(isoStr)
+    if (isNaN(d.getTime())) return isoStr
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch {
+    return isoStr
+  }
+}
+
+function computeDuration(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start || !end) return '-'
+  try {
+    const startMs = new Date(start).getTime()
+    const endMs = new Date(end).getTime()
+    if (isNaN(startMs) || isNaN(endMs)) return '-'
+    const diffSec = Math.floor((endMs - startMs) / 1000)
+    if (diffSec < 0) return '-'
+    const hours = Math.floor(diffSec / 3600)
+    const minutes = Math.floor((diffSec % 3600) / 60)
+    const seconds = diffSec % 60
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+    if (minutes > 0) return `${minutes}m ${seconds}s`
+    return `${seconds}s`
+  } catch {
+    return '-'
+  }
+}
+
 function isMdJob(job: JobStatusItem): boolean {
   const stepType = jobProgress.value.get(job.uuid)?.step_type
   return stepType === 'nvt' || stepType === 'nve'
@@ -930,6 +999,26 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   font-size: 12px;
   color: var(--el-text-color-regular);
   user-select: all;
+}
+
+.time-section {
+  margin-bottom: 10px;
+}
+
+.resume-tag {
+  margin-left: 8px;
+}
+
+.resume-link {
+  color: var(--el-color-primary);
+  text-decoration: none;
+  margin-left: 4px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.resume-link:hover {
+  text-decoration: underline;
 }
 
 .progress-section {

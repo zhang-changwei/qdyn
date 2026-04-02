@@ -665,13 +665,17 @@ class MainWorkflow:
 
     def get_job_status(self, job_uuid: str) -> str:
         """Query job status."""
+        return self.get_job_info(job_uuid).state.value
+
+    def get_job_info(self, job_uuid: str):
+        """Query full job info object."""
         jc = self._ensure_job_controller()
         try:
             job_info = jc.get_job_info(job_id=job_uuid)
             assert job_info is not None
         except:
             raise QueryError(f"Job '{job_uuid}' not found.")
-        return job_info.state.value
+        return job_info
 
 
     def get_job_output(self, job_uuid: str):

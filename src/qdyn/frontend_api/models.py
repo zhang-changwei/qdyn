@@ -22,6 +22,10 @@ class JobStatusItem(BaseModel):
     derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "ERROR"
     error: Optional[str] = None
     index: int
+    # Timestamps from jobflow-remote JobInfo (ISO format strings)
+    created_on: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
 
 
 class JobStatusDetailResponse(BaseModel):
@@ -44,6 +48,8 @@ class TaskJobsStatusResponse(BaseModel):
     # Derived status for quick UI assessment
     derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "ERROR"
     jobs: List[JobStatusItem]
+    # Resume chain: id of the predecessor task (if this is a resume task)
+    prev_task_id: Optional[str] = None
 
 
 class TaskSummary(BaseModel):

@@ -42,6 +42,10 @@ export interface JobStatusItem {
   error: string | null
   /** Job index in the flow */
   index: number
+  /** Timestamps from jobflow-remote (ISO format strings) */
+  created_on?: string | null
+  start_time?: string | null
+  end_time?: string | null
 }
 
 /**
@@ -71,6 +75,8 @@ export interface TaskJobsStatusResponse {
   derived_status: DerivedState
   /** List of all jobs in the task */
   jobs: JobStatusItem[]
+  /** Predecessor task id if this is a resume task */
+  prev_task_id?: string | null
 }
 
 // ============================================
