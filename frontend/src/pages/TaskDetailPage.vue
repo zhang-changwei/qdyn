@@ -290,50 +290,90 @@
                   :step-type="jobProgress.get(row.uuid)?.step_type"
                 />
 
-                <!-- Result images (COMPLETED, loaded on expand) -->
-                <div
-                  v-if="row.derived_state === 'COMPLETED' && jobImages.get(row.uuid)?.images?.length"
-                  class="images-section"
-                >
-                  <el-text size="small" type="info" style="margin-bottom: 8px;">Result Images</el-text>
-                  <div class="images-grid">
-                    <div
-                      v-for="img in jobImages.get(row.uuid)!.images"
-                      :key="img.url"
-                      v-lazy-image="() => onImageVisible(row.uuid, img)"
-                      class="result-image-wrapper"
-                    >
-                      <el-image
-                        v-if="imageBlobUrls.get(img.url)"
-                        :src="imageBlobUrls.get(img.url)!"
-                        :preview-src-list="jobImages.get(row.uuid)!.images.map(i => imageBlobUrls.get(i.url) || '').filter(u => u)"
-                        fit="contain"
-                        class="result-image"
-                        :alt="img.name"
-                      />
-                      <el-skeleton v-else :rows="0" animated class="result-image" />
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Output files section -->
+                <!-- Output files section (categorized, images first with preview) -->
                 <div
                   v-if="jobFiles.get(row.uuid)?.files?.length"
                   class="files-section"
                 >
-                  <el-divider content-position="left">Output Files</el-divider>
-                  <div class="files-grid">
-                    <div
-                      v-for="file in jobFiles.get(row.uuid)!.files"
-                      :key="file.name"
-                      class="file-item"
-                      @click="downloadFile(row, file.name)"
-                    >
-                      <el-icon><Document /></el-icon>
-                      <span class="file-name">{{ file.name }}</span>
-                      <span class="file-size">{{ formatFileSize(file.size) }}</span>
+                  <template
+                    v-for="group in groupFilesByCategory(jobFiles.get(row.uuid)!.files)"
+                    :key="group.label"
+                  >
+                    <el-divider content-position="left">{{ group.label }}</el-divider>
+
+                    <!-- Images: inline preview grid with download -->
+                    <div v-if="group.category === 'image'" class="images-grid">
+                      <div
+                        v-for="file in group.files"
+                        :key="file.name"
+                        class="image-card"
+                      >
+                        <el-image
+                          v-if="imageBlobUrls.get(`${row.uuid}/${file.name}`)"
+                          :src="imageBlobUrls.get(`${row.uuid}/${file.name}`)!"
+                          :preview-src-list="group.files
+                            .map(f => imageBlobUrls.get(`${row.uuid}/${f.name}`) || '')
+                            .filter(u => u)"
+                          fit="contain"
+                          class="result-image"
+                          :alt="file.name"
+                        />
+                        <el-skeleton v-else :rows="0" animated class="result-image" />
+                        <div class="image-caption">
+                          <span class="image-name" :title="file.name">{{ file.name }}</span>
+                          <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
+                          <el-button size="small" text type="primary" @click="downloadFile(row, file.name)">
+                            <el-icon><Download /></el-icon>
+                          </el-button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+
+                    <!-- Non-image files: table list -->
+                    <el-table
+                      v-else
+                      :data="group.files"
+                      size="small"
+                      class="files-table"
+                      :show-header="false"
+                    >
+                      <el-table-column prop="name" min-width="200">
+                        <template #default="{ row: file }">
+                          <div class="file-name-cell">
+                            <el-icon><Document /></el-icon>
+                            <span class="file-name-text">{{ file.name }}</span>
+                          </div>
+                        </template>
+                      </el-table-column>
+                      <el-table-column width="100" align="right">
+                        <template #default="{ row: file }">
+                          <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column width="120" align="center">
+                        <template #default="{ row: file }">
+                          <div class="file-action-cell">
+                            <el-tooltip
+                              v-if="file.size > LARGE_FILE_THRESHOLD"
+                              :content="`Large file (${formatFileSize(file.size)})`"
+                              placement="top"
+                            >
+                              <el-icon class="large-file-warning"><WarningFilled /></el-icon>
+                            </el-tooltip>
+                            <el-button
+                              size="small"
+                              text
+                              type="primary"
+                              @click="downloadFile(row, file.name)"
+                            >
+                              <el-icon><Download /></el-icon>
+                              Download
+                            </el-button>
+                          </div>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </template>
                 </div>
               </div>
             </template>
@@ -355,17 +395,18 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Document } from '@element-plus/icons-vue'
+import { ArrowLeft, Document, Download, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobImages, getJobInputParams } from '@/api/tasks'
+import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobInputParams } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
 import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
-import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobImagesResponse, JobInputParamsResponse } from '@/api/types'
+import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
+const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB
 
 const route = useRoute()
 const router = useRouter()
@@ -386,7 +427,6 @@ const errorLoading = ref<Set<string>>(new Set())
 
 // Job progress, images, and files state
 const jobProgress = ref<Map<string, JobProgressResponse>>(new Map())
-const jobImages = ref<Map<string, JobImagesResponse>>(new Map())
 const jobFiles = ref<Map<string, JobFilesResponse>>(new Map())
 const jobInputParams = ref<Map<string, JobInputParamsResponse>>(new Map())
 const imageBlobUrls = ref<Map<string, string>>(new Map())
@@ -550,65 +590,6 @@ async function loadJobProgress(job: JobStatusItem): Promise<void> {
   }
 }
 
-async function loadJobImages(job: JobStatusItem): Promise<void> {
-  if (jobImages.value.has(job.uuid)) return
-  try {
-    const images = await getJobImages(taskId.value, job.uuid)
-    jobImages.value.set(job.uuid, images)
-    jobImages.value = new Map(jobImages.value)
-  } catch {
-    // Silently ignore
-  }
-}
-
-/** Load blob URL for a single image on demand. */
-async function loadImageBlob(jobUuid: string, img: { url: string; name: string }): Promise<void> {
-  if (imageBlobUrls.value.has(img.url)) return
-  try {
-    const blob = await getJobFile(taskId.value, jobUuid, img.name)
-    const blobUrl = URL.createObjectURL(blob)
-    imageBlobUrls.value.set(img.url, blobUrl)
-    imageBlobUrls.value = new Map(imageBlobUrls.value)
-  } catch {
-    // Skip
-  }
-}
-
-/**
- * Trigger lazy loading of a single image blob when its container
- * becomes visible in the viewport.  Called by the IntersectionObserver
- * wired up through ``v-lazy-image``.
- */
-function onImageVisible(jobUuid: string, img: { url: string; name: string }): void {
-  loadImageBlob(jobUuid, img)
-}
-
-// Custom directive: v-lazy-image
-// Observes the element; when it enters the viewport the provided callback
-// is invoked once, then observation stops.
-const vLazyImage = {
-  mounted(el: HTMLElement, binding: { value: () => void }) {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            binding.value()
-            observer.unobserve(el)
-          }
-        }
-      },
-      { rootMargin: '200px' }
-    )
-    observer.observe(el)
-    ;(el as any).__lazyObserver = observer
-  },
-  unmounted(el: HTMLElement) {
-    const observer = (el as any).__lazyObserver as IntersectionObserver | undefined
-    if (observer) {
-      observer.disconnect()
-    }
-  },
-}
 
 async function loadJobFiles(job: JobStatusItem): Promise<void> {
   if (jobFiles.value.has(job.uuid)) return
@@ -616,6 +597,25 @@ async function loadJobFiles(job: JobStatusItem): Promise<void> {
     const files = await getJobFiles(taskId.value, job.uuid)
     jobFiles.value.set(job.uuid, files)
     jobFiles.value = new Map(jobFiles.value)
+    // Auto-load blob URLs for image files
+    for (const file of files.files) {
+      if (file.category === 'image') {
+        loadFileBlobUrl(job.uuid, file.name)
+      }
+    }
+  } catch {
+    // Silently ignore
+  }
+}
+
+async function loadFileBlobUrl(jobUuid: string, fileName: string): Promise<void> {
+  const key = `${jobUuid}/${fileName}`
+  if (imageBlobUrls.value.has(key)) return
+  try {
+    const blob = await getJobFile(taskId.value, jobUuid, fileName)
+    const blobUrl = URL.createObjectURL(blob)
+    imageBlobUrls.value.set(key, blobUrl)
+    imageBlobUrls.value = new Map(imageBlobUrls.value)
   } catch {
     // Silently ignore
   }
@@ -652,7 +652,38 @@ function downloadFile(job: JobStatusItem, filename: string): void {
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+interface FileGroup {
+  label: string
+  category: string
+  files: JobFileItem[]
+}
+
+const CATEGORY_ORDER: { key: string; label: string }[] = [
+  { key: 'image', label: 'Images' },
+  { key: 'input', label: 'Input Files' },
+  { key: 'output', label: 'Output Files' },
+  { key: 'data', label: 'Data Files' },
+]
+
+function groupFilesByCategory(files: JobFileItem[]): FileGroup[] {
+  const grouped = new Map<string, JobFileItem[]>()
+  for (const file of files) {
+    const cat = file.category || 'data'
+    if (!grouped.has(cat)) grouped.set(cat, [])
+    grouped.get(cat)!.push(file)
+  }
+  // Sort files within each group by name
+  for (const list of grouped.values()) {
+    list.sort((a, b) => a.name.localeCompare(b.name))
+  }
+  // Return groups in defined order, skipping empty categories
+  return CATEGORY_ORDER
+    .filter(c => grouped.has(c.key))
+    .map(c => ({ label: c.label, category: c.key, files: grouped.get(c.key)! }))
 }
 
 // Fetch progress only for RUNNING jobs.
@@ -886,11 +917,7 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   }
 
   // Load image list on demand when a COMPLETED job row is expanded.
-  // Individual image blobs are loaded lazily when they enter the viewport
-  // (see the IntersectionObserver setup in the template), not eagerly.
-  if (row.derived_state === 'COMPLETED') {
-    loadJobImages(row)
-  }
+  // Image blobs are now loaded automatically by loadJobFiles() for image-category files
 }
 </script>
 
@@ -1054,20 +1081,37 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .images-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
   padding: 8px 0;
 }
 
-.result-image-wrapper {
-  width: 280px;
-  height: 210px;
+.image-card {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
 }
 
 .result-image {
-  width: 280px;
-  height: 210px;
+  width: 300px;
+  height: 220px;
   border-radius: 4px;
   border: 1px solid var(--el-border-color-lighter);
+}
+
+.image-caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.image-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-regular);
 }
 
 /* Files section in expand row */
@@ -1075,39 +1119,42 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   margin-top: 8px;
 }
 
-.files-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px;
+.files-table {
+  margin-bottom: 4px;
 }
 
-.file-item {
+.files-table :deep(.el-table__body-wrapper) {
+  /* Compact rows inside nested file table */
+}
+
+.file-name-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s;
+  gap: 6px;
 }
 
-.file-item:hover {
-  background-color: var(--el-fill-color-light);
-}
-
-.file-name {
+.file-name-text {
   font-family: monospace;
   font-size: 13px;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-all;
+}
+
+.file-size-text {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 
-.file-size {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+.file-action-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.large-file-warning {
+  color: var(--el-color-warning);
+  font-size: 16px;
 }
 
 /* Input parameters section */

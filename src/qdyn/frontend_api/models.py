@@ -144,6 +144,7 @@ class JobFileItem(BaseModel):
     name: str
     size: int
     url: str  # Relative URL, e.g. /frontend/tasks/{id}/jobs/{uuid}/files/{name}
+    category: str  # One of: input, output, data, image
 
 
 class JobFilesResponse(BaseModel):

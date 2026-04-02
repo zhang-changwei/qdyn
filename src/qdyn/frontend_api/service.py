@@ -644,10 +644,50 @@ def _get_task_created_at_fallback(task_id: str) -> float:
 # Job run directory helpers
 # -----------------------------------------------------------------------------
 
-# Whitelist for file listing
-_ALLOWED_EXTENSIONS = {".png", ".dat", ".log", ".txt"}
-_ALLOWED_FILENAMES = {"OSZICAR", "OUTCAR", "CONTCAR"}
-_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+# Blacklist: skip these files (core dumps, temporary/lock files, etc.)
+_BLACKLISTED_PATTERNS = {"core", "core.*", "vasprun.xml.lock"}
+_BLACKLISTED_EXTENSIONS = {".tmp", ".bak", ".swp", ".swo", ".pid", ".lock"}
+
+# Large file warning threshold (exposed in file listing for frontend display)
+_LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
+
+# File category classification
+_INPUT_FILENAMES = {"INCAR", "KPOINTS", "POSCAR", "POTCAR"}
+_OUTPUT_FILENAMES = {
+    "CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml",
+    "EIGENVAL", "DOSCAR", "PROCAR", "XDATCAR",
+    "CHG", "CHGCAR", "WAVECAR", "IBZKPT", "PCDAT",
+    "REPORT", "ELFCAR", "LOCPOT", "AECCAR0", "AECCAR2",
+}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
+
+
+def _classify_file(name: str) -> str:
+    """Classify a file into a category based on its name and extension."""
+    suffix = Path(name).suffix.lower()
+    stem = name
+
+    if stem in _INPUT_FILENAMES:
+        return "input"
+    if stem in _OUTPUT_FILENAMES:
+        return "output"
+    if suffix in _IMAGE_EXTENSIONS:
+        return "image"
+    # Default: data (logs, .dat, .txt, and everything else)
+    return "data"
+
+
+def _is_blacklisted(name: str) -> bool:
+    """Check if a filename should be excluded from listing."""
+    suffix = Path(name).suffix.lower()
+    if suffix in _BLACKLISTED_EXTENSIONS:
+        return True
+    # Exact match or glob-style prefix match for core dumps
+    if name in _BLACKLISTED_PATTERNS:
+        return True
+    if name.startswith("core."):
+        return True
+    return False
 
 
 def get_job_run_dir(
@@ -753,11 +793,11 @@ def list_job_files(
     run_dir: Path, task_id: str, job_uuid: str
 ) -> List[JobFileItem]:
     """
-    List whitelisted files in a job's run directory (non-recursive).
+    List files in a job's run directory (non-recursive).
 
-    Only includes files matching the allowed extensions or exact filenames.
-    All matching files are listed regardless of size; size limits are enforced
-    at download time in ``serve_job_file()``.
+    All files are listed except those matching the blacklist (core dumps,
+    temporary/lock files, etc.). Files are classified into categories:
+    input, output, data, or image.
     """
     items: List[JobFileItem] = []
 
@@ -767,10 +807,9 @@ def list_job_files(
                 continue
 
             name = entry.name
-            suffix = entry.suffix.lower()
 
-            # Check whitelist
-            if suffix not in _ALLOWED_EXTENSIONS and name not in _ALLOWED_FILENAMES:
+            # Check blacklist
+            if _is_blacklisted(name):
                 continue
 
             # Get file size (skip if inaccessible)
@@ -780,7 +819,8 @@ def list_job_files(
                 continue
 
             url = f"/frontend/tasks/{task_id}/jobs/{job_uuid}/files/{name}"
-            items.append(JobFileItem(name=name, size=size, url=url))
+            category = _classify_file(name)
+            items.append(JobFileItem(name=name, size=size, url=url, category=category))
     except OSError as exc:
         logger.warning("Failed to list files in %s: %s", run_dir, exc)
 
@@ -797,13 +837,13 @@ def serve_job_file(
     1. Reject path separators in filename
     2. resolve() + relative_to() path containment
     3. Single-level only (no subdirectory access)
-    4. Whitelist: allowed extensions or exact filenames
-    5. File existence and size limit
+    4. Blacklist check (reject known dangerous files)
+    5. File existence
 
     Returns (file_path, content_type).
 
     Raises:
-        ValueError: If the filename is invalid, outside run_dir, or not whitelisted.
+        ValueError: If the filename is invalid, outside run_dir, or blacklisted.
         FileNotFoundError: If the file does not exist.
     """
     # 1. Reject path separators in filename
@@ -822,24 +862,25 @@ def serve_job_file(
     if target.parent != base:
         raise ValueError(f"Subdirectory access not allowed: {filename}")
 
-    # 4. Whitelist check (same constants as list_job_files)
-    suffix = target.suffix.lower()
-    if suffix not in _ALLOWED_EXTENSIONS and target.name not in _ALLOWED_FILENAMES:
+    # 4. Blacklist check
+    if _is_blacklisted(filename):
         raise ValueError(f"File type not allowed: {filename}")
 
     # 5. File existence
     if not target.is_file():
         raise FileNotFoundError(f"File not found: {filename}")
 
-    # 6. Size limit
-    if target.stat().st_size > _MAX_FILE_SIZE:
-        raise ValueError(f"File too large: {filename}")
-
     # Determine content type
-    if suffix == ".png":
-        content_type = "image/png"
-    else:
-        content_type = "text/plain; charset=utf-8"
+    suffix = target.suffix.lower()
+    content_type_map = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".xml": "application/xml",
+    }
+    content_type = content_type_map.get(suffix, "application/octet-stream")
 
     return target, content_type
 

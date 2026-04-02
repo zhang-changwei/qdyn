@@ -251,6 +251,7 @@ export interface JobFileItem {
   name: string
   size: number
   url: string
+  category: 'input' | 'output' | 'data' | 'image'
 }
 
 /**
