@@ -37,7 +37,12 @@ class SchedulerConfigT(BaseModel):
 class NAMDInputT(BaseModel):
     nodes: Optional[int] = Field(
         default=None,
-        json_schema_extra=HIDDEN_FIELD,
+        description="Number of compute nodes. Leave empty to use qdyn config default.",
+        json_schema_extra={
+            "group": "advanced",
+            "step": 1,
+            "placeholder": "Auto (from config)",
+        },
     )
 
     md_dt: float = Field(
@@ -67,12 +72,10 @@ class NAMDInputT(BaseModel):
     )
     lhole: bool = Field(False, description="Whether to simulate hole dynamics")
     inibands: List[int] = Field(
-        default_factory=lambda: [1, 2, 3, 4],
         description="Initial bands, 1-based, comma-separated in UI",
         json_schema_extra={
             "widget": "comma-separated-integers",
             "placeholder": "e.g. 1,2,3,4",
-            "default": [1, 2, 3, 4],
         },
     )
 
@@ -141,7 +144,12 @@ class NVTInputT(BaseModel):
 
     nodes: Optional[int] = Field(
         default=None,
-        json_schema_extra=HIDDEN_FIELD,
+        description="Number of compute nodes. Leave empty to use qdyn config default.",
+        json_schema_extra={
+            "group": "advanced",
+            "step": 1,
+            "placeholder": "Auto (from config)",
+        },
     )
 
     kspacing: float = Field(
@@ -187,7 +195,7 @@ class NVTInputT(BaseModel):
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
     )
 
 
@@ -196,7 +204,12 @@ class NVEInputT(BaseModel):
 
     nodes: Optional[int] = Field(
         default=None,
-        json_schema_extra=HIDDEN_FIELD,
+        description="Number of compute nodes. Leave empty to use qdyn config default.",
+        json_schema_extra={
+            "group": "advanced",
+            "step": 1,
+            "placeholder": "Auto (from config)",
+        },
     )
 
     kspacing: float = Field(
@@ -229,7 +242,7 @@ class NVEInputT(BaseModel):
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
     )
 
 
@@ -238,7 +251,12 @@ class SCFInputT(BaseModel):
 
     nodes: Optional[int] = Field(
         default=None,
-        json_schema_extra=HIDDEN_FIELD,
+        description="Number of compute nodes. Leave empty to use qdyn config default.",
+        json_schema_extra={
+            "group": "advanced",
+            "step": 1,
+            "placeholder": "Auto (from config)",
+        },
     )
 
     kspacing: float = Field(
@@ -275,7 +293,7 @@ class SCFInputT(BaseModel):
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
     )
 
 

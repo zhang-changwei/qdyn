@@ -47,24 +47,64 @@
         </el-form-item>
       </el-card>
 
-      <!-- Method selection section -->
+      <!-- Method & Basic Settings section -->
       <el-card class="form-section">
         <template #header>
-          <span class="section-title">3. Method</span>
+          <span class="section-title">3. Method & Settings</span>
         </template>
-        <el-form-item label="NAMD Method">
-          <el-radio-group v-model="formData.method">
-            <el-radio value="namd">NAMD (Standard)</el-radio>
-            <el-tooltip
-              content="Not yet supported, coming soon"
-              placement="top"
-            >
-              <span class="disabled-radio-wrapper">
-                <el-radio value="n2amd" disabled>N2AMD</el-radio>
-              </span>
-            </el-tooltip>
-          </el-radio-group>
-        </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="24">
+            <el-form-item label="NAMD Method">
+              <el-radio-group v-model="formData.method">
+                <el-radio value="namd">NAMD (Standard)</el-radio>
+                <el-tooltip
+                  content="Not yet supported, coming soon"
+                  placement="top"
+                >
+                  <span class="disabled-radio-wrapper">
+                    <el-radio value="n2amd" disabled>N2AMD</el-radio>
+                  </span>
+                </el-tooltip>
+              </el-radio-group>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="DFT Software">
+              <el-select v-model="formData.basic_input.software" style="width: 100%;">
+                <el-option label="VASP" value="vasp" />
+                <el-option label="CP2K" value="cp2k" disabled>
+                  <span>CP2K <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
+                </el-option>
+                <el-option label="SIESTA" value="siesta" disabled>
+                  <span>SIESTA <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
+                </el-option>
+                <el-option label="ABACUS" value="abacus" disabled>
+                  <span>ABACUS <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
+                </el-option>
+                <el-option label="OpenMX" value="openmx" disabled>
+                  <span>OpenMX <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
+                </el-option>
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item>
+              <template #label>
+                <span>
+                  Generate Plots
+                  <el-tooltip
+                    content="Generate matplotlib result plots after calculation completes"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <el-switch v-model="formData.basic_input.plot" />
+            </el-form-item>
+          </el-col>
+        </el-row>
       </el-card>
 
       <!-- Parameter configuration section (dynamic forms) -->
@@ -108,7 +148,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
@@ -170,6 +210,7 @@ function buildStepDefaults(schemaKey: keyof StepInputSchemas): Record<string, un
 const formData = reactive<{
   steps: string[]
   method: 'namd' | 'n2amd'
+  basic_input: { software: string; plot: boolean }
   nvt_input: NVTInput | Record<string, unknown>
   nve_input: NVEInput | Record<string, unknown>
   scf_input: SCFInput | Record<string, unknown>
@@ -178,6 +219,7 @@ const formData = reactive<{
 }>({
   steps: [],
   method: 'namd',
+  basic_input: { software: 'vasp', plot: false },
   nvt_input: {},
   nve_input: {},
   scf_input: {},
@@ -293,8 +335,8 @@ async function handleSubmit(): Promise<void> {
   // Build submit payload matching backend InputT exactly
   const payload = {
     basic_input: {
-      software: 'vasp' as const,
-      plot: false
+      software: formData.basic_input.software,
+      plot: formData.basic_input.plot,
     },
     scheduler_config: {},
     steps: formData.steps,
@@ -382,5 +424,11 @@ async function handleSubmit(): Promise<void> {
 
 .disabled-radio-wrapper {
   display: inline-block;
+}
+
+:deep(.param-help-icon) {
+  font-size: 14px;
+  color: var(--el-text-color-placeholder);
+  cursor: help;
 }
 </style>

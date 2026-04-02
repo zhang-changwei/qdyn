@@ -60,6 +60,16 @@
             @update:model-value="setCsvStrings(field.path, $event, field.nullable)"
           />
 
+          <!-- textarea widget -->
+          <el-input
+            v-else-if="field.widget === 'textarea'"
+            type="textarea"
+            :rows="4"
+            :model-value="String(getFieldValue(field.path) ?? '')"
+            :placeholder="field.schema.placeholder"
+            @update:model-value="setFieldValue(field.path, $event)"
+          />
+
           <!-- enum select -->
           <el-select
             v-else-if="field.resolvedSchema.enum"
@@ -312,6 +322,8 @@ function buildFieldDescriptors(
     let colSpan = 8
     if (widget === 'comma-separated-integers' || widget === 'comma-separated-strings') {
       colSpan = 16
+    } else if (widget === 'textarea') {
+      colSpan = 24
     }
 
     result.push({
