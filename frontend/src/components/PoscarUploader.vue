@@ -11,7 +11,7 @@
     <input
       ref="fileInputRef"
       type="file"
-      accept=".poscar,.vasp,.POSCAR,text/*"
+      accept=".poscar,.vasp,.POSCAR,text/*,*/*"
       hidden
       @change="handleFileChange"
     />
@@ -155,11 +155,16 @@ function isValidPoscarFile(file: File): boolean {
   const validNames = ['poscar', 'contcar']
   const name = file.name.toLowerCase()
 
-  return (
-    validExtensions.some(ext => name.endsWith(ext)) ||
-    validNames.some(n => name.startsWith(n)) ||
-    file.type.startsWith('text/')
-  )
+  // Accept known POSCAR extensions or filenames
+  if (validExtensions.some(ext => name.endsWith(ext))) return true
+  if (validNames.some(n => name.startsWith(n))) return true
+  // Accept text files
+  if (file.type.startsWith('text/')) return true
+  // Accept files with no extension (browsers report empty type for
+  // extensionless files like "POSCAR") — backend validates content
+  if (!name.includes('.') || file.type === '') return true
+
+  return false
 }
 
 function clearFile(): void {

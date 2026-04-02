@@ -106,6 +106,14 @@
     <!-- Advanced fields in collapsible section -->
     <el-collapse v-if="advancedFields.length > 0" class="advanced-collapse">
       <el-collapse-item title="Advanced Parameters" name="advanced">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px;"
+        >
+          These parameters are for advanced users. Do not modify unless you understand their effects.
+        </el-alert>
         <el-row :gutter="16">
           <el-col
             v-for="field in advancedFields"
@@ -127,9 +135,25 @@
                 </span>
               </template>
 
+              <!-- comma-separated-integers widget (advanced) -->
+              <el-input
+                v-if="field.widget === 'comma-separated-integers'"
+                :model-value="formatCsvIntegers(getFieldValue(field.path))"
+                :placeholder="field.schema.placeholder"
+                @update:model-value="setCsvIntegers(field.path, $event, field.nullable)"
+              />
+
+              <!-- comma-separated-strings widget (advanced) -->
+              <el-input
+                v-else-if="field.widget === 'comma-separated-strings'"
+                :model-value="formatCsvStrings(getFieldValue(field.path))"
+                :placeholder="field.schema.placeholder"
+                @update:model-value="setCsvStrings(field.path, $event, field.nullable)"
+              />
+
               <!-- Advanced textarea for string fields -->
               <el-input
-                v-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"
+                v-else-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"
                 type="textarea"
                 :rows="4"
                 :model-value="String(getFieldValue(field.path) ?? '')"
@@ -257,7 +281,14 @@ function buildFieldDescriptors(
       const refSchema = resolveLocalRef(rootSchema, prop.$ref)
       if (refSchema?.properties) {
         // Expand nested object's properties as flat fields
+        // Inherit parent's group (e.g. adv with group:"advanced")
+        const parentGroup = prop.group
         const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath)
+        if (parentGroup) {
+          for (const f of nested) {
+            if (!f.group) f.group = parentGroup
+          }
+        }
         result.push(...nested)
         continue
       }

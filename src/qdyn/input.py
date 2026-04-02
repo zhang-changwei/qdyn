@@ -130,7 +130,10 @@ class PreNAMDInputT(BaseModel):
         'DISH', description="Surface hopping method",
     )
 
-    adv: _PreNAMDInputAdvT = Field(default_factory=_PreNAMDInputAdvT)
+    adv: _PreNAMDInputAdvT = Field(
+        default_factory=_PreNAMDInputAdvT,
+        json_schema_extra={"group": "advanced"},
+    )
 
 
 class NVTInputT(BaseModel):
