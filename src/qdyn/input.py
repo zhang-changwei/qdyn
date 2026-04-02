@@ -72,10 +72,10 @@ class NAMDInputT(BaseModel):
     )
     lhole: bool = Field(False, description="Whether to simulate hole dynamics")
     inibands: List[int] = Field(
-        description="Initial bands, 1-based, comma-separated in UI",
+        description="Initial band indices within the bmin–bmax window (1 = bmin, 2 = bmin+1, ...)",
         json_schema_extra={
             "widget": "comma-separated-integers",
-            "placeholder": "e.g. 1,2,3,4",
+            "placeholder": "e.g. 2,3,4 (1=bmin, 2=bmin+1, ...)",
         },
     )
 
