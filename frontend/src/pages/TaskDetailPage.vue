@@ -56,6 +56,7 @@
 
         <el-table
           v-if="jobsStatus && jobsStatus.jobs.length > 0"
+          ref="jobTableRef"
           :data="sortedJobs"
           row-key="uuid"
           stripe
@@ -112,8 +113,8 @@
                         {{ jobErrors.get(row.uuid)?.message }}
                       </el-text>
                     </div>
-                    <el-collapse class="traceback-collapse">
-                      <el-collapse-item title="Traceback">
+                    <el-collapse class="traceback-collapse" :model-value="['traceback']">
+                      <el-collapse-item title="Traceback" name="traceback">
                         <pre class="traceback-pre">{{ jobErrors.get(row.uuid)?.traceback }}</pre>
                       </el-collapse-item>
                     </el-collapse>
@@ -318,7 +319,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
@@ -340,6 +341,9 @@ const task = computed(() => tasksStore.currentTask)
 const jobsStatus = computed(() => tasksStore.currentJobsStatus)
 const loading = computed(() => tasksStore.loading)
 
+
+// Table ref for programmatic row expansion
+const jobTableRef = ref<ComponentPublicInstance & { toggleRowExpansion: (row: JobStatusItem, expanded: boolean) => void } | null>(null)
 
 // Error expansion state
 const expandedErrors = ref<Set<string>>(new Set())
@@ -431,6 +435,9 @@ async function toggleJobError(job: JobStatusItem): Promise<void> {
 
   expandedErrors.value.add(job.uuid)
   expandedErrors.value = new Set(expandedErrors.value)
+
+  // Expand the table row so that the error detail is visible
+  jobTableRef.value?.toggleRowExpansion(job, true)
 
   // Fetch error details if not already loaded
   if (!jobErrors.value.has(job.uuid)) {

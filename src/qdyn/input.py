@@ -13,6 +13,13 @@ import numpy as np
 # -> predefined params in InputT
 # -> parameters string (overrides previous ones)
 
+# ---------------------------------------------------------------------------
+# Reusable json_schema_extra constants for UI metadata
+# ---------------------------------------------------------------------------
+SCF_THR_OPTIONS = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
+HIDDEN_FIELD: dict[str, Any] = {"hidden": True}
+ADVANCED_GROUP: dict[str, Any] = {"group": "advanced"}
+
 
 class BasicInputT(BaseModel):
     """Basic input parameters for QDYN calculations."""
@@ -28,28 +35,68 @@ class SchedulerConfigT(BaseModel):
 
 
 class NAMDInputT(BaseModel):
-    nodes: Optional[int] = None
+    nodes: Optional[int] = Field(
+        default=None,
+        json_schema_extra=HIDDEN_FIELD,
+    )
 
-    md_dt: float = 1.0
-    adiabatic_rep: bool = True
-    surface_hopping: Literal['FSSH', 'DISH'] = 'DISH'
-    nsample: int = 200
-    ntraj: int = 200
-    nelm: int = 10
-    namdtime: int = 1_000_000  # 1 ns
-    temperature: float = 300.0
-    lhole: bool = False
-    inibands: List[int]  # start from 1
+    md_dt: float = Field(
+        1.0,
+        ge=0.1, le=10,
+        description="MD time step in fs",
+        json_schema_extra={"precision": 2},
+    )
+    adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
+    surface_hopping: Literal['FSSH', 'DISH'] = Field(
+        'DISH', description="Surface hopping method",
+    )
+    nsample: int = Field(200, ge=1, le=10000, description="Number of sampled initial conditions")
+    ntraj: int = Field(200, ge=1, le=10000, description="Number of trajectories to propagate")
+    nelm: int = Field(10, ge=1, le=1000, description="Number of electronic substeps")
+    namdtime: int = Field(
+        1_000_000,
+        ge=1000,
+        description="Total number of NAMD time steps",
+        json_schema_extra={"step": 100000},
+    )
+    temperature: float = Field(
+        300.0,
+        ge=1, le=10000,
+        description="Simulation temperature in K",
+        json_schema_extra={"precision": 1},
+    )
+    lhole: bool = Field(False, description="Whether to simulate hole dynamics")
+    inibands: List[int] = Field(
+        default_factory=lambda: [1, 2, 3, 4],
+        description="Initial bands, 1-based, comma-separated in UI",
+        json_schema_extra={
+            "widget": "comma-separated-integers",
+            "placeholder": "e.g. 1,2,3,4",
+            "default": [1, 2, 3, 4],
+        },
+    )
 
 
 class _PreNAMDInputAdvT(BaseModel):
-    reorder: bool = False
-    alle: bool = False
-    ikpt: int = 1
-    ispin: int = 1
+    reorder: bool = Field(False, description="Whether to reorder bands before post-processing")
+    alle: bool = Field(False, description="Whether to use all-electron data in pre-processing")
+    ikpt: int = Field(1, ge=1, description="K-point index starting from 1", json_schema_extra={"step": 1})
+    ispin: int = Field(
+        1, ge=1, le=2,
+        description="Spin channel index starting from 1",
+        json_schema_extra={"step": 1},
+    )
 
-    which_atoms: Optional[List[int]] = None
-    cbar_labels: Optional[List[str]] = None
+    which_atoms: Optional[List[int]] = Field(
+        default=None,
+        description="Optional atom indices to project, comma-separated in UI",
+        json_schema_extra={"widget": "comma-separated-integers", "placeholder": "e.g. 1,2,5"},
+    )
+    cbar_labels: Optional[List[str]] = Field(
+        default=None,
+        description="Optional colorbar labels, comma-separated in UI",
+        json_schema_extra={"widget": "comma-separated-strings", "placeholder": "e.g. CBM,VBM,DEFECT"},
+    )
 
     @field_validator('which_atoms', mode='before')
     @classmethod
@@ -62,66 +109,171 @@ class _PreNAMDInputAdvT(BaseModel):
 
 
 class PreNAMDInputT(BaseModel):
-    bmin: int | str = 'VBM'
-    bmax: int | str = 'CBM'
-    md_dt: float = 1.0
-    adiabatic_rep: bool = True
-    surface_hopping: Literal['FSSH', 'DISH'] = 'DISH'
+    bmin: int | str = Field(
+        'VBM',
+        description="Lower band index, accepts integer or expressions like VBM-2",
+        json_schema_extra={"widget": "band-input", "placeholder": "e.g. VBM, VBM-2, 10"},
+    )
+    bmax: int | str = Field(
+        'CBM',
+        description="Upper band index, accepts integer or expressions like CBM+4",
+        json_schema_extra={"widget": "band-input", "placeholder": "e.g. CBM, CBM+4, 20"},
+    )
+    md_dt: float = Field(
+        1.0,
+        ge=0.1, le=10,
+        description="MD time step in fs",
+        json_schema_extra={"precision": 2},
+    )
+    adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
+    surface_hopping: Literal['FSSH', 'DISH'] = Field(
+        'DISH', description="Surface hopping method",
+    )
 
-    adv: _PreNAMDInputAdvT = _PreNAMDInputAdvT()
+    adv: _PreNAMDInputAdvT = Field(default_factory=_PreNAMDInputAdvT)
 
 
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
 
-    nodes: Optional[int] = None
+    nodes: Optional[int] = Field(
+        default=None,
+        json_schema_extra=HIDDEN_FIELD,
+    )
 
-    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
-    md_thermostat: Literal['nhc', 'rescale_v'] = 'rescale_v'
-    md_dt: float = Field(1.0, description="MD time step in fs")
-    md_step: int = Field(1000, description="Number of MD steps")
-    temp_begin: float = Field(300.0, description="Initial temperature in K")
-    temp_end: float = Field(300.0, description="Final temperature in K")
-    scf_thr: float = 1e-6
+    kspacing: float = Field(
+        0.04,
+        ge=0.01, le=1,
+        description="K-point spacing in 2π × 1/Å",
+        json_schema_extra={"step": 0.01, "precision": 3},
+    )
+    md_thermostat: Literal['nhc', 'rescale_v'] = Field(
+        'rescale_v', description="MD thermostat method",
+    )
+    md_dt: float = Field(
+        1.0,
+        ge=0.1, le=10,
+        description="MD time step in fs",
+        json_schema_extra={"step": 0.5, "precision": 1},
+    )
+    md_step: int = Field(
+        1000,
+        ge=100, le=100000,
+        description="Number of MD steps",
+        json_schema_extra={"step": 500},
+    )
+    temp_begin: float = Field(
+        300.0,
+        ge=1, le=10000,
+        description="Initial temperature in K",
+        json_schema_extra={"step": 50, "precision": 1},
+    )
+    temp_end: float = Field(
+        300.0,
+        ge=1, le=10000,
+        description="Final temperature in K",
+        json_schema_extra={"step": 50, "precision": 1},
+    )
+    scf_thr: float = Field(
+        1e-6,
+        ge=1e-8, le=1e-4,
+        description="Electronic convergence criterion (eV)",
+        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+    )
 
-    parameters: str = ''
+    parameters: str = Field(
+        '',
+        description="Additional INCAR parameters string",
+        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+    )
 
 
 class NVEInputT(BaseModel):
     """Input parameters for NVE molecular dynamics."""
 
-    nodes: Optional[int] = None
+    nodes: Optional[int] = Field(
+        default=None,
+        json_schema_extra=HIDDEN_FIELD,
+    )
 
-    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
+    kspacing: float = Field(
+        0.04,
+        ge=0.01, le=1,
+        description="K-point spacing in 2π × 1/Å",
+        json_schema_extra={"step": 0.01, "precision": 3},
+    )
 
     # MD parameters
-    md_dt: float = Field(1.0, description="MD time step in fs")
-    md_step: int = Field(1000, description="Number of MD steps")
-    scf_thr: float = 1e-6
+    md_dt: float = Field(
+        1.0,
+        ge=0.1, le=10,
+        description="MD time step in fs",
+        json_schema_extra={"step": 0.5, "precision": 1},
+    )
+    md_step: int = Field(
+        1000,
+        ge=100, le=100000,
+        description="Number of MD steps",
+        json_schema_extra={"step": 500},
+    )
+    scf_thr: float = Field(
+        1e-6,
+        ge=1e-8, le=1e-4,
+        description="Electronic convergence criterion (eV)",
+        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+    )
 
-    parameters: str = ''
+    parameters: str = Field(
+        '',
+        description="Additional INCAR parameters string",
+        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+    )
 
 
 class SCFInputT(BaseModel):
     """Input parameters for static SCF calculation."""
 
-    nodes: Optional[int] = None
+    nodes: Optional[int] = Field(
+        default=None,
+        json_schema_extra=HIDDEN_FIELD,
+    )
 
-    kspacing: float = Field(0.04, description=r"K-point spacing in 2\pi \times 1/Å")
+    kspacing: float = Field(
+        0.04,
+        ge=0.01, le=1,
+        description="K-point spacing in 2π × 1/Å",
+        json_schema_extra={"step": 0.01, "precision": 3},
+    )
 
     # SCF-specific
-    scf_thr: float = 1e-6
+    scf_thr: float = Field(
+        1e-6,
+        ge=1e-8, le=1e-4,
+        description="Electronic convergence criterion (eV)",
+        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+    )
 
     # job control
-    scf_step: int = Field(1000, description="Number of SCF frames to calculate")
+    scf_step: int = Field(
+        1000,
+        ge=1, le=10000,
+        description="Number of SCF frames to calculate",
+        json_schema_extra={"step": 100},
+    )
 
     batch_size: int = Field(
         100,
+        ge=1, le=500,
         description="Number of frames per batch task. Smaller batches mean more parallel tasks.",
+        json_schema_extra={"step": 10},
     )
 
     is_alle: bool = Field(False, description="Whether to use all-electron vasp")
-    parameters: str = Field('', description="Additional INCAR parameters string")
+    parameters: str = Field(
+        '',
+        description="Additional INCAR parameters string",
+        json_schema_extra={**ADVANCED_GROUP, "placeholder": "e.g. ENCUT = 520\\nISYM = 0"},
+    )
 
 
 class InputT(BaseModel):

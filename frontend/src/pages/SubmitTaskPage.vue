@@ -67,376 +67,27 @@
         </el-form-item>
       </el-card>
 
-      <!-- Parameter configuration section -->
+      <!-- Parameter configuration section (dynamic forms) -->
       <el-card v-if="formData.steps.length > 0" class="form-section">
         <template #header>
           <span class="section-title">4. Step Parameters</span>
         </template>
 
-        <!-- NVT parameters -->
-        <div v-if="formData.steps.includes('nvt')" class="step-params">
-          <h4 class="step-params-title">NVT Parameters</h4>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Initial Temperature (K) <el-tooltip content="Initial temperature in K" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nvt_input.temp_begin"
-                  :min="1"
-                  :max="10000"
-                  :step="50"
-                  :precision="1"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Final Temperature (K) <el-tooltip content="Final temperature in K" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nvt_input.temp_end"
-                  :min="1"
-                  :max="10000"
-                  :step="50"
-                  :precision="1"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>MD Time Step (fs) <el-tooltip content="MD time step in fs" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nvt_input.md_dt"
-                  :min="0.1"
-                  :max="10"
-                  :step="0.5"
-                  :precision="1"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Number of MD Steps <el-tooltip content="Number of MD steps" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nvt_input.md_step"
-                  :min="100"
-                  :max="100000"
-                  :step="500"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nvt_input.kspacing"
-                  :min="0.01"
-                  :max="1"
-                  :precision="3"
-                  :step="0.01"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Thermostat <el-tooltip content="MD thermostat method" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-select v-model="formData.nvt_input.md_thermostat">
-                  <el-option label="Rescale V" value="rescale_v" />
-                  <el-option label="NHC" value="nhc" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-select v-model="formData.nvt_input.scf_thr">
-                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </div>
+        <template v-if="schemas">
+          <template v-for="(step, idx) in formData.steps" :key="step">
+            <el-divider v-if="idx > 0" />
+            <div class="step-params">
+              <h4 class="step-params-title">{{ STEP_CONFIG[step].label }}</h4>
+              <DynamicStepForm
+                :schema="schemas[STEP_CONFIG[step].schemaKey]"
+                :model-value="formData[STEP_CONFIG[step].inputKey] as Record<string, unknown>"
+                @update:model-value="formData[STEP_CONFIG[step].inputKey] = $event as any"
+              />
+            </div>
+          </template>
+        </template>
 
-        <!-- NVE parameters -->
-        <el-divider v-if="formData.steps.includes('nvt') && formData.steps.includes('nve')" />
-        <div v-if="formData.steps.includes('nve')" class="step-params">
-          <h4 class="step-params-title">NVE Parameters</h4>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>MD Time Step (fs) <el-tooltip content="MD time step in fs" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nve_input.md_dt"
-                  :min="0.1"
-                  :max="10"
-                  :step="0.5"
-                  :precision="1"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Number of MD Steps <el-tooltip content="Number of MD steps" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nve_input.md_step"
-                  :min="100"
-                  :max="100000"
-                  :step="500"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.nve_input.kspacing"
-                  :min="0.01"
-                  :max="1"
-                  :precision="3"
-                  :step="0.01"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-select v-model="formData.nve_input.scf_thr">
-                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </div>
-
-        <!-- SCF parameters -->
-        <el-divider v-if="formData.steps.includes('nve') && formData.steps.includes('scf')" />
-        <div v-if="formData.steps.includes('scf')" class="step-params">
-          <h4 class="step-params-title">SCF Parameters</h4>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Number of SCF Frames <el-tooltip content="Number of SCF frames to calculate" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.scf_input.scf_step"
-                  :min="1"
-                  :max="10000"
-                  :step="100"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Batch Size <el-tooltip content="Number of frames per batch task. Smaller batches mean more parallel tasks." placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.scf_input.batch_size"
-                  :min="1"
-                  :max="500"
-                  :step="10"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>K-point Spacing (1/Å) <el-tooltip content="K-point spacing in 2π × 1/Å" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input-number
-                  v-model="formData.scf_input.kspacing"
-                  :min="0.01"
-                  :max="1"
-                  :precision="3"
-                  :step="0.01"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>SCF Threshold <el-tooltip content="Electronic convergence criterion (eV)" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-select v-model="formData.scf_input.scf_thr">
-                  <el-option v-for="v in scfThrOptions" :key="v" :label="v.toExponential()" :value="v" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>All-electron VASP <el-tooltip content="Whether to use all-electron vasp" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-switch v-model="formData.scf_input.is_alle" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </div>
-
-        <!-- Pre-NAMD parameters -->
-        <el-divider v-if="formData.steps.includes('scf') && formData.steps.includes('pre_namd')" />
-        <div v-if="formData.steps.includes('pre_namd')" class="step-params">
-          <h4 class="step-params-title">Pre-NAMD Parameters</h4>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Band Min <el-tooltip content="Lower band index. Use VBM, VBM-2, VBM+1, or integer" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input
-                  v-model="formData.prenamd_input.bmin"
-                  placeholder="e.g. VBM, VBM-2, 10"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item>
-                <template #label>
-                  <span>Band Max <el-tooltip content="Upper band index. Use CBM, CBM+4, VBM+10, or integer" placement="top" :show-after="300"><el-icon class="param-help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
-                </template>
-                <el-input
-                  v-model="formData.prenamd_input.bmax"
-                  placeholder="e.g. CBM, CBM+4, 20"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="MD Time Step (fs)">
-                <el-input-number
-                  v-model="formData.prenamd_input.md_dt"
-                  :min="0.1"
-                  :max="10"
-                  :precision="2"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Surface Hopping Method">
-                <el-select v-model="formData.prenamd_input.surface_hopping">
-                  <el-option label="DISH" value="DISH" />
-                  <el-option label="FSSH" value="FSSH" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Adiabatic Representation">
-                <el-switch v-model="formData.prenamd_input.adiabatic_rep" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </div>
-
-        <!-- NAMD parameters -->
-        <el-divider v-if="formData.steps.includes('pre_namd') && formData.steps.includes('namd')" />
-        <div v-if="formData.steps.includes('namd')" class="step-params">
-          <h4 class="step-params-title">NAMD Parameters</h4>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item label="MD Time Step (fs)">
-                <el-input-number
-                  v-model="formData.namd_input.md_dt"
-                  :min="0.1"
-                  :max="10"
-                  :precision="2"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Temperature (K)">
-                <el-input-number
-                  v-model="formData.namd_input.temperature"
-                  :min="1"
-                  :max="10000"
-                  :precision="1"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Surface Hopping Method">
-                <el-select v-model="formData.namd_input.surface_hopping">
-                  <el-option label="DISH" value="DISH" />
-                  <el-option label="FSSH" value="FSSH" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Adiabatic Representation">
-                <el-switch v-model="formData.namd_input.adiabatic_rep" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Number of Samples">
-                <el-input-number
-                  v-model="formData.namd_input.nsample"
-                  :min="1"
-                  :max="10000"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Number of Trajectories">
-                <el-input-number
-                  v-model="formData.namd_input.ntraj"
-                  :min="1"
-                  :max="10000"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="NELM">
-                <el-input-number
-                  v-model="formData.namd_input.nelm"
-                  :min="1"
-                  :max="1000"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="NAMD Time Steps">
-                <el-input-number
-                  v-model="formData.namd_input.namdtime"
-                  :min="1000"
-                  :step="100000"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="Hole Dynamics">
-                <el-switch v-model="formData.namd_input.lhole" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="16">
-              <el-form-item label="Initial Bands (comma-separated, 1-based)">
-                <el-input
-                  v-model="namdInibandsStr"
-                  placeholder="e.g. 1,2,3,4"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </div>
+        <el-skeleton v-else :rows="3" animated />
       </el-card>
 
       <!-- Submit section -->
@@ -455,27 +106,30 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, computed } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { QuestionFilled } from '@element-plus/icons-vue'
 import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
+import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import { validatePoscar } from '@/api/structures'
+import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
+import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
-// SCF convergence threshold options (exponential steps)
-const scfThrOptions = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
-
-// Step-to-input mapping (MUST be defined at top level, NOT inside watch)
-const stepToInputMap: Record<string, string> = {
-  nvt: 'nvt_input',
-  nve: 'nve_input',
-  scf: 'scf_input',
-  pre_namd: 'prenamd_input',
-  namd: 'namd_input'
+// Step configuration: maps step name to formData key and schema key
+const STEP_CONFIG: Record<string, {
+  inputKey: keyof typeof formData
+  schemaKey: keyof StepInputSchemas
+  label: string
+}> = {
+  nvt: { inputKey: 'nvt_input', schemaKey: 'nvt', label: 'NVT Parameters' },
+  nve: { inputKey: 'nve_input', schemaKey: 'nve', label: 'NVE Parameters' },
+  scf: { inputKey: 'scf_input', schemaKey: 'scf', label: 'SCF Parameters' },
+  pre_namd: { inputKey: 'prenamd_input', schemaKey: 'pre_namd', label: 'Pre-NAMD Parameters' },
+  namd: { inputKey: 'namd_input', schemaKey: 'namd', label: 'NAMD Parameters' },
 }
 
 const router = useRouter()
@@ -485,100 +139,50 @@ const submitting = ref(false)
 const poscarContent = ref('')
 const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
+const schemas = ref<StepInputSchemas | null>(null)
 
-// --- Default input objects matching backend Pydantic models exactly ---
-
-function createDefaultNvtInput(): NVTInput {
-  return {
-    kspacing: 0.04,
-    md_thermostat: 'rescale_v',
-    md_dt: 1.0,
-    md_step: 1000,
-    temp_begin: 300.0,
-    temp_end: 300.0,
-    scf_thr: 1e-6,
-    parameters: ''
-  }
-}
-
-function createDefaultNveInput(): NVEInput {
-  return {
-    kspacing: 0.04,
-    md_dt: 1.0,
-    md_step: 1000,
-    scf_thr: 1e-6,
-    parameters: ''
-  }
-}
-
-function createDefaultScfInput(): SCFInput {
-  return {
-    kspacing: 0.04,
-    scf_thr: 1e-6,
-    scf_step: 1000,
-    batch_size: 100,
-    is_alle: false,
-    parameters: ''
-  }
-}
-
-function createDefaultPrenamdInput(): PreNAMDInput {
-  return {
-    bmin: 'VBM',
-    bmax: 'CBM',
-    md_dt: 1.0,
-    adiabatic_rep: true,
-    surface_hopping: 'DISH',
-    adv: {
-      reorder: false,
-      alle: false,
-      ikpt: 1,
-      ispin: 1
+onMounted(async () => {
+  try {
+    schemas.value = await getStepInputSchemas()
+    // Backfill defaults for any steps already selected before schema loaded
+    for (const step of formData.steps) {
+      const config = STEP_CONFIG[step]
+      if (!config) continue
+      const current = formData[config.inputKey]
+      if (!current || Object.keys(current as object).length === 0) {
+        ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
+      }
     }
-  }
-}
-
-function createDefaultNamdInput(): NAMDInput {
-  return {
-    md_dt: 1.0,
-    adiabatic_rep: true,
-    surface_hopping: 'DISH',
-    nsample: 200,
-    ntraj: 200,
-    nelm: 10,
-    namdtime: 1000000,
-    temperature: 300.0,
-    lhole: false,
-    inibands: [1, 2, 3, 4]
-  }
-}
-
-// Helper: stringify namd inibands for text input
-const namdInibandsStr = computed({
-  get: () => formData.namd_input.inibands.join(','),
-  set: (val: string) => {
-    formData.namd_input.inibands = val.split(',')
-      .map(s => parseInt(s.trim(), 10))
-      .filter(n => !isNaN(n))
+  } catch (error) {
+    ElMessage.error('Failed to load form schemas')
   }
 })
+
+/**
+ * Build defaults for a step from its schema.
+ * Falls back to an empty object if schemas are not loaded yet.
+ */
+function buildStepDefaults(schemaKey: keyof StepInputSchemas): Record<string, unknown> {
+  if (!schemas.value) return {}
+  return buildDefaultsFromSchema(schemas.value[schemaKey])
+}
 
 const formData = reactive<{
   steps: string[]
   method: 'namd' | 'n2amd'
-  nvt_input: NVTInput
-  nve_input: NVEInput
-  scf_input: SCFInput
-  prenamd_input: PreNAMDInput
-  namd_input: NAMDInput
+  nvt_input: NVTInput | Record<string, unknown>
+  nve_input: NVEInput | Record<string, unknown>
+  scf_input: SCFInput | Record<string, unknown>
+  prenamd_input: PreNAMDInput | Record<string, unknown>
+  namd_input: NAMDInput | Record<string, unknown>
 }>({
   steps: [],
   method: 'namd',
-  nvt_input: createDefaultNvtInput(),
-  nve_input: createDefaultNveInput(),
-  scf_input: createDefaultScfInput(),
-  prenamd_input: createDefaultPrenamdInput(),
-  namd_input: createDefaultNamdInput()
+  nvt_input: {},
+  nve_input: {},
+  scf_input: {},
+  prenamd_input: {},
+  namd_input: {},
 })
 
 const formRules: FormRules = {
@@ -596,53 +200,26 @@ const formRules: FormRules = {
   ]
 }
 
-// Watch steps changes to manage input objects
+// Watch steps changes to init/reset input objects from schema defaults
 watch(
   () => formData.steps,
   (newSteps, oldSteps) => {
-    // Reset input objects for newly selected steps
+    // Initialize inputs for newly selected steps
     for (const step of newSteps) {
-      const inputKey = stepToInputMap[step]
-      if (inputKey) {
-        switch (inputKey) {
-          case 'nvt_input':
-            if (!formData.nvt_input || Object.keys(formData.nvt_input).length === 0) {
-              formData.nvt_input = createDefaultNvtInput()
-            }
-            break
-          case 'nve_input':
-            if (!formData.nve_input || Object.keys(formData.nve_input).length === 0) {
-              formData.nve_input = createDefaultNveInput()
-            }
-            break
-          case 'scf_input':
-            if (!formData.scf_input || Object.keys(formData.scf_input).length === 0) {
-              formData.scf_input = createDefaultScfInput()
-            }
-            break
-          case 'prenamd_input':
-            if (!formData.prenamd_input || Object.keys(formData.prenamd_input).length === 0) {
-              formData.prenamd_input = createDefaultPrenamdInput()
-            }
-            break
-          case 'namd_input':
-            if (!formData.namd_input || Object.keys(formData.namd_input).length === 0) {
-              formData.namd_input = createDefaultNamdInput()
-            }
-            break
-        }
+      const config = STEP_CONFIG[step]
+      if (!config) continue
+      const current = formData[config.inputKey]
+      if (!current || Object.keys(current as object).length === 0) {
+        ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
       }
     }
 
-    // Clear inputs for deselected steps
+    // Reset inputs for deselected steps
     const removedSteps = (oldSteps || []).filter(s => !newSteps.includes(s))
     for (const step of removedSteps) {
-      const inputKey = stepToInputMap[step]
-      if (inputKey === 'nvt_input') formData.nvt_input = createDefaultNvtInput()
-      if (inputKey === 'nve_input') formData.nve_input = createDefaultNveInput()
-      if (inputKey === 'scf_input') formData.scf_input = createDefaultScfInput()
-      if (inputKey === 'prenamd_input') formData.prenamd_input = createDefaultPrenamdInput()
-      if (inputKey === 'namd_input') formData.namd_input = createDefaultNamdInput()
+      const config = STEP_CONFIG[step]
+      if (!config) continue
+      ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
     }
   },
   { deep: true }
@@ -704,9 +281,13 @@ async function handleSubmit(): Promise<void> {
   }
 
   // Validate NAMD step requires inibands
-  if (formData.steps.includes('namd') && formData.namd_input.inibands.length === 0) {
-    ElMessage.error('NAMD requires at least one initial band (inibands)')
-    return
+  if (formData.steps.includes('namd')) {
+    const namdInput = formData.namd_input as Record<string, unknown>
+    const inibands = namdInput?.inibands
+    if (!Array.isArray(inibands) || inibands.length === 0) {
+      ElMessage.error('NAMD requires at least one initial band (inibands)')
+      return
+    }
   }
 
   // Build submit payload matching backend InputT exactly
@@ -799,27 +380,7 @@ async function handleSubmit(): Promise<void> {
   padding: 24px 0;
 }
 
-:deep(.el-input-number) {
-  width: 100%;
-}
-
-:deep(.el-select) {
-  width: 100%;
-}
-
 .disabled-radio-wrapper {
   display: inline-block;
-}
-
-:deep(.param-label) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-:deep(.param-help-icon) {
-  font-size: 14px;
-  color: var(--el-text-color-placeholder);
-  cursor: help;
 }
 </style>

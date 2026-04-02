@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
@@ -16,7 +16,7 @@ from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .database import qdyndb
 from .frontend_api import create_frontend_router
-from .input import InputT
+from .input import InputT, NVTInputT, NVEInputT, SCFInputT, PreNAMDInputT, NAMDInputT
 from .main_workflow import MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError
 
 # ---------------------------------------------------------------------------
@@ -124,6 +124,63 @@ async def health_check() -> HealthResponse:
         version=__version__,
         timestamp=time.time(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-input schema endpoint
+# ---------------------------------------------------------------------------
+
+def _prune_hidden_fields(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively remove properties marked with hidden: true from a JSON schema.
+
+    Also cleans up ``required`` lists so the schema stays self-consistent.
+    Processes top-level properties as well as nested ``$defs``.
+    """
+    schema = dict(schema)  # shallow copy
+
+    def _prune_properties(obj: dict[str, Any]) -> dict[str, Any]:
+        obj = dict(obj)
+        props = obj.get("properties")
+        if not isinstance(props, dict):
+            return obj
+        hidden_keys = [k for k, v in props.items() if isinstance(v, dict) and v.get("hidden")]
+        if hidden_keys:
+            props = {k: v for k, v in props.items() if k not in hidden_keys}
+            obj["properties"] = props
+            req = obj.get("required")
+            if isinstance(req, list):
+                obj["required"] = [r for r in req if r not in hidden_keys]
+                if not obj["required"]:
+                    del obj["required"]
+        return obj
+
+    # prune top-level properties
+    schema = _prune_properties(schema)
+
+    # prune inside $defs
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        schema["$defs"] = {name: _prune_properties(defn) for name, defn in defs.items()}
+
+    return schema
+
+
+def build_step_input_schemas() -> dict[str, dict[str, Any]]:
+    """Build JSON schemas for all step input models, with hidden fields removed."""
+    raw = {
+        "nvt": NVTInputT.model_json_schema(),
+        "nve": NVEInputT.model_json_schema(),
+        "scf": SCFInputT.model_json_schema(),
+        "pre_namd": PreNAMDInputT.model_json_schema(),
+        "namd": NAMDInputT.model_json_schema(),
+    }
+    return {key: _prune_hidden_fields(s) for key, s in raw.items()}
+
+
+@app.get("/schema/step-inputs", tags=["schema"])
+def get_step_input_schemas() -> dict[str, Any]:
+    """Return JSON Schemas for all step input models (public, no auth)."""
+    return build_step_input_schemas()
 
 
 # ---------------------------------------------------------------------------

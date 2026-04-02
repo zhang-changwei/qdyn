@@ -348,18 +348,11 @@ def get_task_detail(
     Raises:
         ValueError: If the task is not found.
     """
-    import time as _time
-
-    _t0 = _time.monotonic()
-
     owner = qdyndb.get_task_owner(task_id)
     if owner is None:
         raise ValueError(f"Task '{task_id}' not found")
 
     job_ids = qdyndb.get_task_job_ids(task_id)
-
-    _t1 = _time.monotonic()
-    logger.info("get_task_detail [%s] sqlite: %.3fs", task_id, _t1 - _t0)
 
     # Collect all UUIDs across steps
     all_uuids: List[str] = []
@@ -372,14 +365,11 @@ def get_task_detail(
         try:
             manager = manager_getter()
             jc = manager._ensure_job_controller()
-            _t2 = _time.monotonic()
             job_infos = jc.get_jobs_info_query(
                 query={"uuid": {"$in": all_uuids}}
             )
             # Keep only the highest-index record per UUID,
             # matching get_job_info()'s sort=[("index", DESC)] semantics.
-            _t3 = _time.monotonic()
-            logger.info("get_task_detail [%s] mongo batch query: %.3fs (%d uuids)", task_id, _t3 - _t2, len(all_uuids))
             for ji in job_infos:
                 existing = uuid_to_job_info.get(ji.uuid)
                 if existing is None or getattr(ji, "index", 0) > getattr(existing, "index", 0):
@@ -906,8 +896,6 @@ def get_job_progress(
     Uses a single ``jc.get_job_info()`` call to retrieve state, run_dir,
     and job name, avoiding the previous 3-query overhead.
     """
-    import time as _time
-    _t0 = _time.monotonic()
     jc = manager._ensure_job_controller()
     try:
         job_info = jc.get_job_info(job_id=job_uuid)
@@ -936,19 +924,12 @@ def get_job_progress(
 
     step_type = _detect_step_type(job_name, run_dir)
 
-    _t1 = _time.monotonic()
-    logger.info("get_job_progress [%s] job_info query: %.3fs", job_uuid[:8], _t1 - _t0)
-
     if step_type in ("nvt", "nve"):
-        result = _get_md_progress(run_dir, step_type)
+        return _get_md_progress(run_dir, step_type)
     elif step_type == "scf":
-        result = _get_scf_progress(run_dir)
+        return _get_scf_progress(run_dir)
     else:
-        result = JobProgressResponse(available=True, step_type=step_type, current_step=0)
-
-    _t2 = _time.monotonic()
-    logger.info("get_job_progress [%s] %s parse: %.3fs, total: %.3fs", job_uuid[:8], step_type, _t2 - _t1, _t2 - _t0)
-    return result
+        return JobProgressResponse(available=True, step_type=step_type, current_step=0)
 
 
 def _get_md_progress(run_dir: Path, step_type: str) -> JobProgressResponse:

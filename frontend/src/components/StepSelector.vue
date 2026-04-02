@@ -11,11 +11,10 @@
           class="step-item"
         >
           <el-checkbox
-            :label="step.value"
+            :value="step.value"
+            :label="step.label"
             :disabled="!isStepSelectable(step.value)"
-          >
-            <span class="step-label">{{ step.label }}</span>
-          </el-checkbox>
+          />
           <el-icon
             v-if="index < availableSteps.length - 1"
             class="step-arrow"
