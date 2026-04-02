@@ -9,16 +9,19 @@
           v-for="(step, index) in availableSteps"
           :key="step.value"
           class="step-item"
+          :class="{ 'step-done': isCompletedStep(step.value) }"
         >
           <el-checkbox
             :value="step.value"
-            :label="step.label"
             :disabled="!isStepSelectable(step.value)"
-          />
+          >
+            <span class="step-label-text">{{ step.label }}</span>
+            <el-icon v-if="isCompletedStep(step.value)" class="done-icon"><Check /></el-icon>
+          </el-checkbox>
           <el-icon
             v-if="index < availableSteps.length - 1"
             class="step-arrow"
-            :class="{ active: isPreviousStepSelected(step.value) }"
+            :class="{ active: isArrowActive(step.value) }"
           >
             <ArrowRight />
           </el-icon>
@@ -28,7 +31,12 @@
 
     <div class="step-hint">
       <el-text type="info" size="small">
-        <span v-if="resume">Resume mode: Select any steps freely. Validation will be handled by the backend.</span>
+        <span v-if="resume && completedSteps && completedSteps.length > 0">
+          Resume mode: Continue from the next step after completed steps.
+        </span>
+        <span v-else-if="resume">
+          Resume mode: Select contiguous steps to run.
+        </span>
         <span v-else>Steps must be selected in order: nvt, nvt + nve, nvt + nve + scf, etc.</span>
       </el-text>
     </div>
@@ -37,13 +45,15 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ArrowRight, Check } from '@element-plus/icons-vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
   resume?: boolean
+  completedSteps?: string[]
 }>(), {
-  resume: false
+  resume: false,
+  completedSteps: () => []
 })
 
 const emit = defineEmits<{
@@ -67,12 +77,43 @@ const stepOrder = computed((): string[] => {
   return availableSteps.map(s => s.value)
 })
 
+/** Index of the first selectable step in resume mode */
+const resumeStartIndex = computed((): number => {
+  if (!props.resume || !props.completedSteps || props.completedSteps.length === 0) {
+    return 0
+  }
+  const lastCompleted = props.completedSteps[props.completedSteps.length - 1]
+  const idx = stepOrder.value.indexOf(lastCompleted)
+  return idx >= 0 ? idx + 1 : 0
+})
+
+function isCompletedStep(step: string): boolean {
+  return props.resume && (props.completedSteps ?? []).includes(step)
+}
+
 function isStepSelectable(step: string): boolean {
-  // In resume mode, allow flexible selection of any step
-  if (props.resume) {
-    return true
+  const stepIndex = stepOrder.value.indexOf(step)
+
+  // Resume mode with known completed steps
+  if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
+    // Completed steps are always disabled (shown as done)
+    if (stepIndex < resumeStartIndex.value) return false
+
+    // First selectable step is always allowed
+    if (stepIndex === resumeStartIndex.value) return true
+
+    // Already selected — allow unchecking
+    if (props.modelValue.includes(step)) return true
+
+    // Allow if the previous step in order is selected
+    const prevStep = stepOrder.value[stepIndex - 1]
+    return props.modelValue.includes(prevStep)
   }
 
+  // Resume mode without completed steps: standard contiguous from nvt
+  // (fall through to normal mode logic)
+
+  // Normal mode
   if (props.modelValue.length === 0) {
     return step === 'nvt'
   }
@@ -81,7 +122,6 @@ function isStepSelectable(step: string): boolean {
     return true
   }
 
-  const stepIndex = stepOrder.value.indexOf(step)
   if (stepIndex === 0) {
     return true
   }
@@ -90,23 +130,20 @@ function isStepSelectable(step: string): boolean {
   return props.modelValue.includes(previousStep)
 }
 
-function isPreviousStepSelected(step: string): boolean {
-  const stepIndex = stepOrder.value.indexOf(step)
-  if (stepIndex === 0) return false
-  const previousStep = stepOrder.value[stepIndex - 1]
-  return props.modelValue.includes(previousStep)
+function isArrowActive(step: string): boolean {
+  if (isCompletedStep(step)) return true
+  return props.modelValue.includes(step)
 }
 
 function handleUpdate(newValue: string[]): void {
-  const sortedValue = sortSteps(newValue)
+  // Filter out completed steps — they should never appear in modelValue
+  const filtered = newValue.filter(s => !isCompletedStep(s))
+  const sortedValue = sortSteps(filtered)
 
-  // Auto-trim: when a step is deselected, remove all subsequent steps
-  // Exception: in resume mode, allow flexible selection
-  if (!props.resume && sortedValue.length < props.modelValue.length) {
-    // Find which step was removed
+  // Auto-trim: deselecting a step removes all subsequent steps
+  if (sortedValue.length < props.modelValue.length) {
     const removedSteps = props.modelValue.filter(s => !sortedValue.includes(s))
     if (removedSteps.length > 0) {
-      // Find the earliest removed step index
       let minRemovedIndex = stepOrder.value.length
       for (const removed of removedSteps) {
         const idx = stepOrder.value.indexOf(removed)
@@ -114,7 +151,6 @@ function handleUpdate(newValue: string[]): void {
           minRemovedIndex = idx
         }
       }
-      // Keep only steps before the earliest removed step
       const trimmed = sortedValue.filter(
         s => stepOrder.value.indexOf(s) < minRemovedIndex
       )
@@ -127,7 +163,7 @@ function handleUpdate(newValue: string[]): void {
 }
 
 function sortSteps(steps: string[]): string[] {
-  return steps.sort((a, b) => {
+  return [...steps].sort((a, b) => {
     return stepOrder.value.indexOf(a) - stepOrder.value.indexOf(b)
   })
 }
@@ -153,8 +189,22 @@ function sortSteps(steps: string[]): string[] {
   gap: 4px;
 }
 
-.step-label {
+.step-item.step-done :deep(.el-checkbox) {
+  opacity: 0.6;
+}
+
+.step-item.step-done :deep(.el-checkbox__label) {
+  color: var(--el-color-success);
+}
+
+.step-label-text {
   font-weight: 500;
+}
+
+.done-icon {
+  font-size: 12px;
+  color: var(--el-color-success);
+  margin-left: 2px;
 }
 
 .step-arrow {

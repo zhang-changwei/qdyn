@@ -47,7 +47,7 @@ class TaskJobsStatusResponse(BaseModel):
 
 
 class TaskSummary(BaseModel):
-    """Task summary information for list display."""
+    """Task summary information for list display and resume eligibility."""
 
     task_id: str
     owner: str
@@ -59,6 +59,19 @@ class TaskSummary(BaseModel):
     total_jobs: int
     # Optional: names of failed jobs for quick identification
     failed_job_names: List[str] = Field(default_factory=list)
+    # Steps included in this task (ordered by phase)
+    steps: List[str] = Field(default_factory=list)
+    # Steps that have fully completed (contiguous prefix only)
+    completed_steps: List[str] = Field(default_factory=list)
+    # Structure metadata (persisted at submit time)
+    formula: Optional[str] = None
+    num_atoms: Optional[int] = None
+    # Resume chain: id of the predecessor task (if this is a resume task)
+    prev_task_id: Optional[str] = None
+    # The next step that can be resumed from
+    resume_next_step: Optional[str] = None
+    # Whether this task is eligible to be resumed
+    resume_eligible: bool = False
 
 
 class TaskSummaryListResponse(BaseModel):

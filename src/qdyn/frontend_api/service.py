@@ -437,6 +437,10 @@ def get_task_detail(
     )
 
 
+# Canonical step ordering used for resume eligibility computation
+_STEP_ORDER = ["nvt", "nve", "scf", "pre_namd", "namd"]
+
+
 def _build_task_summary(
     task_id: str,
     manager_getter: Callable[[], MainWorkflow],
@@ -444,7 +448,8 @@ def _build_task_summary(
     """
     Build a TaskSummary for a single task.
 
-    This is an internal helper function.
+    Computes per-step completion status and resume eligibility so the
+    frontend can drive the resume UI without additional queries.
 
     Args:
         task_id: The task identifier.
@@ -459,12 +464,15 @@ def _build_task_summary(
 
     job_ids = qdyndb.get_task_job_ids(task_id)
 
-    # Collect status counts
+    # Collect status counts and per-step completion info
     raw_status_counts: Dict[str, int] = {}
     total_jobs = 0
     failed_job_names: List[str] = []
+    # Track per-step: whether all jobs in that step are COMPLETED
+    step_all_completed: Dict[str, bool] = {}
 
     for step_name, uuid_list in job_ids.items():
+        all_completed_for_step = True
         for idx, job_uuid in enumerate(uuid_list):
             total_jobs += 1
             try:
@@ -475,18 +483,47 @@ def _build_task_summary(
                 if raw_state == "FAILED":
                     failed_job_names.append(f"{step_name}_{idx}")
 
+                if raw_state != "COMPLETED":
+                    all_completed_for_step = False
+
             except Exception:
                 # Count unknown/query errors as ERROR
                 raw_status_counts["ERROR"] = raw_status_counts.get("ERROR", 0) + 1
+                all_completed_for_step = False
 
-    # Get created_at timestamp from database
-    # Note: The current QdynDB schema stores created_at as a datetime string.
-    # We need to query it directly since get_task_job_ids doesn't include it.
-    # For now, use current time as a fallback.
-    # TODO: Add a get_task_created_at method to QdynDB or extend the query.
+        step_all_completed[step_name] = all_completed_for_step
+
+    # Sort steps by canonical order
+    steps = [s for s in _STEP_ORDER if s in job_ids]
+
+    # Compute completed_steps: contiguous prefix of fully-completed steps
+    completed_steps: List[str] = []
+    for s in steps:
+        if step_all_completed.get(s, False):
+            completed_steps.append(s)
+        else:
+            break  # stop at first incomplete step
+
+    # Compute resume_next_step: the step right after the last completed one
+    resume_next_step: Optional[str] = None
+    if completed_steps:
+        last_completed = completed_steps[-1]
+        last_idx = _STEP_ORDER.index(last_completed)
+        if last_idx + 1 < len(_STEP_ORDER):
+            resume_next_step = _STEP_ORDER[last_idx + 1]
+
     created_at = _get_task_created_at_fallback(task_id)
-
     derived_status = derive_task_status(raw_status_counts)
+
+    # Resume eligibility: must have a valid next step, and the task must
+    # have finished running (COMPLETED or FAILED).
+    resume_eligible = (
+        resume_next_step is not None
+        and derived_status in ("COMPLETED", "FAILED")
+    )
+
+    # Fetch persisted metadata (formula, num_atoms, prev_task_id)
+    meta = qdyndb.get_task_metadata(task_id) or {}
 
     return TaskSummary(
         task_id=task_id,
@@ -496,6 +533,13 @@ def _build_task_summary(
         derived_status=derived_status,
         total_jobs=total_jobs,
         failed_job_names=failed_job_names,
+        steps=steps,
+        completed_steps=completed_steps,
+        formula=meta.get("formula"),
+        num_atoms=meta.get("num_atoms"),
+        prev_task_id=meta.get("prev_task_id"),
+        resume_next_step=resume_next_step,
+        resume_eligible=resume_eligible,
     )
 
 

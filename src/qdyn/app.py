@@ -216,8 +216,20 @@ def _submit_with_tracking(
     prev_task_id: str,
     username: str,
 ) -> str:
-    """Submit a task and persist task ownership metadata."""
+    """Submit a task and persist task ownership and structure metadata."""
     m = _manager()
+
+    # Ownership check for resume: prev_task_id must belong to the same user
+    if resume and prev_task_id:
+        prev_owner = qdyndb.get_task_owner(prev_task_id)
+        if prev_owner is None:
+            raise HTTPException(status_code=404, detail="Previous task not found")
+        if prev_owner != username:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Cannot resume a task owned by another user",
+            )
+
     try:
         task_id, job_ids = m.submit(
             input=input,
@@ -237,6 +249,35 @@ def _submit_with_tracking(
         raise HTTPException(status_code=501, detail=f"Not supported: {e}")
 
     qdyndb.assign_task(task_id, username, job_ids)
+
+    # Persist structure metadata for task summary / resume UI
+    formula = None
+    num_atoms = None
+    if resume and prev_task_id:
+        # Inherit metadata from the predecessor task
+        prev_meta = qdyndb.get_task_metadata(prev_task_id)
+        if prev_meta:
+            formula = prev_meta.get("formula")
+            num_atoms = prev_meta.get("num_atoms")
+    else:
+        # Parse from the uploaded POSCAR content
+        if input.stru:
+            try:
+                import io
+                from ase.io import read as ase_read
+                atoms = ase_read(io.StringIO(input.stru), format=input.stru_format or "vasp")
+                formula = atoms.get_chemical_formula()
+                num_atoms = len(atoms)
+            except Exception:
+                logging.warning("Failed to parse structure metadata from POSCAR")
+
+    qdyndb.update_task_metadata(
+        task_id,
+        formula=formula,
+        num_atoms=num_atoms,
+        prev_task_id=prev_task_id if resume and prev_task_id else None,
+    )
+
     return task_id
 
 

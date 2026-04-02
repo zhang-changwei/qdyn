@@ -6,8 +6,16 @@
         <el-icon><ArrowLeft /></el-icon>
         Back
       </el-button>
-      <h2 class="page-title">Submit New Task</h2>
+      <h2 class="page-title">{{ submitMode === 'resume' ? 'Resume Task' : 'Submit New Task' }}</h2>
     </div>
+
+    <!-- Mode switch -->
+    <el-card class="form-section mode-section">
+      <el-radio-group v-model="submitMode" @change="handleModeChange">
+        <el-radio-button value="new">New Task</el-radio-button>
+        <el-radio-button value="resume">Resume Task</el-radio-button>
+      </el-radio-group>
+    </el-card>
 
     <el-form
       ref="formRef"
@@ -16,8 +24,8 @@
       label-position="top"
       class="submit-form"
     >
-      <!-- POSCAR upload section -->
-      <el-card class="form-section">
+      <!-- POSCAR upload section (new mode only) -->
+      <el-card v-if="submitMode === 'new'" class="form-section">
         <template #header>
           <span class="section-title">1. Structure (POSCAR)</span>
         </template>
@@ -37,13 +45,37 @@
         />
       </el-card>
 
+      <!-- Resume task selector (resume mode only) -->
+      <el-card v-if="submitMode === 'resume'" class="form-section">
+        <template #header>
+          <span class="section-title">1. Select Previous Task</span>
+        </template>
+        <el-alert
+          title="Structure will be inherited from the selected task"
+          type="info"
+          show-icon
+          :closable="false"
+          class="resume-info-alert"
+        />
+        <ResumeTaskSelector
+          v-model="selectedResumeTaskId"
+          :tasks="resumeTasks"
+          :loading="resumeTasksLoading"
+          @task-selected="handleResumeTaskSelected"
+        />
+      </el-card>
+
       <!-- Step selection section -->
       <el-card class="form-section">
         <template #header>
           <span class="section-title">2. Workflow Steps</span>
         </template>
         <el-form-item prop="steps">
-          <StepSelector v-model="formData.steps" :resume="false" />
+          <StepSelector
+            v-model="formData.steps"
+            :resume="submitMode === 'resume'"
+            :completed-steps="selectedResumeTask?.completed_steps"
+          />
         </el-form-item>
       </el-card>
 
@@ -138,7 +170,7 @@
           :loading="submitting"
           @click="handleSubmit"
         >
-          Submit Task
+          {{ submitMode === 'resume' ? 'Resume Task' : 'Submit Task' }}
         </el-button>
       </div>
     </el-form>
@@ -152,12 +184,14 @@ import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
+import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import { validatePoscar } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
+import { getTaskSummaryList } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
-import type { ValidatePoscarResponse, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
+import type { ValidatePoscarResponse, TaskSummary, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
 // Step configuration: maps step name to formData key and schema key
 const STEP_CONFIG: Record<string, {
@@ -180,6 +214,13 @@ const poscarContent = ref('')
 const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
 const schemas = ref<StepInputSchemas | null>(null)
+
+// Resume mode state
+const submitMode = ref<'new' | 'resume'>('new')
+const resumeTasks = ref<TaskSummary[]>([])
+const resumeTasksLoading = ref(false)
+const selectedResumeTaskId = ref<string | null>(null)
+const selectedResumeTask = ref<TaskSummary | null>(null)
 
 onMounted(async () => {
   try {
@@ -300,20 +341,70 @@ function goBack(): void {
   router.push({ name: 'task-list' })
 }
 
+async function fetchResumeTasks(): Promise<void> {
+  resumeTasksLoading.value = true
+  try {
+    const response = await getTaskSummaryList()
+    resumeTasks.value = response.items
+  } catch {
+    ElMessage.error('Failed to load task list for resume')
+    resumeTasks.value = []
+  } finally {
+    resumeTasksLoading.value = false
+  }
+}
+
+function handleModeChange(mode: string | number | boolean): void {
+  if (mode === 'resume') {
+    // Clear new-task state, load resume candidates
+    formData.steps = []
+    selectedResumeTaskId.value = null
+    selectedResumeTask.value = null
+    fetchResumeTasks()
+  } else {
+    // Clear resume state and stale POSCAR from previous session
+    selectedResumeTaskId.value = null
+    selectedResumeTask.value = null
+    formData.steps = []
+    poscarContent.value = ''
+    poscarValidation.value = null
+    poscarVersion.value++
+  }
+}
+
+function handleResumeTaskSelected(task: TaskSummary | null): void {
+  selectedResumeTask.value = task
+  // Auto-initialize steps to resume_next_step when a task is selected
+  if (task?.resume_next_step) {
+    formData.steps = [task.resume_next_step]
+  } else {
+    formData.steps = []
+  }
+}
+
 async function handleSubmit(): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  // Validate POSCAR uploaded
-  if (!poscarContent.value) {
-    ElMessage.error('Please upload a POSCAR file')
-    return
-  }
+  const isResume = submitMode.value === 'resume'
 
-  // Validate POSCAR passed validation
-  if (!poscarValidation.value?.valid) {
-    ElMessage.error('Please fix POSCAR validation errors before submitting')
-    return
+  // Mode-specific validations
+  if (isResume) {
+    if (!selectedResumeTaskId.value || !selectedResumeTask.value) {
+      ElMessage.error('Please select a task to resume from')
+      return
+    }
+  } else {
+    // Validate POSCAR uploaded
+    if (!poscarContent.value) {
+      ElMessage.error('Please upload a POSCAR file')
+      return
+    }
+    // Validate POSCAR passed validation
+    if (!poscarValidation.value?.valid) {
+      ElMessage.error('Please fix POSCAR validation errors before submitting')
+      return
+    }
   }
 
   // Validate at least one step selected (redundant but explicit)
@@ -340,7 +431,7 @@ async function handleSubmit(): Promise<void> {
     },
     scheduler_config: {},
     steps: formData.steps,
-    stru: poscarContent.value,
+    stru: isResume ? '' : poscarContent.value,
     stru_format: 'vasp',
     // Include inputs for selected steps
     ...(formData.steps.includes('nvt') && { nvt_input: formData.nvt_input }),
@@ -350,14 +441,17 @@ async function handleSubmit(): Promise<void> {
     ...(formData.steps.includes('namd') && { namd_input: formData.namd_input })
   }
 
+  // Build URL with optional resume parameters
+  let submitUrl = `/submit?method=${formData.method}`
+  if (isResume) {
+    submitUrl += `&resume=true&prev_task_id=${selectedResumeTaskId.value}`
+  }
+
   submitting.value = true
   try {
-    const response = await http.post<string>(
-      `/submit?method=${formData.method}`,
-      payload
-    )
+    const response = await http.post<string>(submitUrl, payload)
     const taskId = response.data
-    ElMessage.success(`Task submitted: ${taskId}`)
+    ElMessage.success(isResume ? `Task resumed: ${taskId}` : `Task submitted: ${taskId}`)
     router.push({ name: 'task-detail', params: { taskId } })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Submit failed'
@@ -400,6 +494,20 @@ async function handleSubmit(): Promise<void> {
 .section-title {
   font-weight: 600;
   font-size: 16px;
+}
+
+.mode-section {
+  margin-bottom: 0;
+}
+
+.mode-section :deep(.el-card__body) {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.resume-info-alert {
+  margin-bottom: 16px;
 }
 
 .validation-alert {

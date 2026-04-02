@@ -78,7 +78,7 @@ export interface TaskJobsStatusResponse {
 // ============================================
 
 /**
- * Task summary for list display
+ * Task summary for list display and resume eligibility
  */
 export interface TaskSummary {
   task_id: string
@@ -92,6 +92,20 @@ export interface TaskSummary {
   total_jobs: number
   /** Names of failed jobs (for quick preview) */
   failed_job_names: string[]
+  /** Steps included in this task (ordered by phase) */
+  steps: string[]
+  /** Steps that have fully completed (contiguous prefix) */
+  completed_steps: string[]
+  /** Structure formula (e.g. "MoS2") */
+  formula: string | null
+  /** Number of atoms in the structure */
+  num_atoms: number | null
+  /** Predecessor task id if this is a resume task */
+  prev_task_id: string | null
+  /** The next step eligible for resume */
+  resume_next_step: string | null
+  /** Whether this task can be resumed */
+  resume_eligible: boolean
 }
 
 /**

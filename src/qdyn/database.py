@@ -41,6 +41,24 @@ class QdynDB:
             """)
             self._conn.commit()
 
+            # Migrate: add optional metadata columns if they don't exist yet
+            self._migrate_task_metadata()
+
+
+    def _migrate_task_metadata(self) -> None:
+        """Add formula, num_atoms, and prev_task_id columns if missing."""
+        assert self._conn is not None
+        cursor = self._conn.execute("PRAGMA table_info(task_owners)")
+        existing = {row["name"] for row in cursor.fetchall()}
+        migrations = {
+            "formula": "ALTER TABLE task_owners ADD COLUMN formula TEXT DEFAULT NULL",
+            "num_atoms": "ALTER TABLE task_owners ADD COLUMN num_atoms INTEGER DEFAULT NULL",
+            "prev_task_id": "ALTER TABLE task_owners ADD COLUMN prev_task_id TEXT DEFAULT NULL",
+        }
+        for col, ddl in migrations.items():
+            if col not in existing:
+                self._conn.execute(ddl)
+        self._conn.commit()
 
     def get_db(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -120,5 +138,31 @@ class QdynDB:
         with self._lock:
             conn.execute("DELETE FROM task_owners WHERE task_id = ?", (task_id,))
             conn.commit()
+
+    def update_task_metadata(
+        self,
+        task_id: str,
+        formula: Optional[str] = None,
+        num_atoms: Optional[int] = None,
+        prev_task_id: Optional[str] = None,
+    ) -> None:
+        """Persist structure metadata and resume lineage for a task."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE task_owners SET formula = ?, num_atoms = ?, prev_task_id = ? WHERE task_id = ?",
+                (formula, num_atoms, prev_task_id, task_id),
+            )
+            conn.commit()
+
+    def get_task_metadata(self, task_id: str) -> Optional[dict]:
+        """Return formula, num_atoms, and prev_task_id for a task (or None)."""
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT formula, num_atoms, prev_task_id FROM task_owners WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
 qdyndb = QdynDB()
