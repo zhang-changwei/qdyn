@@ -826,10 +826,18 @@ function goBack(): void {
 // Time formatting helpers
 // ============================================
 
+function normalizeUtcDateTime(isoStr: string): string {
+  const normalized = isoStr.trim().replace(' ', 'T')
+  if (/(?:Z|[+-]\d{2}:\d{2}|[+-]\d{4})$/.test(normalized)) {
+    return normalized
+  }
+  return `${normalized}Z`
+}
+
 function formatDateTime(isoStr: string | null | undefined): string {
   if (!isoStr) return '-'
   try {
-    const d = new Date(isoStr)
+    const d = new Date(normalizeUtcDateTime(isoStr))
     if (isNaN(d.getTime())) return isoStr
     const pad = (n: number) => String(n).padStart(2, '0')
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
@@ -841,8 +849,8 @@ function formatDateTime(isoStr: string | null | undefined): string {
 function computeDuration(start: string | null | undefined, end: string | null | undefined): string {
   if (!start || !end) return '-'
   try {
-    const startMs = new Date(start).getTime()
-    const endMs = new Date(end).getTime()
+    const startMs = new Date(normalizeUtcDateTime(start)).getTime()
+    const endMs = new Date(normalizeUtcDateTime(end)).getTime()
     if (isNaN(startMs) || isNaN(endMs)) return '-'
     const diffSec = Math.floor((endMs - startMs) / 1000)
     if (diffSec < 0) return '-'

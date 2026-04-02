@@ -9,6 +9,7 @@ injection (manager_getter) to avoid circular imports with app.py.
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -57,6 +58,57 @@ PAUSED_RAW_STATES = {"PAUSED", "STOPPED", "USER_STOPPED"}
 PENDING_RAW_STATES = {"READY", "WAITING"}
 
 ERROR_RAW_STATES = {"REMOTE_ERROR", "ERROR"}
+
+
+def _dt_str(val: object) -> Optional[str]:
+    """
+    Convert a datetime-like value to an ISO string with explicit timezone.
+
+    Jobflow-remote may return naive UTC datetimes. The frontend relies on an
+    explicit UTC marker so that browsers convert them to the viewer's local
+    timezone instead of treating them as already-local wall-clock time.
+    """
+    if val is None:
+        return None
+
+    if isinstance(val, datetime):
+        dt = val if val.tzinfo is not None and val.utcoffset() is not None else val.replace(
+            tzinfo=timezone.utc
+        )
+        return dt.isoformat().replace("+00:00", "Z")
+
+    s = val.isoformat() if hasattr(val, "isoformat") else str(val)
+    if not s:
+        return s
+
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+
+    if s.endswith("Z"):
+        return s
+
+    if s.endswith("+00:00"):
+        return s[:-6] + "Z"
+
+    timezone_tail = s[-6:]
+    if (
+        len(s) >= 6
+        and timezone_tail[0] in "+-"
+        and timezone_tail[1:3].isdigit()
+        and timezone_tail[3] == ":"
+        and timezone_tail[4:6].isdigit()
+    ):
+        return s
+
+    compact_timezone_tail = s[-5:]
+    if (
+        len(s) >= 5
+        and compact_timezone_tail[0] in "+-"
+        and compact_timezone_tail[1:].isdigit()
+    ):
+        return s
+
+    return f"{s}Z"
 
 
 # -----------------------------------------------------------------------------
@@ -177,15 +229,6 @@ def get_job_info_safe(
             job_name = f"{step_name}_{uuid_list.index(job_uuid)}"
             job_index = uuid_list.index(job_uuid)
             break
-
-    def _dt_str(val: object) -> Optional[str]:
-        if val is None:
-            return None
-        s = val.isoformat() if hasattr(val, "isoformat") else str(val)
-        # Append Z to mark UTC if no timezone info present
-        if s and not s.endswith("Z") and "+" not in s and s[-1].isdigit():
-            s += "Z"
-        return s
 
     return JobStatusItem(
         uuid=job_uuid,
@@ -397,12 +440,6 @@ def get_task_detail(
     jobs: List[JobStatusItem] = []
     raw_status_counts: Dict[str, int] = {}
     failed_job_names: List[str] = []
-
-    def _dt_str(val: object) -> Optional[str]:
-        """Convert a datetime-like value to ISO string, or None."""
-        if val is None:
-            return None
-        return val.isoformat() if hasattr(val, "isoformat") else str(val)
 
     for step_name, uuid_list in job_ids.items():
         for idx, job_uuid in enumerate(uuid_list):
