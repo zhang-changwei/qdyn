@@ -47,17 +47,19 @@
           <!-- comma-separated-integers widget -->
           <el-input
             v-else-if="field.widget === 'comma-separated-integers'"
-            :model-value="formatCsvIntegers(getFieldValue(field.path))"
+            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
             :placeholder="field.schema.placeholder"
-            @update:model-value="setCsvIntegers(field.path, $event, field.nullable)"
+            @update:model-value="updateCsvDraft(field.path, $event)"
+            @change="commitCsvIntegers(field.path, field.nullable)"
           />
 
           <!-- comma-separated-strings widget -->
           <el-input
             v-else-if="field.widget === 'comma-separated-strings'"
-            :model-value="formatCsvStrings(getFieldValue(field.path))"
+            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
             :placeholder="field.schema.placeholder"
-            @update:model-value="setCsvStrings(field.path, $event, field.nullable)"
+            @update:model-value="updateCsvDraft(field.path, $event)"
+            @change="commitCsvStrings(field.path, field.nullable)"
           />
 
           <!-- textarea widget -->
@@ -148,17 +150,19 @@
               <!-- comma-separated-integers widget (advanced) -->
               <el-input
                 v-if="field.widget === 'comma-separated-integers'"
-                :model-value="formatCsvIntegers(getFieldValue(field.path))"
+                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
                 :placeholder="field.schema.placeholder"
-                @update:model-value="setCsvIntegers(field.path, $event, field.nullable)"
+                @update:model-value="updateCsvDraft(field.path, $event)"
+                @change="commitCsvIntegers(field.path, field.nullable)"
               />
 
               <!-- comma-separated-strings widget (advanced) -->
               <el-input
                 v-else-if="field.widget === 'comma-separated-strings'"
-                :model-value="formatCsvStrings(getFieldValue(field.path))"
+                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
                 :placeholder="field.schema.placeholder"
-                @update:model-value="setCsvStrings(field.path, $event, field.nullable)"
+                @update:model-value="updateCsvDraft(field.path, $event)"
+                @change="commitCsvStrings(field.path, field.nullable)"
               />
 
               <!-- Advanced textarea for string fields -->
@@ -229,7 +233,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   resolveLocalRef,
@@ -355,6 +359,38 @@ const advancedFields = computed(() =>
   allFields.value.filter((f) => f.group === 'advanced'),
 )
 
+const csvDrafts = reactive<Record<string, string>>({})
+
+watch(
+  [() => props.modelValue, allFields],
+  () => {
+    const csvPaths = new Set(
+      allFields.value
+        .filter(
+          (field) =>
+            field.widget === 'comma-separated-integers' ||
+            field.widget === 'comma-separated-strings',
+        )
+        .map((field) => field.path),
+    )
+
+    for (const path of Object.keys(csvDrafts)) {
+      if (!csvPaths.has(path)) {
+        delete csvDrafts[path]
+      }
+    }
+
+    for (const field of allFields.value) {
+      if (field.widget === 'comma-separated-integers') {
+        csvDrafts[field.path] = formatCsvIntegers(getFieldValue(field.path))
+      } else if (field.widget === 'comma-separated-strings') {
+        csvDrafts[field.path] = formatCsvStrings(getFieldValue(field.path))
+      }
+    }
+  },
+  { deep: true, immediate: true },
+)
+
 // --- Value accessors ---
 
 function getFieldValue(path: string): unknown {
@@ -394,20 +430,41 @@ function formatCsvStrings(value: unknown): string {
   return ''
 }
 
-function setCsvIntegers(path: string, raw: string, nullable: boolean): void {
-  if (!raw.trim() && nullable) {
-    setFieldValue(path, null)
-    return
-  }
-  setFieldValue(path, parseCommaSeparatedIntegers(raw))
+function getCsvDraftValue(
+  path: string,
+  value: unknown,
+  formatter: (value: unknown) => string,
+): string {
+  if (path in csvDrafts) return csvDrafts[path]
+  return formatter(value)
 }
 
-function setCsvStrings(path: string, raw: string, nullable: boolean): void {
+function updateCsvDraft(path: string, raw: string): void {
+  csvDrafts[path] = raw
+}
+
+function commitCsvIntegers(path: string, nullable: boolean): void {
+  const raw = csvDrafts[path] ?? formatCsvIntegers(getFieldValue(path))
   if (!raw.trim() && nullable) {
+    csvDrafts[path] = ''
     setFieldValue(path, null)
     return
   }
-  setFieldValue(path, parseCommaSeparatedStrings(raw))
+  const parsed = parseCommaSeparatedIntegers(raw)
+  csvDrafts[path] = formatCsvIntegers(parsed)
+  setFieldValue(path, parsed)
+}
+
+function commitCsvStrings(path: string, nullable: boolean): void {
+  const raw = csvDrafts[path] ?? formatCsvStrings(getFieldValue(path))
+  if (!raw.trim() && nullable) {
+    csvDrafts[path] = ''
+    setFieldValue(path, null)
+    return
+  }
+  const parsed = parseCommaSeparatedStrings(raw)
+  csvDrafts[path] = formatCsvStrings(parsed)
+  setFieldValue(path, parsed)
 }
 </script>
 
