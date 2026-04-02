@@ -181,7 +181,11 @@ def get_job_info_safe(
     def _dt_str(val: object) -> Optional[str]:
         if val is None:
             return None
-        return val.isoformat() if hasattr(val, "isoformat") else str(val)
+        s = val.isoformat() if hasattr(val, "isoformat") else str(val)
+        # Append Z to mark UTC if no timezone info present
+        if s and not s.endswith("Z") and "+" not in s and s[-1].isdigit():
+            s += "Z"
+        return s
 
     return JobStatusItem(
         uuid=job_uuid,
