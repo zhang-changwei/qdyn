@@ -384,6 +384,7 @@ const chartOption = computed<ECOption>(() => {
         name: 'Temperature (K)',
         nameLocation: 'center',
         nameGap: 50,
+        scale: true,
         splitLine: { lineStyle: { type: 'dashed' } },
       },
       {
@@ -392,6 +393,7 @@ const chartOption = computed<ECOption>(() => {
         name: 'Energy (eV)',
         nameLocation: 'center',
         nameGap: 50,
+        scale: true,
         splitLine: { lineStyle: { type: 'dashed' } },
       },
     ],
