@@ -54,6 +54,13 @@
         </el-space>
       </div>
 
+      <div v-if="task.prev_task_id" class="resume-info">
+        <el-text type="info" size="small">
+          <el-icon><Connection /></el-icon>
+          Resumed from: {{ truncateId(task.prev_task_id) }}
+        </el-text>
+      </div>
+
       <div v-if="task.failed_job_names.length > 0" class="failed-jobs">
         <el-text type="danger" size="small">
           <el-icon><WarningFilled /></el-icon>
@@ -67,7 +74,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Timer, List, User, WarningFilled } from '@element-plus/icons-vue'
+import { Timer, List, User, WarningFilled, Connection } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { stopTask, deleteTask } from '@/api/tasks'
 import StatusBadge from './StatusBadge.vue'
@@ -103,6 +110,11 @@ const formattedTime = computed((): string => {
     minute: '2-digit'
   })
 })
+
+function truncateId(id: string): string {
+  if (id.length <= 16) return id
+  return `${id.slice(0, 8)}...${id.slice(-4)}`
+}
 
 const failedJobsDisplay = computed((): string => {
   const names = props.task.failed_job_names
@@ -236,6 +248,10 @@ async function handleDelete(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.resume-info {
+  font-family: monospace;
 }
 
 .failed-jobs {

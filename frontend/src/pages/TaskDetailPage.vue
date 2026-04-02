@@ -489,19 +489,39 @@ const hasRunningJobs = computed((): boolean => {
 // Lifecycle
 // ============================================
 
-onMounted(async () => {
+async function loadTaskData(): Promise<void> {
+  // Clear stale state from previous task
+  jobFiles.value.clear()
+  jobProgress.value.clear()
+  jobInputParams.value.clear()
+  expandedErrors.value.clear()
+  jobErrors.value.clear()
+  for (const url of imageBlobUrls.value.values()) {
+    URL.revokeObjectURL(url)
+  }
+  imageBlobUrls.value.clear()
+
   try {
-    // TaskDetail and TaskJobsStatusResponse are the same type, avoid duplicate requests
     await tasksStore.fetchTaskDetail(taskId.value)
-    // Load progress/images/files for existing jobs
     await refreshJobExtras()
   } catch {
     // Error is handled by store
   }
+}
+
+onMounted(async () => {
+  await loadTaskData()
   startPolling()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('focus', handleFocus)
   window.addEventListener('blur', handleBlur)
+})
+
+// Reload when navigating between tasks (e.g. "Resumed from" link)
+watch(taskId, async () => {
+  stopPolling()
+  await loadTaskData()
+  startPolling()
 })
 
 onUnmounted(() => {
