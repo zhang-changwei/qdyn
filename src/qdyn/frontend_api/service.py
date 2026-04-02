@@ -647,8 +647,9 @@ def list_job_files(
     """
     List whitelisted files in a job's run directory (non-recursive).
 
-    Only includes files matching the allowed extensions or exact filenames,
-    and skips files larger than 50 MB.
+    Only includes files matching the allowed extensions or exact filenames.
+    All matching files are listed regardless of size; size limits are enforced
+    at download time in ``serve_job_file()``.
     """
     items: List[JobFileItem] = []
 
@@ -664,12 +665,10 @@ def list_job_files(
             if suffix not in _ALLOWED_EXTENSIONS and name not in _ALLOWED_FILENAMES:
                 continue
 
-            # Skip large files
+            # Get file size (skip if inaccessible)
             try:
                 size = entry.stat().st_size
             except OSError:
-                continue
-            if size > _MAX_FILE_SIZE:
                 continue
 
             url = f"/frontend/tasks/{task_id}/jobs/{job_uuid}/files/{name}"

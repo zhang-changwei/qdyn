@@ -375,9 +375,31 @@ const truncatedTaskId = computed((): string => {
   return `${id.slice(0, 12)}...${id.slice(-8)}`
 })
 
+// Phase ordering: nvt < nve < scf < pre_namd < namd
+const PHASE_ORDER: Record<string, number> = {
+  nvt: 0,
+  nve: 1,
+  scf: 2,
+  pre_namd: 3,
+  namd: 4,
+}
+
+function getPhaseFromName(name: string): number {
+  // Job names like "nvt_0", "nve_0", "scf_0", "pre_namd_0", "namd_0"
+  // Extract the step type by removing the trailing "_<index>"
+  const lastUnderscore = name.lastIndexOf('_')
+  const stepType = lastUnderscore > 0 ? name.slice(0, lastUnderscore) : name
+  return PHASE_ORDER[stepType] ?? 999
+}
+
 const sortedJobs = computed((): JobStatusItem[] => {
   if (!jobsStatus.value?.jobs) return []
-  return [...jobsStatus.value.jobs].sort((a, b) => a.index - b.index)
+  return [...jobsStatus.value.jobs].sort((a, b) => {
+    const phaseA = getPhaseFromName(a.name)
+    const phaseB = getPhaseFromName(b.name)
+    if (phaseA !== phaseB) return phaseA - phaseB
+    return a.index - b.index
+  })
 })
 
 // Whether any job is in a running/waiting state
