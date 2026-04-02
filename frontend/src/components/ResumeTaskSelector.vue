@@ -7,6 +7,8 @@
       clearable
       :loading="loading"
       style="width: 100%"
+      :popper-options="{ modifiers: [{ name: 'offset', options: { offset: [0, 4] } }] }"
+      popper-class="resume-task-popper"
       @update:model-value="handleSelect"
     >
       <el-option
@@ -163,7 +165,7 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 }
 
 .task-option {
-  padding: 4px 0;
+  padding: 6px 0;
   line-height: 1.4;
 }
 
@@ -198,8 +200,9 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 
 .task-option-steps {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .step-tag {
@@ -235,5 +238,33 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
   font-family: monospace;
   font-size: 12px;
   word-break: break-all;
+}
+</style>
+
+<style>
+/* Unscoped: popper-class renders outside component root */
+.resume-task-popper.el-select__popper {
+  max-height: 460px !important;
+}
+
+.resume-task-popper .el-scrollbar__wrap {
+  max-height: 460px !important;
+}
+
+.resume-task-popper .el-select-dropdown__list {
+  max-height: none !important;
+}
+
+.resume-task-popper .el-select-dropdown__item {
+  height: auto !important;
+  min-height: 78px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  white-space: normal !important;
+  line-height: 1.4 !important;
+}
+
+.resume-task-popper .el-select-dropdown__item > span {
+  white-space: normal;
 }
 </style>
