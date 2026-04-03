@@ -20,6 +20,7 @@ import type {
   JobStatusDetailResponse,
   JobErrorResponse,
   StopResultResponse,
+  ContinueResultResponse,
   JobFilesResponse,
   JobProgressResponse,
   JobImagesResponse,
@@ -108,6 +109,16 @@ export async function fetchJobError(taskId: string, jobUuid: string): Promise<Jo
 export async function stopTask(taskId: string): Promise<StopResultResponse> {
   const response = await http.post<ApiResponse<StopResultResponse> | StopResultResponse>(
     `/frontend/tasks/${taskId}/stop`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Continue (resume) all paused/stopped jobs for a task
+ */
+export async function continueTask(taskId: string): Promise<ContinueResultResponse> {
+  const response = await http.post<ApiResponse<ContinueResultResponse> | ContinueResultResponse>(
+    `/frontend/tasks/${taskId}/continue`
   )
   return normalizeResponse(response.data)
 }

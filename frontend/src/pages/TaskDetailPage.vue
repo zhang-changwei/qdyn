@@ -36,6 +36,15 @@
         <!-- Action buttons -->
         <div class="header-actions">
           <el-button
+            v-if="taskStatus === 'STOPPED' || taskStatus === 'PAUSED'"
+            type="success"
+            plain
+            :loading="continuing"
+            @click="handleContinue"
+          >
+            Continue
+          </el-button>
+          <el-button
             v-if="hasRunningJobs"
             type="warning"
             plain
@@ -161,7 +170,7 @@
                   </div>
                 </div>
 
-                <!-- Progress (RUNNING / COMPLETED) -->
+                <!-- Progress -->
                 <div v-if="jobProgress.get(row.uuid)?.available" class="progress-section">
                   <el-progress
                     v-if="jobProgress.get(row.uuid)?.percent != null"
@@ -170,7 +179,7 @@
                     :text-inside="true"
                   />
                   <el-progress
-                    v-else
+                    v-else-if="row.derived_state === 'RUNNING'"
                     :percentage="100"
                     :indeterminate="true"
                     :stroke-width="18"
@@ -228,6 +237,24 @@
                         ({{ jobProgress.get(row.uuid)!.current_frame!.scf_algorithm }})
                       </template>
                     </el-text>
+                  </div>
+                  <!-- Failed frames panel (SCF only) -->
+                  <div v-if="jobProgress.get(row.uuid)?.failed_frames?.length" class="failed-frames-section">
+                    <el-collapse>
+                      <el-collapse-item :title="`Failed Frames in ${row.name} (${jobProgress.get(row.uuid)!.failed_frames.length})`">
+                        <div class="failed-frames-list">
+                          <el-tag
+                            v-for="frame in jobProgress.get(row.uuid)!.failed_frames"
+                            :key="frame"
+                            type="danger"
+                            size="small"
+                            effect="plain"
+                          >
+                            {{ frame }}
+                          </el-tag>
+                        </div>
+                      </el-collapse-item>
+                    </el-collapse>
                   </div>
                 </div>
 
@@ -398,7 +425,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document, Download, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { fetchJobError, stopTask, continueTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobInputParams } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
@@ -433,6 +460,7 @@ const imageBlobUrls = ref<Map<string, string>>(new Map())
 
 // Operation loading states
 const stopping = ref(false)
+const continuing = ref(false)
 const deleting = ref(false)
 
 // Polling
@@ -475,6 +503,8 @@ const sortedJobs = computed((): JobStatusItem[] => {
     return a.index - b.index
   })
 })
+
+const taskStatus = computed(() => task.value?.derived_status ?? null)
 
 // Whether any job is in a running/waiting state
 const hasRunningJobs = computed((): boolean => {
@@ -757,6 +787,41 @@ async function handleStop(): Promise<void> {
   }
 }
 
+async function handleContinue(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      'Paused or stopped jobs will be re-queued. Completed jobs remain unchanged.',
+      'Confirm Continue',
+      {
+        confirmButtonText: 'Continue',
+        cancelButtonText: 'Cancel',
+        type: 'info'
+      }
+    )
+  } catch {
+    return // User cancelled
+  }
+
+  continuing.value = true
+  try {
+    const result = await continueTask(taskId.value)
+    if (result.failed.length > 0) {
+      const failedDetails = result.failed.map(f => `${f.uuid.slice(0, 8)}: ${f.error}`).join(', ')
+      ElMessage.warning(`Some jobs failed to resume: ${failedDetails}`)
+    } else {
+      ElMessage.success('Task resumed successfully')
+    }
+    await tasksStore.fetchTaskDetail(taskId.value)
+    await refreshJobExtras()
+    startPolling()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to resume task'
+    ElMessage.error(message)
+  } finally {
+    continuing.value = false
+  }
+}
+
 async function handleDelete(): Promise<void> {
   try {
     await ElMessageBox.confirm(
@@ -921,6 +986,11 @@ function isMdJob(job: JobStatusItem): boolean {
   return stepType === 'nvt' || stepType === 'nve'
 }
 
+function isScfJob(job: JobStatusItem): boolean {
+  const name = job.name.toLowerCase()
+  return name.startsWith('scf_')
+}
+
 function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): void {
   const isExpanded = expandedRows.some(r => r.uuid === row.uuid)
   if (!isExpanded) return
@@ -929,10 +999,11 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   loadJobFiles(row)
   loadJobInputParams(row)
 
-  // Always reload progress for COMPLETED jobs on expand, so that
-  // jobs that transitioned from RUNNING -> COMPLETED show final state
-  // instead of stale cached data from the last poll cycle.
-  if (row.derived_state === 'COMPLETED') {
+  // Load progress on expand for:
+  // - COMPLETED jobs (final state after RUNNING -> COMPLETED transition)
+  // - SCF jobs in non-PENDING states (so failed frame details are visible)
+  if (row.derived_state === 'COMPLETED' ||
+      (isScfJob(row) && row.derived_state && row.derived_state !== 'PENDING')) {
     loadJobProgress(row)
   }
 
@@ -1096,6 +1167,18 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.failed-frames-section {
+  margin-top: 8px;
+}
+
+.failed-frames-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .images-grid {

@@ -754,6 +754,76 @@ class MainWorkflow:
             "failed": failed
         }
 
+    def continue_task_jobs(self, task_id: str) -> Dict[str, List[str] | List[Dict[str, str]]]:
+        """
+        Resume all paused/stopped jobs for a task via flow-level resume.
+
+        Returns a dictionary with keys: 'continued', 'skipped', 'failed'
+        where each key maps to a list of job UUIDs or failed job info.
+        """
+        _RESUMABLE_STATES = {"PAUSED", "STOPPED", "USER_STOPPED"}
+
+        job_ids = self.list_task_jobs(task_id)
+        jc = self._ensure_job_controller()
+
+        resumable: List[str] = []
+        skipped: List[str] = []
+        failed: List[Dict[str, str]] = []
+
+        # Flatten all job UUIDs
+        jobs_flatten: list[str] = []
+        for job_list in job_ids.values():
+            jobs_flatten.extend(job_list)
+
+        # First scan: classify jobs
+        for job_uuid in jobs_flatten:
+            try:
+                job_info = jc.get_job_info(job_id=job_uuid)
+                if job_info is None:
+                    skipped.append(job_uuid)
+                    continue
+                raw_state = job_info.state.value
+            except Exception as exc:
+                failed.append({"uuid": job_uuid, "error": f"Query failed: {exc}"})
+                continue
+
+            if raw_state in _RESUMABLE_STATES:
+                resumable.append(job_uuid)
+            else:
+                skipped.append(job_uuid)
+
+        if not resumable:
+            return {"continued": [], "skipped": skipped, "failed": failed}
+
+        # Verify flow exists
+        flow_doc = jc.get_flow_info_by_flow_uuid(task_id)
+        if flow_doc is None:
+            raise QueryError(f"Flow '{task_id}' not found.")
+
+        # Resume the entire flow
+        try:
+            jc.resume_flow(flow_id=task_id)
+        except Exception as exc:
+            raise QueryError(f"Failed to resume flow '{task_id}': {exc}")
+
+        # Second scan: verify results
+        continued: List[str] = []
+        for job_uuid in resumable:
+            try:
+                job_info = jc.get_job_info(job_id=job_uuid)
+                if job_info is None:
+                    failed.append({"uuid": job_uuid, "error": "Job not found after resume"})
+                    continue
+                new_state = job_info.state.value
+                if new_state in _RESUMABLE_STATES:
+                    failed.append({"uuid": job_uuid, "error": f"Still in {new_state} after resume"})
+                else:
+                    continued.append(job_uuid)
+            except Exception as exc:
+                failed.append({"uuid": job_uuid, "error": f"Post-resume query failed: {exc}"})
+
+        return {"continued": continued, "skipped": skipped, "failed": failed}
+
     def delete_task_record(self, task_id: str) -> None:
         """
         Delete a task's local records after ensuring all stoppable jobs are stopped.

@@ -20,6 +20,7 @@ from ..auth.dependencies import get_current_user
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
+    ContinueResultResponse,
     JobErrorResponse,
     JobFilesResponse,
     JobImagesResponse,
@@ -345,6 +346,49 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         return StopResultResponse(
             stopped=result["stopped"],
+            skipped=result["skipped"],
+            failed=failed_items,
+        )
+
+    # -------------------------------------------------------------------------
+    # POST /frontend/tasks/{task_id}/continue - Continue task
+    # -------------------------------------------------------------------------
+
+    @router.post(
+        "/tasks/{task_id}/continue",
+        response_model=ContinueResultResponse,
+        summary="Continue a task",
+        description="Resume all paused/stopped jobs for a task. Returns per-job results.",
+    )
+    @handle_query_errors
+    def continue_task(
+        task_id: str,
+        username: str = Depends(get_current_user),
+    ) -> ContinueResultResponse:
+        """
+        Resume all paused/stopped jobs for a task.
+
+        Jobs in COMPLETED, FAILED, or other terminal states are skipped.
+        Returns lists of continued, skipped, and failed-to-resume job UUIDs.
+
+        Args:
+            task_id: The task identifier.
+
+        Returns:
+            A ContinueResultResponse with per-job outcomes.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        manager = manager_getter()
+        result = manager.continue_task_jobs(task_id)
+
+        failed_items = [
+            StopFailedItem(uuid=f["uuid"], error=f["error"])
+            for f in result["failed"]
+        ]
+
+        return ContinueResultResponse(
+            continued=result["continued"],
             skipped=result["skipped"],
             failed=failed_items,
         )
