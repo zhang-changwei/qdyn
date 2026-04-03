@@ -238,6 +238,11 @@ def qdyn_scf_task(
         if status == STATUS_ENDED:
             # Already completed successfully, skip
             successful += 1
+            # Restore CHGCAR relay for resume scenarios
+            prev_chgcar = None
+            resume_chgcar = os.path.join(subdir, chgcar)
+            if os.path.isfile(resume_chgcar):
+                prev_chgcar = resume_chgcar
             continue
 
         if status in [STATUS_RUNNING, STATUS_FAIL]:
@@ -274,7 +279,7 @@ def qdyn_scf_task(
             successful += 1
 
             # Update prev_chgcar for next iteration
-            prev_chgcar = os.path.join(subdir, 'CHGCAR')
+            prev_chgcar = os.path.join(subdir, chgcar)
 
         except Exception as e:
             # Mark as failed
@@ -400,8 +405,8 @@ def _set_status(subdir: str, status: str):
         Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL).
     """
     # Remove old status files
-    for status in [STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL]:
-        status_file = os.path.join(subdir, status)
+    for old_status in [STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL]:
+        status_file = os.path.join(subdir, old_status)
         if os.path.isfile(status_file):
             os.remove(status_file)
 
