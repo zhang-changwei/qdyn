@@ -152,6 +152,7 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
     case 'FAILED': return 'danger'
     case 'RUNNING': return ''
     case 'PAUSED': return 'warning'
+    case 'STOPPED': return 'danger'
     default: return 'info'
   }
 }

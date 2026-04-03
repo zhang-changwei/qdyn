@@ -24,6 +24,7 @@ const STATUS_CONFIG: Record<DerivedState, StatusConfig> = {
   FAILED: { type: 'danger', effect: 'light', text: 'Failed' },
   PENDING: { type: 'info', effect: 'light', text: 'Pending' },
   PAUSED: { type: 'warning', effect: 'light', text: 'Paused' },
+  STOPPED: { type: 'danger', effect: 'plain', text: 'Stopped' },
   ERROR: { type: 'danger', effect: 'dark', text: 'Error' }
 }
 

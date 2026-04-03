@@ -70,6 +70,7 @@ function getStepStatus(stepValue: string): '' | 'wait' | 'process' | 'success' |
     case 'RUNNING':
       return 'process'
     case 'PAUSED':
+    case 'STOPPED':
       return 'wait'
     case 'PENDING':
     default:
@@ -92,6 +93,8 @@ function getStepDescription(stepValue: string): string {
       return 'In progress'
     case 'PAUSED':
       return 'Paused'
+    case 'STOPPED':
+      return 'Stopped'
     case 'PENDING':
       return 'Waiting'
     default:

@@ -53,7 +53,9 @@ RUNNING_RAW_STATES = {
     "DOWNLOADED",
 }
 
-PAUSED_RAW_STATES = {"PAUSED", "STOPPED", "USER_STOPPED"}
+PAUSED_RAW_STATES = {"PAUSED"}
+
+STOPPED_RAW_STATES = {"STOPPED", "USER_STOPPED"}
 
 PENDING_RAW_STATES = {"READY", "WAITING"}
 
@@ -124,15 +126,16 @@ def derive_task_status(raw_counts: Dict[str, int]) -> str:
     1. ERROR / REMOTE_ERROR -> "ERROR"
     2. FAILED -> "FAILED"
     3. Any running intermediate state -> "RUNNING"
-    4. PAUSED / STOPPED / USER_STOPPED -> "PAUSED"
-    5. READY / WAITING or unknown states -> "PENDING"
-    6. All COMPLETED -> "COMPLETED"
+    4. STOPPED / USER_STOPPED -> "STOPPED"
+    5. PAUSED -> "PAUSED"
+    6. READY / WAITING or unknown states -> "PENDING"
+    7. All COMPLETED -> "COMPLETED"
 
     Args:
         raw_counts: A dictionary mapping raw state strings to their counts.
 
     Returns:
-        A derived status string: "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "ERROR"
+        A derived status string: "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     """
     # Priority 1: Error states
     if any(raw_counts.get(state, 0) > 0 for state in ERROR_RAW_STATES):
@@ -146,7 +149,11 @@ def derive_task_status(raw_counts: Dict[str, int]) -> str:
     if any(raw_counts.get(state, 0) > 0 for state in RUNNING_RAW_STATES):
         return "RUNNING"
 
-    # Priority 4: Paused states
+    # Priority 4: Stopped states
+    if any(raw_counts.get(state, 0) > 0 for state in STOPPED_RAW_STATES):
+        return "STOPPED"
+
+    # Priority 5: Paused states
     if any(raw_counts.get(state, 0) > 0 for state in PAUSED_RAW_STATES):
         return "PAUSED"
 
@@ -171,7 +178,7 @@ def derive_job_state(raw_state: str) -> str:
         raw_state: The raw state string from jobflow-remote JobInfo.state.
 
     Returns:
-        A derived status string: "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "ERROR"
+        A derived status string: "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     """
     if raw_state in ERROR_RAW_STATES:
         return "ERROR"
@@ -179,6 +186,8 @@ def derive_job_state(raw_state: str) -> str:
         return "FAILED"
     if raw_state in RUNNING_RAW_STATES:
         return "RUNNING"
+    if raw_state in STOPPED_RAW_STATES:
+        return "STOPPED"
     if raw_state in PAUSED_RAW_STATES:
         return "PAUSED"
     if raw_state == "COMPLETED":
@@ -621,7 +630,7 @@ def _get_task_created_at_fallback(task_id: str) -> float:
         A Unix timestamp (seconds since epoch), or 0.0 if not found.
     """
     import time
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     try:
         conn = qdyndb.get_db()
@@ -629,9 +638,10 @@ def _get_task_created_at_fallback(task_id: str) -> float:
             "SELECT created_at FROM task_owners WHERE task_id = ?", (task_id,)
         ).fetchone()
         if row:
-            # SQLite stores datetime as string like "2026-03-27 12:34:56"
-            # Parse and convert to timestamp
-            dt = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+            # SQLite datetime('now') stores UTC; parse with explicit UTC timezone
+            dt = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
             return dt.timestamp()
     except Exception:
         pass
@@ -1151,6 +1161,7 @@ def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
     failed = 0  # FAIL
     running = 0  # RUNNING
     running_dir: Optional[Path] = None
+    failed_frames: List[str] = []
 
     for d in scf_dirs:
         if not d.is_dir():
@@ -1160,6 +1171,7 @@ def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
             completed += 1
         elif (d / "FAIL").is_file():
             failed += 1
+            failed_frames.append(d.name)
         elif (d / "RUNNING").is_file():
             running += 1
             running_dir = d
@@ -1220,6 +1232,7 @@ def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
         percent=percent,
         batch=batch_info,
         current_frame=current_frame,
+        failed_frames=failed_frames,
     )
 
 

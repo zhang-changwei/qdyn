@@ -26,7 +26,7 @@ export interface ApiResponse<T> {
  * Derived states for UI display
  * Mapped from jobflow-remote raw states by backend
  */
-export type DerivedState = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING' | 'PAUSED' | 'ERROR'
+export type DerivedState = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING' | 'PAUSED' | 'STOPPED' | 'ERROR'
 
 /**
  * Single job status item (lightweight)
@@ -214,6 +214,16 @@ export interface StopResultResponse {
   failed: StopFailedItem[]
 }
 
+/**
+ * Continue result response
+ * Returned by POST /frontend/tasks/{taskId}/continue
+ */
+export interface ContinueResultResponse {
+  continued: string[]
+  skipped: string[]
+  failed: StopFailedItem[]
+}
+
 // ============================================
 // Structure Validation Types
 // ============================================
@@ -299,6 +309,7 @@ export interface JobProgressResponse {
   last_energy: number | null
   batch: SCFBatchInfo | null
   current_frame: SCFCurrentFrame | null
+  failed_frames: string[]
 }
 
 /**

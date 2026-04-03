@@ -19,7 +19,7 @@ class JobStatusItem(BaseModel):
     # Raw status string from jobflow-remote JobInfo.state
     state: str
     # Derived status for UI display
-    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "ERROR"
+    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     error: Optional[str] = None
     index: int
     # Timestamps from jobflow-remote JobInfo (ISO format strings)
@@ -34,7 +34,7 @@ class JobStatusDetailResponse(BaseModel):
     uuid: str
     name: str
     state: str
-    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "ERROR"
+    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     error: Optional[str] = None
     log_note: Optional[str] = None
 
@@ -46,7 +46,7 @@ class TaskJobsStatusResponse(BaseModel):
     # Raw status counts, preserving all original states from jobflow-remote
     raw_status_counts: Dict[str, int]
     # Derived status for quick UI assessment
-    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "ERROR"
+    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     jobs: List[JobStatusItem]
     # Resume chain: id of the predecessor task (if this is a resume task)
     prev_task_id: Optional[str] = None
@@ -61,7 +61,7 @@ class TaskSummary(BaseModel):
     # Raw status counts preserved from jobflow-remote
     raw_status_counts: Dict[str, int]
     # Derived status for UI
-    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "ERROR"
+    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     total_jobs: int
     # Optional: names of failed jobs for quick identification
     failed_job_names: List[str] = Field(default_factory=list)
@@ -107,6 +107,14 @@ class StopResultResponse(BaseModel):
     """Result of a stop operation, showing per-job outcomes."""
 
     stopped: List[str] = Field(default_factory=list)
+    skipped: List[str] = Field(default_factory=list)
+    failed: List[StopFailedItem] = Field(default_factory=list)
+
+
+class ContinueResultResponse(BaseModel):
+    """Result of a continue/resume operation, showing per-job outcomes."""
+
+    continued: List[str] = Field(default_factory=list)
     skipped: List[str] = Field(default_factory=list)
     failed: List[StopFailedItem] = Field(default_factory=list)
 
@@ -189,6 +197,7 @@ class JobProgressResponse(BaseModel):
     # SCF fine-grained fields
     batch: Optional[SCFBatchInfo] = None
     current_frame: Optional[SCFCurrentFrame] = None
+    failed_frames: List[str] = Field(default_factory=list)
 
 
 class JobImageItem(BaseModel):
