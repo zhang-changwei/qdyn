@@ -234,6 +234,7 @@ def _submit_with_tracking(
     resume: bool,
     prev_task_id: str,
     username: str,
+    worker: Optional[str] = None,
 ) -> str:
     """Submit a task and persist task ownership and structure metadata."""
     m = _manager()
@@ -250,7 +251,7 @@ def _submit_with_tracking(
             )
 
     try:
-        task_id, job_ids = m.submit(
+        task_id, job_ids, effective_worker = m.submit(
             input=input,
             method=method,
             stru=input.stru,
@@ -258,6 +259,7 @@ def _submit_with_tracking(
             stru_hash=input.stru_hash,
             resume=resume,
             prev_task_id=prev_task_id,
+            worker=worker,
         )
     except (AssertionError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {e}")
@@ -315,6 +317,7 @@ def _submit_with_tracking(
         formula=formula,
         num_atoms=num_atoms,
         prev_task_id=prev_task_id if resume and prev_task_id else None,
+        worker=effective_worker,
     )
 
     return task_id
@@ -323,12 +326,28 @@ def _submit_with_tracking(
 # --- endpoints ---
 
 
+@app.get("/workers", tags=["system"])
+def get_workers():
+    """Return available worker names and the configured default."""
+    m = _manager()
+    if "workers" in m.config:
+        workers = list(m.config["workers"].keys())
+    else:
+        # Legacy config format: only one implicit worker
+        workers = [m.worker_name]
+    return {
+        "workers": workers,
+        "default": m.worker_name,
+    }
+
+
 @app.post("/submit", response_model=str, status_code=201)
 def submit_task(
     input: InputT,
     method: Literal["namd", "n2amd"] = "namd",
     resume: bool = False,
     prev_task_id: str = "",
+    worker: Optional[str] = None,
     username: str = Depends(get_current_user),
 ):
     """Submit a new task and return its task ID."""
@@ -338,6 +357,7 @@ def submit_task(
         resume=resume,
         prev_task_id=prev_task_id,
         username=username,
+        worker=worker,
     )
 
 

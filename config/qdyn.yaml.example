@@ -1,5 +1,12 @@
 # qdyn.yaml.example — QDYN configuration template
-# Copy to config/qdyn.yaml and modify as needed
+# Copy to config/qdyn.yaml and modify as needed.
+#
+# Config format: "worker first-class citizen" — each worker block contains
+# ALL execution configs (modules, exports, pre_run, pp_path, resource
+# allocations).  No inheritance / override between workers.
+#
+# Legacy format (top-level modules/export/etc. without 'workers' key) is
+# still supported for backward compatibility.
 
 basic:
   jf_project_path: "config/jf_qdyn.yaml"
@@ -9,52 +16,40 @@ basic:
   mongo_dir: "mongo/"
   port: 8000
 
-machine:
-  partition: chu
-  cpus_per_node: 96
+# Active worker (must match a key in 'workers' below AND in jf project config)
+active_worker: local_slurm
 
-modules:
-  vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
-  python: []
-  namd: ['compiler/oneAPI/2023.2.0']
-
-export:
-  vasp:
-    PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-  python:
-    PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-  namd:
-    PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-    PATH: '/absolute/path/to/Hefei-NAMD-DEV-2025.01:$PATH'
-
-pre_run:
-  vasp: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-  python: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-  namd: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-
-pp_path:
-  vasp: '/absolute/path/to/vasp-pp'
-
-orb_path:
-  vasp: ''
-
-nvt:
-  vasp:
-    nodes: 1
-    ntasks_per_node: 96
-    cpus_per_task: 1
-
-nve:
-  vasp:
-    nodes: 1
-    ntasks_per_node: 96
-    cpus_per_task: 1
-
-scf:
-  vasp:
-    nodes: 1
-    ntasks_per_node: 96
-    cpus_per_task: 1
+# Each worker contains ALL execution configs.
+workers:
+  local_slurm:
+    partition: chu
+    cpus_per_node: 96
+    modules:
+      vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
+      python: []
+      namd: ['compiler/oneAPI/2023.2.0']
+    export:
+      vasp:
+        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+      python:
+        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+      namd:
+        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+        PATH: '/absolute/path/to/Hefei-NAMD-DEV-2025.01:$PATH'
+    pre_run:
+      vasp: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+      python: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+      namd: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+    pp_path:
+      vasp: '/absolute/path/to/vasp-pp'
+    orb_path:
+      vasp: ''
+    nvt:
+      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+    nve:
+      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+    scf:
+      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
 
 auth:
   secret_key: ""  # leave empty to auto-generate on first start

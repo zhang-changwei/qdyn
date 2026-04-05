@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import uuid
 import yaml
-from typing import Optional, Tuple, Dict, List, Literal
+from typing import Any, Optional, Tuple, Dict, List, Literal
 
 from ase import Atoms
 import ase.io
@@ -71,6 +71,8 @@ _STOPPABLE_STATES = {
     "DOWNLOADED",
 }
 
+_REMOTE_WORKER_TYPES = {"remote", "separated_transfer"}
+
 
 class MainWorkflow:
 
@@ -80,6 +82,27 @@ class MainWorkflow:
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
         self.jc: Optional[JobController] = None
+
+        # Resolve active worker and its config block.
+        # New format: top-level 'active_worker' + 'workers' dict.
+        # Legacy format: top-level modules/export/etc. with 'machine.worker'.
+        if 'workers' in self.config:
+            self.worker_name: str = self.config.get(
+                'active_worker', 'local_slurm'
+            )
+            if self.worker_name not in self.config['workers']:
+                raise ConfigError(
+                    f"active_worker '{self.worker_name}' not found in "
+                    f"workers section of qdyn.yaml. "
+                    f"Available: {list(self.config['workers'].keys())}"
+                )
+            self.worker_cfg: dict = self.config['workers'][self.worker_name]
+        else:
+            # Legacy mode: top-level config IS the worker config
+            self.worker_name: str = self.config.get('machine', {}).get(
+                'worker', 'local_slurm'
+            )
+            self.worker_cfg: dict = self.config
 
     def __del__(self):
         jc = getattr(self, "jc", None)
@@ -116,18 +139,41 @@ class MainWorkflow:
             )
         return cfg, jf_cfg
 
-    def _get_config(self, *keys: str):
-        """Traverse self.config by key path, raising ConfigError if any key is missing.
+    def _resolve_worker_context(
+        self, worker: Optional[str] = None
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Resolve the effective worker name and config for this operation."""
+        if 'workers' not in self.config:
+            if worker and worker != self.worker_name:
+                raise ValidationError(
+                    "This server uses legacy single-worker config; "
+                    "selecting a different worker is not supported."
+                )
+            return self.worker_name, self.worker_cfg
 
-        Usage: self._get_config('nvt', 'vasp', 'nodes')
-        is equivalent to self.config['nvt']['vasp']['nodes']
+        effective_worker = worker or self.worker_name
+        workers_cfg = self.config.get('workers', {})
+        if effective_worker not in workers_cfg:
+            raise ValidationError(
+                f"Worker '{effective_worker}' not found in config. "
+                f"Available: {list(workers_cfg.keys())}"
+            )
+        return effective_worker, workers_cfg[effective_worker]
+
+    def _get_config(self, worker_name: str, worker_cfg: Dict[str, Any], *keys: str):
+        """Traverse worker_cfg by key path, raising ConfigError if missing.
+
+        Usage: self._get_config(worker_name, worker_cfg, 'nvt', 'vasp', 'nodes')
+        is equivalent to worker_cfg['nvt']['vasp']['nodes']
         but raises ConfigError with a clear message on KeyError.
         """
-        node = self.config
+        node = worker_cfg
         for i, key in enumerate(keys):
             if not isinstance(node, dict) or key not in node:
                 path = '.'.join(keys[: i + 1])
-                raise ConfigError(f"Missing '{path}' in qdyn.yaml")
+                raise ConfigError(
+                    f"Missing '{path}' in worker '{worker_name}' config"
+                )
             node = node[key]
         return node
 
@@ -163,6 +209,90 @@ class MainWorkflow:
                     "or configure ~/.jfremote before using remote job features."
                 ) from exc
         return self.jc
+
+    # ------------------------------------------------------------------
+    # Worker-aware helpers
+    # ------------------------------------------------------------------
+
+    def _get_worker_resources(self, worker_name: str) -> dict:
+        """Get jfremote worker resources for the active worker."""
+        return self.jf_config['workers'][worker_name].get('resources', {})
+
+    def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
+        """Get machine config (partition, cpus_per_node, etc.) for the active worker.
+
+        In the new config format, worker_cfg already contains everything.
+        In legacy mode, worker_cfg IS self.config, which has machine at top level.
+        """
+        if 'workers' in self.config:
+            return worker_cfg
+        # Legacy mode: merge machine section as before
+        base = dict(self.config.get('machine', {}))
+        base.pop('workers', None)
+        base.pop('worker', None)
+        workers_cfg = self.config.get('machine', {}).get('workers', {})
+        if worker_name in workers_cfg:
+            base.update(workers_cfg[worker_name])
+        return base
+
+    def _get_exec_config(
+        self, worker_name: str, worker_cfg: Dict[str, Any], software: str, key: str
+    ):
+        """Get execution config (modules/export/pre_run/pp_path) for the
+        current worker and software.
+
+        In the new format, reads directly from worker_cfg.
+        In legacy mode, worker_cfg IS self.config, so top-level keys
+        are accessed directly; then falls back through worker_exec overrides.
+        """
+        if 'workers' in self.config:
+            # New format: everything lives under workers.<name>
+            return worker_cfg.get(key, {}).get(software)
+        # Legacy mode: check worker_exec overrides first, then top-level
+        worker_exec = self.config.get('worker_exec', {}).get(
+            worker_name, {}
+        )
+        if key in worker_exec and software in worker_exec[key]:
+            return worker_exec[key][software]
+        return self.config.get(key, {}).get(software)
+
+    def _is_remote_worker(self, worker_name: str) -> bool:
+        """Check if the active worker is a remote (SSH) worker."""
+        worker_cfg = self.jf_config['workers'].get(worker_name, {})
+        return worker_cfg.get('type') in _REMOTE_WORKER_TYPES
+
+    def _get_ssh_cmd(self, worker_name: str, *args: str) -> list[str]:
+        """Build an SSH command list using the active worker's connection config."""
+        worker_cfg = self.jf_config['workers'][worker_name]
+        host = worker_cfg.get('host', '')
+        cmd = ['ssh']
+        port = worker_cfg.get('port')
+        if port:
+            cmd += ['-p', str(port)]
+        key = worker_cfg.get('key_filename')
+        if key:
+            cmd += ['-i', str(key)]
+        user = worker_cfg.get('user')
+        target = f"{user}@{host}" if user else host
+        cmd.append(target)
+        cmd.extend(args)
+        return cmd
+
+    def _get_scp_cmd(self, worker_name: str, src: str, dst: str) -> list[str]:
+        """Build an SCP command list using the active worker's connection config."""
+        worker_cfg = self.jf_config['workers'][worker_name]
+        host = worker_cfg.get('host', '')
+        cmd = ['scp']
+        port = worker_cfg.get('port')
+        if port:
+            cmd += ['-P', str(port)]
+        key = worker_cfg.get('key_filename')
+        if key:
+            cmd += ['-i', str(key)]
+        user = worker_cfg.get('user')
+        target = f"{user}@{host}" if user else host
+        cmd += [src, f"{target}:{dst}"]
+        return cmd
 
     # ------------------------------------------------------------------
     # Pre-flight validation
@@ -262,6 +392,8 @@ class MainWorkflow:
         stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
+        worker_name: Optional[str] = None,
+        worker_cfg: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, List[Job | Flow]]:
         '''
         Notice: assume the config is valid,
@@ -272,6 +404,8 @@ class MainWorkflow:
         jobs: Dict[str, List[Job | Flow]] = {}
         software = input.basic_input.software
         flag = ''
+        effective_worker_name = worker_name or self.worker_name
+        effective_worker_cfg = worker_cfg or self.worker_cfg
 
         # pre-flight validation
         self._validate_input(input, method, stru, stru_format, stru_hash, resume, prev_task_id)
@@ -311,13 +445,16 @@ class MainWorkflow:
             nodes = (
                 input.nvt_input.nodes
                 if input.nvt_input.nodes is not None
-                else self.config['nvt'][software]['nodes']
+                else effective_worker_cfg['nvt'][software]['nodes']
             )
             assert nodes > 0, "[NVT] nodes must be a positive integer or omitted to use the default."
-            ntasks_per_node = self.config['nvt'][software]['ntasks_per_node']
-            cpus_per_task = self.config['nvt'][software]['cpus_per_task']
-            pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
-            orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
+            ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
+            cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
+            pp_path_raw = self._get_exec_config(
+                effective_worker_name, effective_worker_cfg, software, 'pp_path'
+            )
+            pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+            orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
 
             job_nvt = qdyn_nvt(
                 software=software,
@@ -334,15 +471,15 @@ class MainWorkflow:
             job_nvt = set_run_config(
                 job_nvt,
                 exec_config=ExecutionConfig(
-                    modules=self.config['modules'][software],
-                    export=self.config['export'][software],
-                    pre_run=self.config['pre_run'][software],
+                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
+                    export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
+                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
                     post_run=None,
                 ),
                 resources={
-                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
-                    'partition': self.config['machine']['partition'],
-                    **self.config['nvt'][software],
+                    **self._get_worker_resources(effective_worker_name),
+                    'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                    **effective_worker_cfg['nvt'][software],
                     'nodes': nodes,
                 },
             )
@@ -380,13 +517,16 @@ class MainWorkflow:
             nodes = (
                 input.nve_input.nodes
                 if input.nve_input.nodes is not None
-                else self.config['nve'][software]['nodes']
+                else effective_worker_cfg['nve'][software]['nodes']
             )
             assert nodes > 0, "[NVE] nodes must be a positive integer or omitted to use the default."
-            ntasks_per_node = self.config['nve'][software]['ntasks_per_node']
-            cpus_per_task = self.config['nve'][software]['cpus_per_task']
-            pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
-            orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
+            ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
+            cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
+            pp_path_raw = self._get_exec_config(
+                effective_worker_name, effective_worker_cfg, software, 'pp_path'
+            )
+            pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+            orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
 
             job_nve = qdyn_nve(
                 software=software,
@@ -403,15 +543,15 @@ class MainWorkflow:
             job_nve = set_run_config(
                 job_nve,
                 exec_config=ExecutionConfig(
-                    modules=self.config['modules'][software],
-                    export=self.config['export'][software],
-                    pre_run=self.config['pre_run'][software],
+                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
+                    export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
+                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
                     post_run=None,
                 ),
                 resources={
-                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
-                    'partition': self.config['machine']['partition'],
-                    **self.config['nve'][software],
+                    **self._get_worker_resources(effective_worker_name),
+                    'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                    **effective_worker_cfg['nve'][software],
                     'nodes': nodes,
                 },
             )
@@ -459,6 +599,46 @@ class MainWorkflow:
                     data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
                     traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
                     traj_format = stru_format
+                elif stru:
+                    # User-provided structure text: write to trajectory file
+                    strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+                    work_dir = self.jf_config['workers'][effective_worker_name]['work_dir']
+
+                    if self._is_remote_worker(effective_worker_name):
+                        # Remote worker: write locally then scp to remote host
+                        import tempfile
+                        stru_id = str(uuid.uuid4())
+                        stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
+                        remote_host = self.jf_config['workers'][effective_worker_name].get('host', '')
+
+                        try:
+                            with tempfile.TemporaryDirectory() as tmpdir:
+                                local_file = write_strus(software, strus_ase, tmpdir)
+                                track_filename = os.path.basename(local_file)
+                                traj_file_path = f"{stru_dir_remote}/{track_filename}"
+
+                                subprocess.run(
+                                    self._get_ssh_cmd(effective_worker_name, f'mkdir -p {stru_dir_remote}'),
+                                    check=True, timeout=30,
+                                )
+                                subprocess.run(
+                                    self._get_scp_cmd(effective_worker_name, local_file, traj_file_path),
+                                    check=True, timeout=60,
+                                )
+                        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                            raise ConfigError(
+                                f"Failed to upload trajectory to remote worker "
+                                f"'{effective_worker_name}' (host={remote_host}). "
+                                f"Check SSH connectivity and work_dir permissions. "
+                                f"Target: {stru_dir_remote}"
+                            ) from exc
+                    else:
+                        # Local worker: write directly to work_dir
+                        stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
+                        stru_dir.mkdir(parents=True, exist_ok=True)
+                        traj_file_path = write_strus(software, strus_ase, str(stru_dir))
+
+                    traj_format = stru_format
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -468,13 +648,16 @@ class MainWorkflow:
                 nodes = (
                     input.scf_input.nodes
                     if input.scf_input.nodes is not None
-                    else self.config['scf'][software]['nodes']
+                    else effective_worker_cfg['scf'][software]['nodes']
                 )
                 assert nodes > 0, "[SCF] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = self.config['scf'][software]['ntasks_per_node']
-                cpus_per_task = self.config['scf'][software]['cpus_per_task']
-                pp_path = str(Path(self.config['pp_path'][software]).expanduser().resolve())
-                orb_path = str(Path(self.config['orb_path'][software]).expanduser().resolve())
+                ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
+                cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
+                pp_path_raw = self._get_exec_config(
+                    effective_worker_name, effective_worker_cfg, software, 'pp_path'
+                )
+                pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+                orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
 
                 jobs_scf = qdyn_scf(
                     software=software,
@@ -493,15 +676,15 @@ class MainWorkflow:
                     jobs_scf[i] = set_run_config(
                         jobs_scf[i],
                         exec_config=ExecutionConfig(
-                            modules=self.config['modules'][software],
-                            export=self.config['export'][software],
-                            pre_run=self.config['pre_run'][software],
+                            modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
+                            export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
+                            pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
                             post_run=None,
                         ),
                         resources={
-                            **self.jf_config['workers']['local_slurm'].get('resources', {}),
-                            'partition': self.config['machine']['partition'],
-                            **self.config['scf'][software],
+                            **self._get_worker_resources(effective_worker_name),
+                            'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                            **effective_worker_cfg['scf'][software],
                             'nodes': nodes,
                         },
                     )
@@ -540,7 +723,8 @@ class MainWorkflow:
                     f"'{prev_step}' results."
                 )
 
-            ncpus = self.config['machine']['cpus_per_node']
+            machine_cfg = self._get_machine_config(effective_worker_name, effective_worker_cfg)
+            ncpus = machine_cfg['cpus_per_node']
             job_pre_namd = qdyn_pre_namd(
                 software=software,
                 parameters=input.prenamd_input,
@@ -552,17 +736,17 @@ class MainWorkflow:
             job_pre_namd = set_run_config(
                 job_pre_namd,
                 exec_config=ExecutionConfig(
-                    modules=self.config['modules']['python'],
+                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'modules'),
                     export={
-                        **self.config['export']['python'], 
+                        **self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'export'),
                         'OMP_NUM_THREADS': '4'
                     },
-                    pre_run=self.config['pre_run']['python'],
+                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'pre_run'),
                     post_run=None,
                 ),
                 resources={
-                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
-                    'partition': self.config['machine']['partition'],
+                    **self._get_worker_resources(effective_worker_name),
+                    'partition': machine_cfg['partition'],
                     'nodes': 1,
                     'ntasks_per_node': 1,
                     'cpus_per_task': ncpus,
@@ -600,16 +784,17 @@ class MainWorkflow:
             natxt = prev_output['NATXT']
             dephtime = prev_output['DEPHTIME']
 
+            machine_cfg = self._get_machine_config(effective_worker_name, effective_worker_cfg)
             if input.namd_input.surface_hopping == 'FSSH':
                 nodes = 1
                 ntasks_per_node = 1
-                cpus_per_task = self.config['machine']['cpus_per_node']
+                cpus_per_task = machine_cfg['cpus_per_node']
             else:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
                 assert nodes > 0, "[NAMD] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = self.config['machine']['cpus_per_node']
+                ntasks_per_node = machine_cfg['cpus_per_node']
                 cpus_per_task = 1
 
             job_namd = qdyn_namd(
@@ -626,17 +811,17 @@ class MainWorkflow:
             job_namd = set_run_config(
                 job_namd,
                 exec_config=ExecutionConfig(
-                    modules=self.config['modules']['namd'],
+                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'modules'),
                     export={
-                        **self.config['export']['namd'],
+                        **self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'export'),
                         'OMP_NUM_THREADS': str(cpus_per_task),
                     },
-                    pre_run=self.config['pre_run']['namd'],
+                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'pre_run'),
                     post_run=None,
                 ),
                 resources={
-                    **self.jf_config['workers']['local_slurm'].get('resources', {}),
-                    'partition': self.config['machine']['partition'],
+                    **self._get_worker_resources(effective_worker_name),
+                    'partition': machine_cfg['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,
@@ -667,8 +852,10 @@ class MainWorkflow:
         stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
-    ) -> Tuple[str, Dict[str, List[str]]]:
+        worker: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, List[str]], str]:
         self._ensure_job_controller()
+        effective_worker_name, effective_worker_cfg = self._resolve_worker_context(worker)
 
         jobs = self.main_workflow(
             input=input,
@@ -678,12 +865,14 @@ class MainWorkflow:
             stru_hash=stru_hash,
             resume=resume,
             prev_task_id=prev_task_id,
+            worker_name=effective_worker_name,
+            worker_cfg=effective_worker_cfg,
         )
         jobs_flatten = []
         for job_list in jobs.values():
             jobs_flatten.extend(job_list)
         flow = Flow(jobs_flatten)
-        db_ids = submit_flow(flow, worker='local_slurm')
+        submit_flow(flow, worker=effective_worker_name)
 
         task_id = flow.uuid
         job_ids = {}
@@ -693,7 +882,7 @@ class MainWorkflow:
 
         self.task_ids.append(task_id)
 
-        return task_id, job_ids
+        return task_id, job_ids, effective_worker_name
 
 
     def list_tasks(self) -> List[str]:
