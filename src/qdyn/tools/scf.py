@@ -27,7 +27,7 @@ from ase import Atoms
 from jobflow import job
 
 from ..input import SCFInputT
-from ..params import params_default, chg_name, ipt_files, stru_files
+from ..params import params_default, chg_name, ipt_files, stru_files, md_tracks
 from ..input_prepare import prepare_vasp_inputs
 from .run_software import run_software
 
@@ -42,7 +42,7 @@ def qdyn_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    structures: List[Dict],
+    xdatcar_path: str,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -64,9 +64,10 @@ def qdyn_scf(
         Path to pseudopotential files.
     orb_path : str
         Path to orbital files.
-    structures : str
-        Path to md tracks file (or other structure file). Structures are read inside
-        _run_scf_task to support jobflow serialization.
+    xdatcar_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP), or to
+        a directory containing it. If a directory is given, the
+        appropriate trajectory filename is appended automatically.
     nodes : int
         Number of nodes.
     ntasks_per_node : int
@@ -102,7 +103,7 @@ def qdyn_scf(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            structures=structures,
+            xdatcar_path=xdatcar_path,
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
@@ -121,9 +122,9 @@ def qdyn_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    structures: List[Dict],
-    frame_start: int,
-    frame_end: int,
+    xdatcar_path: str,
+    frame_start: int = 0,
+    frame_end: int = 0,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -132,7 +133,7 @@ def qdyn_scf_task(
     """Run a batch of SCF calculations for multiple structures.
 
     This job:
-    1. Reads structures
+    1. Reads structures from the trajectory file (e.g. XDATCAR)
     2. Creates subdirectories for each structure (scf_XXXX format)
     3. Prepares common input files (INCAR, KPOINTS, POTCAR)
     4. Runs SCF calculations sequentially with CHGCAR passing
@@ -148,8 +149,10 @@ def qdyn_scf_task(
         Pseudopotential path.
     orb_path : str
         Orbital file path.
-    structures : str
-        Path to md tracks file.
+    xdatcar_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP), or to
+        a directory containing it. If a directory is given, the
+        appropriate trajectory filename is appended automatically.
     frame_start : int
         Global frame index of the first structure (0-based).
     frame_end : int
@@ -178,11 +181,18 @@ def qdyn_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    selected_structures = []
-    for s in structures[-scf_step:]:
-        s.pop('momenta', None)
-        selected_structures.append(Atoms.fromdict(s))
+    # Resolve trajectory file path
+    if os.path.isdir(xdatcar_path):
+        track_file = os.path.join(xdatcar_path, md_tracks[software_lower])
+    else:
+        track_file = xdatcar_path
 
+    match software_lower:
+        case 'vasp':
+            all_strus = ase.io.read(track_file, format='vasp-xdatcar', index=':')
+        case _:
+            raise ValueError(f"Unsupported software: {software_lower}")
+    selected_structures = all_strus[-scf_step:]
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)
 

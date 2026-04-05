@@ -21,6 +21,7 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
+from .params import md_tracks
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
 from .tools.scf import qdyn_scf
@@ -403,20 +404,30 @@ class MainWorkflow:
             else:
                 prev_step = 'nve'
                 next_step = 'pre_namd'
+                xdatcar_path = ""
                 if prev_step in input.steps:
-                    structures = jobs[prev_step][0].output['strus']
+                    # NVE in the same flow: OutputReference resolves to a directory
+                    xdatcar_path = jobs[prev_step][0].output['run_dir']
                 elif first_step == 'scf' and resume:
+                    # Resume SCF from a previous task
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                        structures = self.get_job_output(prev_job_uuid)['strus']
+                        nve_output = self.get_job_output(prev_job_uuid)
+                        xdatcar_path = nve_output['run_dir']
                     except Exception as exc:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
                             f"Cannot resume scf."
                         ) from exc
                 elif stru:
+                    # User-provided structure text: write to trajectory file
                     strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-                    structures = [s.todict() for s in strus_ase] # type: ignore
+                    work_dir = self.jf_config['workers']['local_slurm']['work_dir']
+                    stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
+                    stru_dir.mkdir(parents=True, exist_ok=True)
+                    xdatcar_file = str(stru_dir / md_tracks[software])
+                    ase.io.write(xdatcar_file, strus_ase, format='vasp-xdatcar')
+                    xdatcar_path = xdatcar_file
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -439,7 +450,7 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=pp_path,
                     orb_path=orb_path,
-                    structures=structures, # type: ignore
+                    xdatcar_path=xdatcar_path,
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,
