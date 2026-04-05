@@ -20,13 +20,25 @@
         <div class="task-option">
           <div class="task-option-header">
             <span class="task-id">{{ truncateId(task.task_id) }}</span>
-            <el-tag
-              :type="statusTagType(task.derived_status)"
-              size="small"
-              effect="plain"
-            >
-              {{ task.derived_status }}
-            </el-tag>
+            <div class="task-option-tags">
+              <el-tag
+                v-if="task.worker"
+                :type="workerTagType(task.worker)"
+                size="small"
+                effect="plain"
+                class="worker-tag"
+              >
+                <el-icon><Monitor /></el-icon>
+                {{ task.worker }}
+              </el-tag>
+              <el-tag
+                :type="statusTagType(task.derived_status)"
+                size="small"
+                effect="plain"
+              >
+                {{ task.derived_status }}
+              </el-tag>
+            </div>
           </div>
           <div class="task-option-meta">
             <span v-if="task.formula" class="formula">{{ task.formula }}</span>
@@ -69,6 +81,18 @@
         </el-tag>
       </div>
       <div class="summary-row">
+        <span class="summary-label">Worker</span>
+        <el-tag
+          v-if="selectedTask.worker"
+          :type="workerTagType(selectedTask.worker)"
+          size="small"
+        >
+          <el-icon><Monitor /></el-icon>
+          {{ selectedTask.worker }}
+        </el-tag>
+        <span v-else class="summary-value unknown">Unknown</span>
+      </div>
+      <div class="summary-row">
         <span class="summary-label">Completed</span>
         <span class="summary-value">
           <template v-if="selectedTask.completed_steps.length > 0">
@@ -89,7 +113,7 @@
 
     <el-empty
       v-if="!loading && eligibleTasks.length === 0"
-      description="No tasks available for resume"
+      :description="emptyDescription"
       :image-size="80"
     />
   </div>
@@ -97,14 +121,17 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Monitor } from '@element-plus/icons-vue'
 import type { TaskSummary } from '@/api/types'
 
 const props = withDefaults(defineProps<{
   modelValue: string | null
   tasks: TaskSummary[]
   loading?: boolean
+  selectedWorker?: string
 }>(), {
-  loading: false
+  loading: false,
+  selectedWorker: ''
 })
 
 const emit = defineEmits<{
@@ -112,8 +139,16 @@ const emit = defineEmits<{
   (e: 'task-selected', task: TaskSummary | null): void
 }>()
 
-const eligibleTasks = computed(() =>
-  props.tasks.filter(t => t.resume_eligible)
+const eligibleTasks = computed(() => {
+  const base = props.tasks.filter(t => t.resume_eligible)
+  if (!props.selectedWorker) return base
+  return base.filter(t => t.worker === props.selectedWorker)
+})
+
+const emptyDescription = computed(() =>
+  props.selectedWorker
+    ? `No previous tasks found for worker "${props.selectedWorker}"`
+    : 'No tasks available for resume'
 )
 
 const selectedTask = computed(() =>
@@ -146,6 +181,11 @@ function formatDate(timestamp: number): string {
   })
 }
 
+function workerTagType(worker: string): '' | 'success' | 'info' | 'warning' | 'danger' {
+  if (worker.includes('remote') || worker.includes('djs')) return ''  // primary (blue)
+  return 'success'  // green for local worker
+}
+
 function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 'info' {
   switch (status) {
     case 'COMPLETED': return 'success'
@@ -174,6 +214,18 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.task-option-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.worker-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .task-id {
