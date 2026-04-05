@@ -272,6 +272,17 @@ class TestProtectedEndpoints:
         )
         assert resp.status_code == 401
 
+    def test_access_with_token_for_deleted_user(self, protected_client):
+        token = self._register_and_get_token(protected_client, "orphaned", "pw")
+        qdyndb.get_db().execute("DELETE FROM users WHERE username = ?", ("orphaned",))
+        qdyndb.get_db().commit()
+
+        resp = protected_client.get(
+            "/protected", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "User account no longer exists"
+
     def test_user_isolation(self, protected_client):
         token_a = self._register_and_get_token(protected_client, "alice", "pw1")
         token_b = self._register_and_get_token(protected_client, "bob", "pw2")
