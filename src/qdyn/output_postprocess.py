@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from pathlib import Path
 from typing import Dict, Tuple, Optional
 
 import matplotlib
@@ -208,6 +209,10 @@ def parallel_wht(
     """
     import multiprocessing
 
+    run_dir_paths = [Path(rd) for rd in runDirs]
+    if len(run_dir_paths) == 0:
+        raise ValueError("runDirs must not be empty.")
+
     nproc = multiprocessing.cpu_count() if nproc is None else nproc
     with multiprocessing.Pool(processes=nproc) as pool:
 
@@ -220,11 +225,11 @@ def parallel_wht(
                 raise NotImplementedError
 
         results = []
-        for rd in runDirs:
+        for rd in run_dir_paths:
             res = pool.apply_async(
                 weight_func,
                 (
-                    rd + '/' + weight_file,
+                    rd / weight_file,
                     whichAtoms,
                     None,
                 ),
@@ -238,7 +243,7 @@ def parallel_wht(
                 tmp_enr, tmp_wht = results[ii].get()
                 enr.append(tmp_enr)
                 wht.append(tmp_wht)
-            return np.array(enr), np.array(wht)
+            return np.stack(enr, axis=0), np.stack(wht, axis=0)
         else:
             totwht = []
             for ii in range(len(results)):
@@ -246,7 +251,11 @@ def parallel_wht(
                 enr.append(tmp_enr)
                 wht.append(tmp_wht)
                 totwht.append(tmp_totwht)
-            return np.array(enr), np.array(wht), np.array(totwht)
+            return (
+                np.stack(enr, axis=0),
+                np.stack(wht, axis=0),
+                np.stack(totwht, axis=0),
+            )
 
 
 def extract_wht_with_cache(
@@ -300,11 +309,22 @@ def extract_wht_with_cache(
     - When which_atoms is None, Wht = total_weight (sum over all atoms)
     """
 
+    if len(run_dirs) == 0:
+        raise ValueError("run_dirs must not be empty.")
+
+    atoms_key = 'all' if which_atoms is None else '-'.join(map(str, np.asarray(which_atoms, dtype=int).tolist()))
+    cache_suffix = (
+        f".{software}.spin{which_spin}.k{which_kpoint}.atoms_{atoms_key}.n{len(run_dirs)}"
+    )
+
+    cache_file_wht = _append_cache_suffix(cache_file_wht, cache_suffix)
+    cache_file_enr = _append_cache_suffix(cache_file_enr, cache_suffix)
+
     # Check for cached results
     if (
         not force_recalculate
-        and os.path.isfile(os.path.expanduser(cache_file_wht))
-        and os.path.isfile(os.path.expanduser(cache_file_enr))
+        and cache_file_wht.is_file()
+        and cache_file_enr.is_file()
     ):
         Wht = np.load(cache_file_wht)
         Enr = np.load(cache_file_enr)
@@ -315,13 +335,22 @@ def extract_wht_with_cache(
         Enr, Wht_partial, TotWht = parallel_wht(
             run_dirs, which_atoms, software=software, nproc=nproc
         )
+        _validate_wht_dimensions(Enr, Wht_partial, TotWht)
+        _validate_spin_kpoint_indices(Enr, which_spin, which_kpoint)
         # Select specific spin and k-point
         Enr = Enr[:, which_spin, which_kpoint, :]
         Wht_partial = Wht_partial[:, which_spin, which_kpoint, :]
         TotWht = TotWht[:, which_spin, which_kpoint, :]
-        Wht = Wht_partial / TotWht
+        Wht = np.divide(
+            Wht_partial,
+            TotWht,
+            out=np.zeros_like(Wht_partial),
+            where=TotWht != 0,
+        )
     else:
         Enr, Wht = parallel_wht(run_dirs, which_atoms, software=software, nproc=nproc)
+        _validate_wht_dimensions(Enr, Wht)
+        _validate_spin_kpoint_indices(Enr, which_spin, which_kpoint)
         # Select specific spin and k-point
         Enr = Enr[:, which_spin, which_kpoint, :]
         Wht = Wht[:, which_spin, which_kpoint, :]
@@ -331,6 +360,41 @@ def extract_wht_with_cache(
     np.save(cache_file_enr, Enr)
 
     return Enr, Wht
+
+
+def _append_cache_suffix(filename: str, suffix: str) -> Path:
+    path = Path(os.path.expanduser(filename))
+    return path.with_name(f"{path.stem}{suffix}{path.suffix}")
+
+
+def _validate_wht_dimensions(*arrays: np.ndarray) -> None:
+    reference_shape = arrays[0].shape
+    if len(reference_shape) != 4:
+        raise ValueError(
+            f"Expected weight arrays with shape (nsw, nspin, nkpt, nband), got {reference_shape}."
+        )
+
+    for arr in arrays[1:]:
+        if arr.shape != reference_shape:
+            raise ValueError(
+                f"Weight arrays must share the same shape, got {reference_shape} and {arr.shape}."
+            )
+
+
+def _validate_spin_kpoint_indices(
+    energies: np.ndarray,
+    which_spin: int,
+    which_kpoint: int,
+) -> None:
+    _, nspin, nkpt, _ = energies.shape
+    if not 0 <= which_spin < nspin:
+        raise IndexError(
+            f"which_spin={which_spin} is out of range for nspin={nspin}."
+        )
+    if not 0 <= which_kpoint < nkpt:
+        raise IndexError(
+            f"which_kpoint={which_kpoint} is out of range for nkpt={nkpt}."
+        )
 
 
 def extract_band_edges(
@@ -514,7 +578,6 @@ def WeightFromPro(
     Contribution of selected atoms to the each KS orbital
     """
 
-    print(infile)
     assert os.path.isfile(infile), '%s cannot be found!' % infile
     FileContents = [line for line in open(infile) if line.strip()]
 
@@ -525,7 +588,7 @@ def WeightFromPro(
         int(xx) for xx in re.sub('[^0-9]', ' ', FileContents[1]).split()
     ]
 
-    if spd:
+    if spd is not None:
         Weights = np.asarray(
             [
                 line.split()[1:-1]
@@ -562,7 +625,15 @@ def WeightFromPro(
     if whichAtom is None:
         return Energies, np.sum(Weights, axis=-1)
     else:
-        # whichAtom = [xx - 1 for xx in whichAtom]
+        whichAtom = np.asarray(whichAtom, dtype=int)
+        if whichAtom.ndim != 1:
+            raise ValueError(f"whichAtom must be a 1D array, got shape {whichAtom.shape}.")
+        if whichAtom.size == 0:
+            raise ValueError("whichAtom must not be empty when provided.")
+        if np.any(whichAtom < 0) or np.any(whichAtom >= nions):
+            raise IndexError(
+                f"whichAtom indices must be in [0, {nions - 1}], got {whichAtom.tolist()}."
+            )
         return Energies, np.sum(Weights[:, :, :, whichAtom], axis=-1), TotalWeights
 
 
