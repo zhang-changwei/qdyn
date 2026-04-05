@@ -230,6 +230,15 @@ def plot_ksen_weight(
     which_atoms = parameters.adv.which_atoms
     if which_atoms is not None:
         which_atoms = np.asarray(which_atoms, dtype=int)
+        if which_atoms.ndim != 1 or which_atoms.size == 0:
+            raise ValueError(
+                f"which_atoms must be a non-empty 1D array, got shape {which_atoms.shape}."
+            )
+        if np.any(which_atoms <= 0):
+            raise ValueError(
+                f"which_atoms must use 1-based atom indices, got {which_atoms.tolist()}."
+            )
+        which_atoms = which_atoms - 1
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data
@@ -242,12 +251,25 @@ def plot_ksen_weight(
         nproc=nproc,
     )
 
-    # Derive dimensions from array shapes
-    nsw = Enr.shape[0]
+    if Enr.ndim != 2 or Wht.ndim != 2:
+        raise ValueError(
+            f"Expected Enr/Wht to be 2D arrays after spin/k-point selection, got {Enr.shape} and {Wht.shape}."
+        )
+    if Enr.shape != Wht.shape:
+        raise ValueError(
+            f"Enr and Wht must have the same shape, got {Enr.shape} and {Wht.shape}."
+        )
+    if Enr.size == 0:
+        raise ValueError("Enr/Wht is empty; cannot generate KS energy-weight plot.")
 
-    # Create time grid using broadcasting (no need for nband)
-    # T has shape (nsw, 1), which broadcasts to match Enr shape (nsw, nband)
-    T = np.arange(0, nsw * dt, dt)[:, np.newaxis]
+    # Derive dimensions from array shapes
+    nsw, nband = Enr.shape
+
+    # Create a time grid with the exact same shape as Enr/Wht for scatter().
+    T = np.broadcast_to((np.arange(nsw, dtype=float) * dt)[:, np.newaxis], (nsw, nband))
+
+    vbm_idx = _normalize_band_index(vbm, nband, 'vbm')
+    cbm_idx = _normalize_band_index(cbm, nband, 'cbm')
 
     # Create figure
     fig = plt.figure()
@@ -257,10 +279,10 @@ def plot_ksen_weight(
 
     # Scatter plot with weight coloring
     img = ax.scatter(
-        T,
-        Enr,
+        T.ravel(),
+        Enr.ravel(),
         s=1.0,
-        c=Wht,
+        c=Wht.ravel(),
         lw=0.0,
         zorder=1,
         vmin=Wht.min(),
@@ -274,11 +296,17 @@ def plot_ksen_weight(
     cbar = plt.colorbar(img, cax=ax_cbar, orientation='vertical')
 
     if cbar_labels is not None:
+        if len(cbar_labels) != 2:
+            raise ValueError(
+                f"cbar_labels must contain exactly 2 labels, got {len(cbar_labels)}."
+            )
         cbar.set_ticks([Wht.max(), Wht.min()])
         cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    ax.set_ylim(Enr[0, vbm] - 0.5, Enr[0, cbm] + 0.5)
+    ymin = min(Enr[0, vbm_idx], Enr[0, cbm_idx]) - 0.5
+    ymax = max(Enr[0, vbm_idx], Enr[0, cbm_idx]) + 0.5
+    ax.set_ylim(ymin, ymax)
 
     # Labels and formatting
     ax.set_xlabel('Time [fs]', labelpad=5)
@@ -290,3 +318,14 @@ def plot_ksen_weight(
     plt.close()
 
     return os.path.abspath(filename)
+
+
+def _normalize_band_index(band_index: int, nband: int, name: str) -> int:
+    """Accept either 1-based or 0-based band indices and normalize to 0-based."""
+    if 1 <= band_index <= nband:
+        return band_index - 1
+    if 0 <= band_index < nband:
+        return band_index
+    raise IndexError(
+        f"{name}={band_index} is out of range for nband={nband}."
+    )

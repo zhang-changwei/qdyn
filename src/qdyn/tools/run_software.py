@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -62,4 +63,15 @@ def run_vasp(nprocs: int, is_alle: Optional[bool] = False) -> None:
                         incar.write(line)
 
     # Launch VASP
-    subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
+    result = subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
+    if result.returncode != 0:
+        # Read queue.err for real error details
+        err_hint = ""
+        if os.path.isfile("queue.err"):
+            with open("queue.err") as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+                err_hint = "; ".join(lines[-5:]) if lines else ""
+        raise RuntimeError(
+            f"VASP exited with code {result.returncode}. "
+            f"Last queue.err lines: {err_hint or '(empty)'}"
+        )
