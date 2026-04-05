@@ -22,19 +22,19 @@
             </span>
           </template>
 
-          <!-- exp-select widget -->
-          <el-select
-            v-if="field.widget === 'exp-select'"
-            :model-value="getFieldValue(field.path)"
-            @update:model-value="setFieldValue(field.path, $event)"
-          >
-            <el-option
-              v-for="opt in field.schema.options"
-              :key="String(opt)"
-              :label="Number(opt).toExponential()"
-              :value="opt"
+          <!-- log-step widget: ÷10 / ×10 buttons + free-type scientific notation -->
+          <div v-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+            <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
+            <input
+              type="text"
+              class="log-step-input"
+              :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
+              :value="formatExp(getFieldValue(field.path))"
+              placeholder="e.g. 1e-6"
+              @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
             />
-          </el-select>
+            <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
+          </div>
 
           <!-- band-input widget (int | str, rendered as text) -->
           <el-input
@@ -94,15 +94,35 @@
           />
 
           <!-- number / integer -->
-          <el-input-number
+          <div
             v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-            :model-value="getFieldValue(field.path)"
-            :min="field.resolvedSchema.minimum"
-            :max="field.resolvedSchema.maximum"
-            :step="field.resolvedSchema.step ?? 1"
-            :precision="field.resolvedSchema.precision"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
+            class="smart-number-input"
+          >
+            <el-button
+              class="smart-number-input__btn"
+              size="small"
+              @click="stepFieldValue(field, -1)"
+            >
+              -
+            </el-button>
+            <el-input
+              :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
+              inputmode="decimal"
+              @focus="startNumberEditing(field.path, getFieldValue(field.path))"
+              @update:model-value="updateNumberDraft(field.path, $event)"
+              @blur="commitNumberDraft(field)"
+              @keyup.enter="commitNumberDraft(field)"
+              @keyup.down.prevent="stepFieldValue(field, -1)"
+              @keyup.up.prevent="stepFieldValue(field, 1)"
+            />
+            <el-button
+              class="smart-number-input__btn"
+              size="small"
+              @click="stepFieldValue(field, 1)"
+            >
+              +
+            </el-button>
+          </div>
 
           <!-- fallback: text input -->
           <el-input
@@ -176,18 +196,18 @@
               />
 
               <!-- Reuse the same widget logic for non-string advanced fields -->
-              <el-select
-                v-else-if="field.widget === 'exp-select'"
-                :model-value="getFieldValue(field.path)"
-                @update:model-value="setFieldValue(field.path, $event)"
-              >
-                <el-option
-                  v-for="opt in field.schema.options"
-                  :key="String(opt)"
-                  :label="Number(opt).toExponential()"
-                  :value="opt"
+              <!-- log-step widget (advanced section) -->
+              <div v-else-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+                <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
+                <input
+                  type="text"
+                  class="log-step-input"
+                  :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
+                  :value="formatExp(getFieldValue(field.path))"
+                  @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
                 />
-              </el-select>
+                <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
+              </div>
 
               <el-select
                 v-else-if="field.resolvedSchema.enum"
@@ -208,15 +228,35 @@
                 @update:model-value="setFieldValue(field.path, $event)"
               />
 
-              <el-input-number
+              <div
                 v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-                :model-value="getFieldValue(field.path)"
-                :min="field.resolvedSchema.minimum"
-                :max="field.resolvedSchema.maximum"
-                :step="field.resolvedSchema.step ?? 1"
-                :precision="field.resolvedSchema.precision"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
+                class="smart-number-input"
+              >
+                <el-button
+                  class="smart-number-input__btn"
+                  size="small"
+                  @click="stepFieldValue(field, -1)"
+                >
+                  -
+                </el-button>
+                <el-input
+                  :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
+                  inputmode="decimal"
+                  @focus="startNumberEditing(field.path, getFieldValue(field.path))"
+                  @update:model-value="updateNumberDraft(field.path, $event)"
+                  @blur="commitNumberDraft(field)"
+                  @keyup.enter="commitNumberDraft(field)"
+                  @keyup.down.prevent="stepFieldValue(field, -1)"
+                  @keyup.up.prevent="stepFieldValue(field, 1)"
+                />
+                <el-button
+                  class="smart-number-input__btn"
+                  size="small"
+                  @click="stepFieldValue(field, 1)"
+                >
+                  +
+                </el-button>
+              </div>
 
               <el-input
                 v-else
@@ -360,6 +400,10 @@ const advancedFields = computed(() =>
 )
 
 const csvDrafts = reactive<Record<string, string>>({})
+const numberDrafts = reactive<Record<string, string>>({})
+const numberEditing = reactive<Record<string, boolean>>({})
+const invalidLogInputs = reactive<Record<string, boolean>>({})
+const logInputTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 watch(
   [() => props.modelValue, allFields],
@@ -373,10 +417,25 @@ watch(
         )
         .map((field) => field.path),
     )
+    const numberPaths = new Set(
+      allFields.value
+        .filter(
+          (field) =>
+            field.resolvedType === 'number' || field.resolvedType === 'integer',
+        )
+        .map((field) => field.path),
+    )
 
     for (const path of Object.keys(csvDrafts)) {
       if (!csvPaths.has(path)) {
         delete csvDrafts[path]
+      }
+    }
+
+    for (const path of Object.keys(numberDrafts)) {
+      if (!numberPaths.has(path)) {
+        delete numberDrafts[path]
+        delete numberEditing[path]
       }
     }
 
@@ -385,6 +444,11 @@ watch(
         csvDrafts[field.path] = formatCsvIntegers(getFieldValue(field.path))
       } else if (field.widget === 'comma-separated-strings') {
         csvDrafts[field.path] = formatCsvStrings(getFieldValue(field.path))
+      } else if (
+        (field.resolvedType === 'number' || field.resolvedType === 'integer') &&
+        !numberEditing[field.path]
+      ) {
+        numberDrafts[field.path] = smartFormat(getFieldValue(field.path))
       }
     }
   },
@@ -416,6 +480,141 @@ function setFieldValue(path: string, value: unknown): void {
   }
   obj[parts[parts.length - 1]] = value
   emit('update:modelValue', updated)
+}
+
+// --- Smart number formatting (all el-input-number fields) ---
+
+function smartFormat(val: unknown): string {
+  if (val == null || val === '') return ''
+  const n = Number(val)
+  if (isNaN(n)) return String(val)
+  if (n === 0) return '0'
+  const abs = Math.abs(n)
+  // Very small or very large → scientific notation
+  if (abs < 0.01 || abs >= 100000) return n.toExponential(6).replace(/\.?0+e/, 'e')
+  // Otherwise → minimal decimal places (strip trailing zeros)
+  return n.toString()
+}
+
+// --- Log-step helpers (for scf_thr etc.) ---
+
+function formatExp(val: unknown): string {
+  const n = Number(val)
+  if (!n || isNaN(n)) return '1e-6'
+  return n.toExponential(0)  // "1e-6", "1e-4", etc.
+}
+
+function parseExp(path: string, input: string, target: HTMLInputElement): void {
+  const n = Number(input)
+  if (!isNaN(n) && n > 0) {
+    setFieldValue(path, n)
+    return
+  }
+  flashLogInputInvalid(path, target)
+}
+
+function logStep(path: string, factor: number): void {
+  const cur = Number(getFieldValue(path)) || 1e-6
+  // Snap to clean power of 10 to avoid floating point drift
+  const exp = Math.round(Math.log10(cur))
+  const next = Math.pow(10, factor > 1 ? exp + 1 : exp - 1)
+  setFieldValue(path, next)
+}
+
+function flashLogInputInvalid(path: string, target: HTMLInputElement): void {
+  invalidLogInputs[path] = true
+  target.value = formatExp(getFieldValue(path))
+
+  const existingTimer = logInputTimers.get(path)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+  }
+
+  const timer = setTimeout(() => {
+    invalidLogInputs[path] = false
+    logInputTimers.delete(path)
+  }, 700)
+  logInputTimers.set(path, timer)
+}
+
+function getNumberDraftValue(path: string, value: unknown): string {
+  if (path in numberDrafts) return numberDrafts[path]
+  return smartFormat(value)
+}
+
+function startNumberEditing(path: string, value: unknown): void {
+  numberEditing[path] = true
+  numberDrafts[path] = value == null ? '' : String(value)
+}
+
+function updateNumberDraft(path: string, raw: string): void {
+  numberDrafts[path] = raw
+}
+
+function commitNumberDraft(field: FieldDescriptor): void {
+  const raw = (numberDrafts[field.path] ?? '').trim()
+  numberEditing[field.path] = false
+
+  if (!raw) {
+    if (field.nullable) {
+      numberDrafts[field.path] = ''
+      setFieldValue(field.path, null)
+      return
+    }
+    numberDrafts[field.path] = smartFormat(getFieldValue(field.path))
+    return
+  }
+
+  const parsed = normalizeNumericValue(raw, field)
+  if (parsed == null) {
+    numberDrafts[field.path] = smartFormat(getFieldValue(field.path))
+    return
+  }
+
+  numberDrafts[field.path] = smartFormat(parsed)
+  setFieldValue(field.path, parsed)
+}
+
+function stepFieldValue(field: FieldDescriptor, direction: 1 | -1): void {
+  const currentRaw = numberEditing[field.path]
+    ? numberDrafts[field.path]
+    : getFieldValue(field.path)
+  const current = normalizeNumericValue(currentRaw, field)
+  const fallback = field.resolvedSchema.minimum ?? 0
+  const base = current ?? fallback
+  const step = Number(field.resolvedSchema.step ?? 1)
+  const next = normalizeNumericValue(base + step * direction, field)
+
+  if (next == null) {
+    numberDrafts[field.path] = smartFormat(getFieldValue(field.path))
+    return
+  }
+
+  numberEditing[field.path] = false
+  numberDrafts[field.path] = smartFormat(next)
+  setFieldValue(field.path, next)
+}
+
+function normalizeNumericValue(value: unknown, field: FieldDescriptor): number | null {
+  const parsed = Number(value)
+  if (Number.isNaN(parsed)) return null
+
+  let next = parsed
+  if (field.resolvedType === 'integer') {
+    next = Math.round(next)
+  }
+
+  const min = field.resolvedSchema.minimum
+  const max = field.resolvedSchema.maximum
+  const precision = field.resolvedSchema.precision
+
+  if (typeof min === 'number') next = Math.max(next, min)
+  if (typeof max === 'number') next = Math.min(next, max)
+  if (typeof precision === 'number') {
+    next = Number(next.toFixed(precision))
+  }
+
+  return next
 }
 
 // --- CSV helpers ---
@@ -489,5 +688,32 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   font-size: 14px;
   color: var(--el-text-color-placeholder);
   cursor: help;
+}
+
+.smart-number-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.smart-number-input__btn {
+  flex: 0 0 auto;
+}
+
+.log-step-input {
+  width: 100px;
+  text-align: center;
+  font-family: monospace;
+  padding: 4px 8px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  font-size: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.log-step-input--invalid {
+  border-color: var(--el-color-danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--el-color-danger) 30%, transparent);
 }
 </style>
