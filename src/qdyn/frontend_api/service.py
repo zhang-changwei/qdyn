@@ -7,14 +7,21 @@ All functions that need MainWorkflow access receive it via dependency
 injection (manager_getter) to avoid circular imports with app.py.
 """
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
+from .run_dir_access import (
+    FileInfo,
+    LocalRunDirAccess,
+    RemoteRunDirAccess,
+    RunDirAccess,
+)
 from .models import (
     JobErrorResponse,
     JobFileItem,
@@ -30,6 +37,7 @@ from .models import (
     MDTimeseriesStats,
     SCFBatchInfo,
     SCFCurrentFrame,
+    SubdirInfo,
     TaskJobsStatusResponse,
     TaskSummary,
 )
@@ -595,7 +603,7 @@ def _build_task_summary(
         and derived_status in ("COMPLETED", "FAILED")
     )
 
-    # Fetch persisted metadata (formula, num_atoms, prev_task_id)
+    # Fetch persisted metadata (formula, num_atoms, prev_task_id, worker)
     meta = qdyndb.get_task_metadata(task_id) or {}
 
     return TaskSummary(
@@ -611,6 +619,7 @@ def _build_task_summary(
         formula=meta.get("formula"),
         num_atoms=meta.get("num_atoms"),
         prev_task_id=meta.get("prev_task_id"),
+        worker=meta.get("worker"),
         resume_next_step=resume_next_step,
         resume_eligible=resume_eligible,
     )
@@ -658,6 +667,11 @@ def _get_task_created_at_fallback(task_id: str) -> float:
 _BLACKLISTED_PATTERNS = {"core", "core.*", "vasprun.xml.lock"}
 _BLACKLISTED_EXTENSIONS = {".tmp", ".bak", ".swp", ".swo", ".pid", ".lock"}
 
+# Allowed subdirectory prefixes for file browsing (security whitelist).
+# Only subdirectories matching one of these prefixes will be exposed via
+# the file listing endpoint.  This prevents traversal into arbitrary dirs.
+_ALLOWED_SUBDIR_PREFIXES = ("scf_", "nvt_attempt_")
+
 # Large file warning threshold (exposed in file listing for frontend display)
 _LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
 
@@ -704,9 +718,15 @@ def get_job_run_dir(
     manager: MainWorkflow, job_uuid: str
 ) -> Optional[Path]:
     """
-    Get the run directory path for a job.
+    Get the run directory path for a job (local only, legacy).
 
-    Returns None if the job has no run_dir yet (e.g. WAITING/READY state).
+    Returns None if the job has no run_dir yet (e.g. WAITING/READY state),
+    or if the run_dir is on a remote worker and not locally accessible.
+    Callers treat None as "data unavailable" which provides graceful
+    degradation for remote workers.
+
+    .. deprecated::
+        Prefer ``get_run_dir_access()`` which handles both local and remote.
     """
     jc = manager._ensure_job_controller()
     try:
@@ -727,6 +747,57 @@ def get_job_run_dir(
     return None
 
 
+def get_run_dir_access(
+    job_uuid: str, manager: MainWorkflow
+) -> Optional[RunDirAccess]:
+    """Create the appropriate RunDirAccess based on worker type.
+
+    For local workers, returns a ``LocalRunDirAccess`` backed by the local
+    filesystem.  For remote workers, returns a ``RemoteRunDirAccess`` that
+    uses ``SharedHosts`` from jobflow-remote for SSH operations.
+
+    Returns ``None`` when the run_dir is not yet assigned or unreachable.
+    """
+    jc = manager._ensure_job_controller()
+    try:
+        job_info = jc.get_job_info(job_id=job_uuid)
+    except Exception:
+        return None
+
+    if job_info is None or not job_info.run_dir:
+        return None
+
+    run_dir = str(job_info.run_dir)
+    worker_name = job_info.worker
+
+    # Determine worker type from jf_config
+    worker_cfg = manager.jf_config.get("workers", {}).get(worker_name, {})
+    worker_type = worker_cfg.get("type", "local")
+
+    if worker_type in ("remote", "separated_transfer"):
+        try:
+            from jobflow_remote.utils.remote import SharedHosts
+
+            project = jc.project
+            shared = SharedHosts(project)
+            host = shared.get_host(worker_name)
+            access = RemoteRunDirAccess(run_dir, host)
+            if access.is_available():
+                return access
+            return None
+        except Exception:
+            logger.warning(
+                "Failed to create remote access for worker %s, job %s",
+                worker_name, job_uuid,
+            )
+            return None
+    else:
+        p = Path(run_dir)
+        if p.is_dir():
+            return LocalRunDirAccess(p)
+        return None
+
+
 def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
     """Parse an INCAR file into a key-value dictionary.
 
@@ -744,48 +815,85 @@ def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
         return {}
 
 
+def _parse_incar_text(text: str) -> Dict[str, str]:
+    """Parse INCAR text content into a key-value dictionary.
+
+    Uses pymatgen's ``Incar.from_string()`` for robust handling of
+    semicolon-separated multi-tag lines, inline comments, and edge cases.
+    Falls back to simple line-based parsing if pymatgen is unavailable.
+    """
+    try:
+        from pymatgen.io.vasp import Incar
+
+        incar = Incar.from_string(text)
+        return {str(k): str(v) for k, v in incar.items()}
+    except Exception:
+        # Fallback: simple KEY = VALUE parsing
+        result: Dict[str, str] = {}
+        for line in text.splitlines():
+            line = line.split("!")[0].split("#")[0].strip()
+            if "=" in line:
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip()
+                if key:
+                    result[key] = val
+        return result
+
+
 def get_job_input_params(
     manager: MainWorkflow, job_uuid: str
 ) -> JobInputParamsResponse:
-    """Read INCAR and KPOINTS from a job's run directory.
+    """Read job input parameters from a job's run directory.
 
     Returns a ``JobInputParamsResponse`` with parsed data,
     or ``available=False`` when the run directory is not ready.
+
+    Uses ``read_multiple_root_texts()`` to fetch both files in a single
+    SSH command for remote workers (reduces 4 roundtrips to 1).
     """
-    run_dir = get_job_run_dir(manager, job_uuid)
-    if run_dir is None:
+    access = get_run_dir_access(job_uuid, manager)
+    if access is None:
         return JobInputParamsResponse(available=False)
 
-    # Security: only read files directly inside run_dir
-    incar_path = (run_dir / "INCAR").resolve()
-    kpoints_path = (run_dir / "KPOINTS").resolve()
+    job_info = manager.get_job_info(job_uuid)
+    step_type = _detect_step_type(job_info.name, access.run_dir_path)
 
-    # Verify paths are inside run_dir (prevent symlink escapes)
-    base = run_dir.resolve()
-    try:
-        incar_path.relative_to(base)
-        kpoints_path.relative_to(base)
-    except ValueError:
+    if step_type in {"pre_namd", "namd"}:
+        parameters = _read_non_vasp_job_parameters(access)
+        warning = None
+        if parameters is None:
+            warning = "Failed to load job parameters from jfremote_in.json."
         return JobInputParamsResponse(
-            available=False, warning="Path traversal detected"
+            available=True,
+            parameters=parameters,
+            parameters_title="PRE_NAMD Parameters" if step_type == "pre_namd" else "NAMD Parameters",
+            warning=warning,
         )
 
     incar: Optional[Dict[str, str]] = None
     kpoints_text: Optional[str] = None
     warnings: list[str] = []
 
+    # Batch-read both files in one pass
+    try:
+        texts = access.read_multiple_root_texts(["INCAR", "KPOINTS"])
+    except Exception as exc:
+        warnings.append(f"Failed to read input files: {exc}")
+        texts = {}
+
     # Parse INCAR
-    if incar_path.is_file():
-        incar = _parse_incar_file(incar_path)
+    if "INCAR" in texts:
+        try:
+            incar = _parse_incar_text(texts["INCAR"])
+        except Exception as exc:
+            warnings.append(f"Failed to parse INCAR: {exc}")
     else:
         warnings.append("INCAR not found")
 
-    # Read KPOINTS
-    if kpoints_path.is_file():
-        try:
-            kpoints_text = kpoints_path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            warnings.append(f"Failed to read KPOINTS: {exc}")
+    # Extract KPOINTS
+    if "KPOINTS" in texts:
+        kpoints_text = texts["KPOINTS"]
     else:
         warnings.append("KPOINTS not found")
 
@@ -799,89 +907,108 @@ def get_job_input_params(
     )
 
 
-def list_job_files(
-    run_dir: Path, task_id: str, job_uuid: str
-) -> List[JobFileItem]:
-    """
-    List files in a job's run directory (non-recursive).
+def _read_non_vasp_job_parameters(
+    access: RunDirAccess,
+) -> Optional[Dict[str, str]]:
+    """Read serialized non-VASP job parameters from ``jfremote_in.json``."""
+    try:
+        raw_text = access.read_root_text("jfremote_in.json")
+    except Exception:
+        return None
 
-    All files are listed except those matching the blacklist (core dumps,
-    temporary/lock files, etc.). Files are classified into categories:
-    input, output, data, or image.
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return None
+
+    parameters = (
+        payload.get("job", {})
+        .get("function_kwargs", {})
+        .get("parameters")
+    )
+    if not isinstance(parameters, dict):
+        return None
+
+    flattened = _flatten_parameter_mapping(parameters)
+    return flattened or None
+
+
+def _flatten_parameter_mapping(
+    value: dict[str, Any], prefix: str = ""
+) -> Dict[str, str]:
+    """Flatten nested parameter dicts into display-friendly key/value pairs."""
+    flattened: Dict[str, str] = {}
+    for key, item in value.items():
+        if str(key).startswith("@"):
+            continue
+        current_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(item, dict):
+            flattened.update(_flatten_parameter_mapping(item, current_key))
+            continue
+        flattened[current_key] = _stringify_parameter_value(item)
+    return flattened
+
+
+def _stringify_parameter_value(value: Any) -> str:
+    """Convert a parameter value to a compact string for UI display."""
+    if value is None:
+        return "None"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def list_job_files(
+    access: RunDirAccess, task_id: str, job_uuid: str
+) -> tuple[List[JobFileItem], List[SubdirInfo]]:
+    """
+    List files in a job's run directory (non-recursive) plus subdirectory
+    metadata.
+
+    Root-level files are listed except those matching the blacklist (core
+    dumps, temporary/lock files, etc.). Files are classified into
+    categories: input, output, data, or image.
+
+    Subdirectories matching ``_ALLOWED_SUBDIR_PREFIXES`` are returned as
+    lightweight ``SubdirInfo`` objects (name + file count + status) so the
+    frontend can render collapsible groups without fetching all contents.
+
+    Accepts a ``RunDirAccess`` instance so it works for both local and
+    remote workers.
+
+    Returns:
+        A tuple of (root_files, subdirs).
     """
     items: List[JobFileItem] = []
 
     try:
-        for entry in run_dir.iterdir():
-            if not entry.is_file():
-                continue
-
-            name = entry.name
+        for fi in access.list_root_files():
+            name = fi.name
 
             # Check blacklist
             if _is_blacklisted(name):
                 continue
 
-            # Get file size (skip if inaccessible)
-            try:
-                size = entry.stat().st_size
-            except OSError:
-                continue
-
             url = f"/frontend/tasks/{task_id}/jobs/{job_uuid}/files/{name}"
             category = _classify_file(name)
-            items.append(JobFileItem(name=name, size=size, url=url, category=category))
-    except OSError as exc:
-        logger.warning("Failed to list files in %s: %s", run_dir, exc)
+            items.append(
+                JobFileItem(name=name, size=fi.size, url=url, category=category)
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to list files in %s: %s", access.run_dir_path, exc
+        )
 
-    return items
+    subdirs = list_job_subdirs(access, task_id, job_uuid)
+
+    return items, subdirs
 
 
-def serve_job_file(
-    run_dir: Path, filename: str
-) -> tuple[Path, str]:
-    """
-    Resolve and validate a file request within a job's run directory.
-
-    Security checks (in order):
-    1. Reject path separators in filename
-    2. resolve() + relative_to() path containment
-    3. Single-level only (no subdirectory access)
-    4. Blacklist check (reject known dangerous files)
-    5. File existence
-
-    Returns (file_path, content_type).
-
-    Raises:
-        ValueError: If the filename is invalid, outside run_dir, or blacklisted.
-        FileNotFoundError: If the file does not exist.
-    """
-    # 1. Reject path separators in filename
-    if "/" in filename or "\\" in filename:
-        raise ValueError(f"Invalid filename: {filename}")
-
-    # 2. resolve() + relative_to() for real path containment
-    base = run_dir.resolve()
-    target = (base / filename).resolve()
-    try:
-        target.relative_to(base)
-    except ValueError:
-        raise ValueError(f"Path traversal detected: {filename}")
-
-    # 3. Only allow root-level files (no subdirectory access)
-    if target.parent != base:
-        raise ValueError(f"Subdirectory access not allowed: {filename}")
-
-    # 4. Blacklist check
-    if _is_blacklisted(filename):
-        raise ValueError(f"File type not allowed: {filename}")
-
-    # 5. File existence
-    if not target.is_file():
-        raise FileNotFoundError(f"File not found: {filename}")
-
-    # Determine content type
-    suffix = target.suffix.lower()
+def _guess_content_type(filename: str) -> str:
+    """Guess MIME content type from filename extension."""
+    suffix = Path(filename).suffix.lower()
     content_type_map = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
@@ -890,9 +1017,263 @@ def serve_job_file(
         ".svg": "image/svg+xml",
         ".xml": "application/xml",
     }
-    content_type = content_type_map.get(suffix, "application/octet-stream")
+    return content_type_map.get(suffix, "application/octet-stream")
 
-    return target, content_type
+
+def serve_job_file(
+    access: RunDirAccess, filename: str
+) -> tuple[Union[Path, bytes], str]:
+    """
+    Resolve and validate a file request within a job's run directory.
+
+    Security checks:
+    1. Reject path separators / traversal in filename
+    2. Blacklist check (reject known dangerous files)
+    3. File existence via RunDirAccess
+
+    For local access, returns ``(Path, content_type)`` so the router can
+    use ``FileResponse``.  For remote access, returns ``(bytes, content_type)``
+    so the router can return an in-memory ``Response``.
+
+    Raises:
+        ValueError: If the filename is invalid or blacklisted.
+        FileNotFoundError: If the file does not exist.
+    """
+    # 1. Reject path separators
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError(f"Invalid filename: {filename}")
+
+    # 2. Blacklist check
+    if _is_blacklisted(filename):
+        raise ValueError(f"File type not allowed: {filename}")
+
+    # 3. Check file existence
+    if not access.root_file_exists(filename):
+        raise FileNotFoundError(f"File not found: {filename}")
+
+    content_type = _guess_content_type(filename)
+
+    # For local access, return the Path for FileResponse
+    if isinstance(access, LocalRunDirAccess):
+        target = (Path(access.run_dir_path) / filename).resolve()
+        base = Path(access.run_dir_path).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            raise ValueError(f"Path traversal detected: {filename}")
+        return target, content_type
+
+    # For remote access, download bytes
+    data = access.download_root_file(filename)
+    return data, content_type
+
+
+def _is_allowed_subdir(subdir: str) -> bool:
+    """Check if a subdirectory name matches an allowed prefix."""
+    return any(subdir.startswith(p) for p in _ALLOWED_SUBDIR_PREFIXES)
+
+
+def _detect_subdir_status(access: RunDirAccess, subdir: str) -> str:
+    """Detect the status of a subdirectory from marker files.
+
+    Convention for SCF frame directories:
+    - ENDED file present and OSZICAR shows convergence -> "completed"
+    - ENDED file present but convergence unknown      -> "completed"
+    - No ENDED but OUTCAR exists                      -> "running"
+    - Neither ENDED nor OUTCAR                        -> "pending"
+
+    If any heuristic fails, returns "unknown".
+
+    Note: For scf_* subdirectories, prefer ``scan_scf_status()`` which
+    checks all subdirs in a single pass.  This function is kept as a
+    fallback for non-scf subdirectories (e.g. nvt_attempt_*).
+    """
+    try:
+        has_ended = access.subdir_file_exists(subdir, "ENDED")
+        has_outcar = access.subdir_file_exists(subdir, "OUTCAR")
+
+        if has_ended:
+            return "completed"
+        if has_outcar:
+            return "running"
+        # No output files yet — could be pending
+        has_poscar = access.subdir_file_exists(subdir, "POSCAR")
+        if has_poscar:
+            return "pending"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Map from scan_scf_status marker names to SubdirInfo display status
+_SCF_STATUS_MAP = {
+    "ENDED": "completed",
+    "FAIL": "failed",
+    "RUNNING": "running",
+    "PENDING": "pending",
+}
+
+
+def list_job_subdirs(
+    access: RunDirAccess, task_id: str, job_uuid: str
+) -> List[SubdirInfo]:
+    """List whitelisted subdirectories with metadata (name, file count, status).
+
+    Only subdirectories whose names match ``_ALLOWED_SUBDIR_PREFIXES`` are
+    returned.  File contents are NOT included -- the frontend should call
+    ``list_subdir_files()`` lazily when the user expands a directory.
+
+    For scf_* subdirectories, uses ``scan_scf_status()`` to gather status
+    and file counts in a single pass (one SSH command for remote workers).
+    Other prefixes (e.g. nvt_attempt_*) still use individual checks.
+    """
+    items: List[SubdirInfo] = []
+
+    # --- Fast path: batch-scan scf_* subdirs ---
+    try:
+        scf_map = access.scan_scf_status()
+        for subdir_name in sorted(scf_map):
+            info = scf_map[subdir_name]
+            status = _SCF_STATUS_MAP.get(info.status, "unknown")
+            items.append(
+                SubdirInfo(
+                    name=subdir_name,
+                    file_count=info.file_count,
+                    status=status,
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "scan_scf_status failed for %s: %s", access.run_dir_path, exc
+        )
+
+    # --- Slow path: other allowed prefixes (nvt_attempt_*, etc.) ---
+    non_scf_prefixes = [p for p in _ALLOWED_SUBDIR_PREFIXES if p != "scf_"]
+    if non_scf_prefixes:
+        try:
+            other_subdirs: List[str] = []
+            for prefix in non_scf_prefixes:
+                other_subdirs.extend(access.list_subdirs(prefix))
+            # Deduplicate and sort
+            seen: set[str] = set()
+            unique_others: List[str] = []
+            for d in other_subdirs:
+                if d not in seen:
+                    seen.add(d)
+                    unique_others.append(d)
+            unique_others.sort()
+
+            for subdir_name in unique_others:
+                try:
+                    files = access.list_subdir_files(subdir_name)
+                    file_count = len(files)
+                except Exception:
+                    file_count = 0
+
+                status = _detect_subdir_status(access, subdir_name)
+                items.append(
+                    SubdirInfo(
+                        name=subdir_name,
+                        file_count=file_count,
+                        status=status,
+                    )
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to list non-scf subdirs in %s: %s",
+                access.run_dir_path,
+                exc,
+            )
+
+    return items
+
+
+def list_subdir_files(
+    access: RunDirAccess, task_id: str, job_uuid: str, subdir: str
+) -> List[JobFileItem]:
+    """List files inside a specific subdirectory of a job's run directory.
+
+    Security: the subdirectory name must match ``_ALLOWED_SUBDIR_PREFIXES``.
+
+    Raises:
+        ValueError: If the subdirectory is not in the allowed list.
+    """
+    if not _is_allowed_subdir(subdir):
+        raise ValueError(
+            f"Subdirectory not allowed: {subdir!r}. "
+            f"Must start with one of: {_ALLOWED_SUBDIR_PREFIXES}"
+        )
+
+    items: List[JobFileItem] = []
+    try:
+        for fi in access.list_subdir_files(subdir):
+            name = fi.name
+            if _is_blacklisted(name):
+                continue
+            url = (
+                f"/frontend/tasks/{task_id}/jobs/{job_uuid}"
+                f"/files/{subdir}/{name}"
+            )
+            category = _classify_file(name)
+            items.append(
+                JobFileItem(
+                    name=name, size=fi.size, url=url, category=category
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to list files in %s/%s: %s",
+            access.run_dir_path, subdir, exc,
+        )
+
+    return items
+
+
+def serve_subdir_file(
+    access: RunDirAccess, subdir: str, filename: str
+) -> tuple[Union[Path, bytes], str]:
+    """Resolve and validate a file request within a job subdirectory.
+
+    Security checks mirror ``serve_job_file`` but target a subdirectory:
+    1. Subdirectory must be in the allowed prefix list
+    2. Reject path separators / traversal in filename
+    3. Blacklist check
+    4. File existence via RunDirAccess
+
+    Raises:
+        ValueError: If the subdir/filename is invalid or blacklisted.
+        FileNotFoundError: If the file does not exist.
+    """
+    if not _is_allowed_subdir(subdir):
+        raise ValueError(
+            f"Subdirectory not allowed: {subdir!r}. "
+            f"Must start with one of: {_ALLOWED_SUBDIR_PREFIXES}"
+        )
+
+    # Validate filename
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError(f"Invalid filename: {filename}")
+
+    if _is_blacklisted(filename):
+        raise ValueError(f"File type not allowed: {filename}")
+
+    if not access.subdir_file_exists(subdir, filename):
+        raise FileNotFoundError(f"File not found: {subdir}/{filename}")
+
+    content_type = _guess_content_type(filename)
+
+    if isinstance(access, LocalRunDirAccess):
+        target = (Path(access.run_dir_path) / subdir / filename).resolve()
+        base = Path(access.run_dir_path).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            raise ValueError(f"Path traversal detected: {subdir}/{filename}")
+        return target, content_type
+
+    # Remote access: download bytes
+    data = access.download_subdir_file(subdir, filename)
+    return data, content_type
 
 
 # -----------------------------------------------------------------------------
@@ -900,17 +1281,25 @@ def serve_job_file(
 # -----------------------------------------------------------------------------
 
 
-def _detect_step_type(job_name: str, run_dir: Optional[Path]) -> str:
-    """Detect the step type from job name or run_dir path."""
+def _detect_step_type(job_name: str, run_dir_path: Optional[str] = None) -> str:
+    """Detect the step type from job name or run_dir path string."""
     name_lower = job_name.lower()
+    if "pre_namd" in name_lower:
+        return "pre_namd"
+    if "namd" in name_lower:
+        return "namd"
     if "nvt" in name_lower:
         return "nvt"
     if "nve" in name_lower:
         return "nve"
     if "scf" in name_lower:
         return "scf"
-    if run_dir:
-        dir_lower = str(run_dir).lower()
+    if run_dir_path:
+        dir_lower = run_dir_path.lower()
+        if "pre_namd" in dir_lower:
+            return "pre_namd"
+        if "namd" in dir_lower:
+            return "namd"
         if "nvt" in dir_lower:
             return "nvt"
         if "nve" in dir_lower:
@@ -936,6 +1325,20 @@ def _parse_nsw_from_incar(incar_path: Path) -> Optional[int]:
                             continue
     except OSError:
         pass
+    return None
+
+
+def _parse_nsw_from_text(text: str) -> Optional[int]:
+    """Parse the NSW value from INCAR text content."""
+    for line in text.splitlines():
+        stripped = line.strip().upper()
+        if "NSW" in stripped:
+            parts = line.split("=")
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1].split()[0].strip())
+                except (ValueError, IndexError):
+                    continue
     return None
 
 
@@ -993,6 +1396,17 @@ def _parse_nelm_from_incar(incar_path: Path) -> Optional[int]:
     return None
 
 
+def _parse_nelm_from_text(text: str) -> Optional[int]:
+    """Parse the NELM value from INCAR text content."""
+    import re
+    nelm_pattern = re.compile(r'^\s*NELM\s*=\s*(\d+)', re.IGNORECASE)
+    for line in text.splitlines():
+        m = nelm_pattern.match(line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def _parse_oszicar_tail(oszicar_path: Path) -> dict:
     """
     Parse the last complete electronic step from an OSZICAR file tail.
@@ -1042,6 +1456,41 @@ def _parse_oszicar_tail(oszicar_path: Path) -> dict:
     return result
 
 
+def _parse_oszicar_tail_text(tail: str) -> dict:
+    """Parse the last complete electronic step from OSZICAR text.
+
+    Same logic as ``_parse_oszicar_tail`` but accepts pre-read text
+    instead of a Path, enabling remote usage.
+    """
+    import re
+
+    result = {
+        "electronic_step_current": None,
+        "scf_algorithm": None,
+        "last_energy": None,
+    }
+    if not tail:
+        return result
+
+    estep_re = re.compile(
+        r"^\s*(CG|RMM|DAV|PMM|Mixed)\s*:\s*(\d+)\s+"
+        r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
+    )
+
+    for line in reversed(tail.splitlines()):
+        m = estep_re.match(line)
+        if m:
+            result["scf_algorithm"] = m.group(1)
+            try:
+                result["electronic_step_current"] = int(m.group(2))
+                result["last_energy"] = float(m.group(3))
+            except ValueError:
+                pass
+            break
+
+    return result
+
+
 def get_job_progress(
     manager: MainWorkflow, job_uuid: str
 ) -> JobProgressResponse:
@@ -1052,7 +1501,7 @@ def get_job_progress(
     For SCF jobs, returns a basic available=True with step_type="scf".
 
     Uses a single ``jc.get_job_info()`` call to retrieve state, run_dir,
-    and job name, avoiding the previous 3-query overhead.
+    and job name, then creates a ``RunDirAccess`` for file operations.
     """
     jc = manager._ensure_job_controller()
     try:
@@ -1069,49 +1518,40 @@ def get_job_progress(
     if raw_state in ("WAITING", "READY", "CHECKED_OUT"):
         return JobProgressResponse(available=False)
 
-    # Extract run_dir from the single job_info query
-    raw_run_dir = getattr(job_info, "run_dir", None)
-    if not raw_run_dir:
-        return JobProgressResponse(available=False)
-    run_dir = Path(str(raw_run_dir))
-    if not run_dir.is_dir():
+    access = get_run_dir_access(job_uuid, manager)
+    if access is None:
         return JobProgressResponse(available=False)
 
     # Extract job name from the same job_info object
     job_name = getattr(job_info, "name", "") or ""
 
-    step_type = _detect_step_type(job_name, run_dir)
+    step_type = _detect_step_type(job_name, access.run_dir_path)
 
     if step_type in ("nvt", "nve"):
-        return _get_md_progress(run_dir, step_type)
+        return _get_md_progress(access, step_type)
     elif step_type == "scf":
-        return _get_scf_progress(run_dir)
+        return _get_scf_progress(access)
     else:
-        return JobProgressResponse(available=True, step_type=step_type, current_step=0)
+        return JobProgressResponse(available=False, step_type=step_type)
 
 
-def _get_md_progress(run_dir: Path, step_type: str) -> JobProgressResponse:
+def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressResponse:
     """
     Parse OSZICAR in run_dir to get MD progress.
 
-    Uses ``read_file_tail`` to read only the last portion of the file
-    instead of loading the entire OSZICAR, which can grow very large
-    for long MD simulations (thousands of ionic steps).
-
-    The current ionic step number is extracted from the last ``T=`` line.
+    Reads only the tail of the OSZICAR to avoid transferring entire
+    files for long MD simulations.  Works for both local and remote
+    workers via ``RunDirAccess``.
     """
-    oszicar_path = run_dir / "OSZICAR"
-    incar_path = run_dir / "INCAR"
-
     current_step = 0
     last_temp: Optional[float] = None
     last_energy: Optional[float] = None
 
-    if oszicar_path.is_file():
-        try:
-            tail = read_file_tail(oszicar_path)
+    try:
+        if access.root_file_exists("OSZICAR"):
+            # Read last 64KB of OSZICAR (enough for recent ionic steps)
+            tail = access.read_root_tail("OSZICAR", max_bytes=65536)
             if tail:
-                # Walk lines in reverse to find the last MD summary line
                 for line in reversed(tail.splitlines()):
                     if "T=" in line:
                         try:
@@ -1122,10 +1562,18 @@ def _get_md_progress(run_dir: Path, step_type: str) -> JobProgressResponse:
                         except (ValueError, IndexError):
                             continue
                         break
-        except OSError as exc:
-            logger.warning("Failed to read OSZICAR at %s: %s", oszicar_path, exc)
+    except Exception as exc:
+        logger.warning(
+            "Failed to read OSZICAR from %s: %s", access.run_dir_path, exc
+        )
 
-    total_steps = _parse_nsw_from_incar(incar_path)
+    total_steps: Optional[int] = None
+    try:
+        if access.root_file_exists("INCAR"):
+            incar_text = access.read_root_text("INCAR")
+            total_steps = _parse_nsw_from_text(incar_text)
+    except Exception:
+        pass
 
     percent: Optional[float] = None
     if total_steps and total_steps > 0:
@@ -1142,39 +1590,39 @@ def _get_md_progress(run_dir: Path, step_type: str) -> JobProgressResponse:
     )
 
 
-def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
+def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
     """
     Get SCF batch progress driven by status files (RUNNING/ENDED/FAIL).
 
-    For each ``scf_*`` subdirectory the presence of status files is
-    checked (no file content is read — they are empty marker files).
+    Uses ``scan_scf_status()`` to check all scf_* subdirectories in a
+    single pass (one SSH command for remote workers instead of O(N)
+    individual ``test -f`` calls).
 
-    Additionally, for the currently-running frame the OSZICAR tail is
-    parsed to extract electronic-step progress.
+    For the currently-running frame, a few additional targeted reads
+    fetch OSZICAR and INCAR data (1-2 extra SSH calls at most).
+
+    Works for both local and remote workers via ``RunDirAccess``.
     """
-    scf_dirs = sorted(run_dir.glob("scf_*"))
-    if not scf_dirs:
+    scf_map = access.scan_scf_status()
+    if not scf_map:
         return JobProgressResponse(available=True, step_type="scf", current_step=0)
 
-    total = 0
+    total = len(scf_map)
     completed = 0  # ENDED
     failed = 0  # FAIL
     running = 0  # RUNNING
-    running_dir: Optional[Path] = None
+    running_subdir: Optional[str] = None
     failed_frames: List[str] = []
 
-    for d in scf_dirs:
-        if not d.is_dir():
-            continue
-        total += 1
-        if (d / "ENDED").is_file():
+    for subdir_name, info in scf_map.items():
+        if info.status == "ENDED":
             completed += 1
-        elif (d / "FAIL").is_file():
+        elif info.status == "FAIL":
             failed += 1
-            failed_frames.append(d.name)
-        elif (d / "RUNNING").is_file():
+            failed_frames.append(subdir_name)
+        elif info.status == "RUNNING":
             running += 1
-            running_dir = d
+            running_subdir = subdir_name
 
     pending = max(0, total - completed - failed - running)
     current_step = completed  # completed frames so far
@@ -1190,8 +1638,8 @@ def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
 
     # Build current_frame if a RUNNING subdirectory exists
     current_frame: Optional[SCFCurrentFrame] = None
-    if running_dir is not None:
-        frame_name = running_dir.name  # e.g. "scf_017"
+    if running_subdir is not None:
+        frame_name = running_subdir  # e.g. "scf_017"
         # Extract global index from directory name: "scf_017" -> 17
         global_index = 0
         try:
@@ -1199,20 +1647,34 @@ def _get_scf_progress(run_dir: Path) -> JobProgressResponse:
         except (ValueError, IndexError):
             pass
 
-        # Parse electronic step from OSZICAR tail
-        oszicar_path = running_dir / "OSZICAR"
-        estep_info = {"electronic_step_current": None, "scf_algorithm": None, "last_energy": None}
-        if oszicar_path.is_file():
-            estep_info = _parse_oszicar_tail(oszicar_path)
+        # Parse electronic step from OSZICAR tail (targeted read)
+        estep_info = {
+            "electronic_step_current": None,
+            "scf_algorithm": None,
+            "last_energy": None,
+        }
+        try:
+            oszicar_tail = access.read_subdir_tail(
+                running_subdir, "OSZICAR", max_bytes=4096
+            )
+            estep_info = _parse_oszicar_tail_text(oszicar_tail)
+        except Exception:
+            pass
 
         # Read NELM from INCAR (try frame INCAR first, then parent)
         nelm: Optional[int] = None
-        frame_incar = running_dir / "INCAR"
-        parent_incar = run_dir / "INCAR"
-        if frame_incar.is_file():
-            nelm = _parse_nelm_from_incar(frame_incar)
-        if nelm is None and parent_incar.is_file():
-            nelm = _parse_nelm_from_incar(parent_incar)
+        try:
+            incar_text = access.read_subdir_text(running_subdir, "INCAR")
+            nelm = _parse_nelm_from_text(incar_text)
+        except Exception:
+            pass
+        if nelm is None:
+            try:
+                root_texts = access.read_multiple_root_texts(["INCAR"])
+                if "INCAR" in root_texts:
+                    nelm = _parse_nelm_from_text(root_texts["INCAR"])
+            except Exception:
+                pass
 
         current_frame = SCFCurrentFrame(
             name=frame_name,
@@ -1248,7 +1710,8 @@ def get_job_images(
     Get result images for a completed job.
 
     Reads the 'images' field from the job's stored output and verifies
-    that each file still exists on disk.
+    that each file still exists via RunDirAccess (works for both local
+    and remote workers).
     """
     try:
         raw_state = manager.get_job_status(job_uuid)
@@ -1271,29 +1734,20 @@ def get_job_images(
     if not image_paths:
         return JobImagesResponse(available=True)
 
-    # Get run_dir to verify file existence
-    run_dir = get_job_run_dir(manager, job_uuid)
+    # Get RunDirAccess to verify file existence
+    access = get_run_dir_access(job_uuid, manager)
 
     items: List[JobImageItem] = []
     for img_path in image_paths:
-        target = Path(img_path)
-        basename = target.name
+        basename = Path(img_path).name
 
-        # Skip images in subdirectories -- the file-serving endpoint only
-        # serves root-level files from run_dir, so subdirectory images
-        # would produce unreachable URLs.
-        if run_dir and target.parent != run_dir:
-            logger.debug(
-                "Skipping subdirectory image %s (not in run_dir root)", img_path,
-            )
-            continue
-
-        # Verify file exists (check absolute path first, then run_dir)
+        # Verify file exists in run_dir root
         exists = False
-        if Path(img_path).is_file():
-            exists = True
-        elif run_dir and (run_dir / basename).is_file():
-            exists = True
+        if access is not None:
+            try:
+                exists = access.root_file_exists(basename)
+            except Exception:
+                pass
 
         if exists:
             url = f"/frontend/tasks/{task_id}/jobs/{job_uuid}/files/{basename}"
@@ -1552,6 +2006,10 @@ def get_job_md_timeseries(
     """Build the full MD timeseries response for a job.
 
     This is the main entry point called by the router.
+
+    For remote workers, full timeseries parsing requires transferring large
+    OSZICAR files.  Phase 1 returns ``available=False`` with a warning for
+    remote workers; Phase 2 will implement streaming/chunked transfer.
     """
     from ..output_postprocess import parse_md_data_from_oszicar
 
@@ -1571,11 +2029,25 @@ def get_job_md_timeseries(
     if not raw_run_dir:
         return JobMdTimeseriesResponse(available=False, warning="Job run directory not available yet.")
 
+    # Check if this is a remote worker -- graceful fallback for Phase 1
+    worker_name = job_info.worker
+    worker_cfg = manager.jf_config.get("workers", {}).get(worker_name, {})
+    if worker_cfg.get("type") in ("remote", "separated_transfer"):
+        return JobMdTimeseriesResponse(
+            available=False,
+            step_type=_detect_step_type(job_name, str(raw_run_dir)),
+            state=raw_state,
+            warning=(
+                "MD timeseries is not yet supported for remote workers. "
+                "This feature will be available in a future update."
+            ),
+        )
+
     run_dir = Path(str(raw_run_dir))
     if not run_dir.is_dir():
         return JobMdTimeseriesResponse(available=False, warning="Job run directory does not exist.")
 
-    step_type = _detect_step_type(job_name, run_dir)
+    step_type = _detect_step_type(job_name, str(run_dir))
     if step_type not in ("nvt", "nve"):
         return JobMdTimeseriesResponse(
             available=False,

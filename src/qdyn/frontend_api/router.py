@@ -33,6 +33,7 @@ from .models import (
     StructureValidationInfo,
     StructureValidationRequest,
     StructureValidationResponse,
+    SubdirFilesResponse,
     TaskJobsStatusResponse,
     TaskSummaryListResponse,
 )
@@ -519,13 +520,13 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        run_dir = service.get_job_run_dir(manager, job_uuid)
+        access = service.get_run_dir_access(job_uuid, manager)
 
-        if run_dir is None:
+        if access is None:
             return JobFilesResponse(available=False)
 
-        files = service.list_job_files(run_dir, task_id, job_uuid)
-        return JobFilesResponse(available=True, files=files)
+        files, subdirs = service.list_job_files(access, task_id, job_uuid)
+        return JobFilesResponse(available=True, files=files, subdirs=subdirs)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files/{filename} - Serve file
@@ -545,34 +546,174 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         """
         Serve a single file from a job's run directory.
 
+        For local workers, returns a streaming FileResponse.
+        For remote workers, downloads the file via SSH and returns
+        an in-memory Response with the file bytes.
+
         Args:
             task_id: The task identifier.
             job_uuid: The job UUID.
             filename: The name of the file to retrieve.
 
         Returns:
-            A FileResponse with the file contents.
+            A FileResponse (local) or Response (remote) with the file contents.
         """
         verify_task_ownership_local(task_id, username)
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        run_dir = service.get_job_run_dir(manager, job_uuid)
+        access = service.get_run_dir_access(job_uuid, manager)
 
-        if run_dir is None:
+        if access is None:
             raise HTTPException(status_code=404, detail="Job run directory not available")
 
         try:
-            file_path, content_type = service.serve_job_file(run_dir, filename)
+            result, content_type = service.serve_job_file(access, filename)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
-        return FileResponse(
-            path=str(file_path),
-            media_type=content_type,
-            filename=filename,
+        from pathlib import Path as _Path
+
+        if isinstance(result, _Path):
+            return FileResponse(
+                path=str(result),
+                media_type=content_type,
+                filename=filename,
+            )
+        else:
+            # Remote: result is bytes
+            return Response(
+                content=result,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"'
+                },
+            )
+
+    # -------------------------------------------------------------------------
+    # GET .../files/{subdir}/{filename} - Serve subdirectory file
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/files/{subdir}/{filename}",
+        summary="Download a file from a job subdirectory",
+        description=(
+            "Serve a single file from an allowed subdirectory "
+            "(e.g. scf_000/) within a job's run directory."
+        ),
+    )
+    def get_job_subdir_file_endpoint(
+        task_id: str,
+        job_uuid: str,
+        subdir: str,
+        filename: str,
+        username: str = Depends(get_current_user),
+    ) -> Response:
+        """
+        Serve a file from a job's subdirectory (e.g. scf_000/OUTCAR).
+
+        Only subdirectories with whitelisted prefixes (scf_, nvt_attempt_)
+        are accessible.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+            subdir: The subdirectory name (e.g. "scf_000").
+            filename: The file name within the subdirectory.
+
+        Returns:
+            A FileResponse (local) or Response (remote) with the file contents.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        access = service.get_run_dir_access(job_uuid, manager)
+
+        if access is None:
+            raise HTTPException(
+                status_code=404, detail="Job run directory not available"
+            )
+
+        try:
+            result, content_type = service.serve_subdir_file(
+                access, subdir, filename
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+        from pathlib import Path as _Path
+
+        if isinstance(result, _Path):
+            return FileResponse(
+                path=str(result),
+                media_type=content_type,
+                filename=filename,
+            )
+        else:
+            return Response(
+                content=result,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"'
+                },
+            )
+
+    # -------------------------------------------------------------------------
+    # GET .../subdirs/{subdir}/files - List subdirectory files (lazy load)
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/jobs/{job_uuid}/subdirs/{subdir}/files",
+        response_model=SubdirFilesResponse,
+        summary="List files in a job subdirectory",
+        description=(
+            "Retrieve the file list for a specific subdirectory within "
+            "a job's run directory. Used for lazy-loading subdirectory "
+            "contents when the user expands a folder."
+        ),
+    )
+    def list_subdir_files_endpoint(
+        task_id: str,
+        job_uuid: str,
+        subdir: str,
+        username: str = Depends(get_current_user),
+    ) -> SubdirFilesResponse:
+        """
+        List files inside a specific subdirectory.
+
+        Args:
+            task_id: The task identifier.
+            job_uuid: The job UUID.
+            subdir: The subdirectory name (e.g. "scf_000").
+
+        Returns:
+            A SubdirFilesResponse with the file list.
+        """
+        verify_task_ownership_local(task_id, username)
+        verify_job_belongs_to_task(task_id, job_uuid)
+
+        manager = manager_getter()
+        access = service.get_run_dir_access(job_uuid, manager)
+
+        if access is None:
+            return SubdirFilesResponse(
+                available=False, subdir=subdir
+            )
+
+        try:
+            files = service.list_subdir_files(
+                access, task_id, job_uuid, subdir
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return SubdirFilesResponse(
+            available=True, subdir=subdir, files=files
         )
 
     # -------------------------------------------------------------------------
