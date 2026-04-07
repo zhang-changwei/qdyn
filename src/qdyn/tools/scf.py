@@ -43,7 +43,7 @@ def qdyn_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    trajectory_dir: str,
+    traj_file_path: str,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -65,10 +65,8 @@ def qdyn_scf(
         Path to pseudopotential files.
     orb_path : str
         Path to orbital files.
-    trajectory_dir : str
-        Path to the directory containing the trajectory file
-        (e.g. XDATCAR for VASP). The appropriate trajectory filename
-        is resolved automatically based on the software.
+    traj_file_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP).
     nodes : int
         Number of nodes.
     ntasks_per_node : int
@@ -104,7 +102,7 @@ def qdyn_scf(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            trajectory_dir=trajectory_dir,
+            traj_file_path=traj_file_path,
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
@@ -123,7 +121,7 @@ def qdyn_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    trajectory_dir: str,
+    traj_file_path: str,
     frame_start: int = 0,
     frame_end: int = 0,
     nodes: int = 1,
@@ -150,10 +148,8 @@ def qdyn_scf_task(
         Pseudopotential path.
     orb_path : str
         Orbital file path.
-    trajectory_dir : str
-        Path to the directory containing the trajectory file
-        (e.g. XDATCAR for VASP). The appropriate trajectory filename
-        is resolved automatically based on the software.
+    traj_file_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP).
     frame_start : int
         Global frame index of the first structure (0-based).
     frame_end : int
@@ -182,7 +178,7 @@ def qdyn_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    all_strus = read_strus(software_lower, trajectory_dir)
+    all_strus = read_strus(software_lower, traj_file_path=traj_file_path)
     selected_structures = all_strus[-scf_step:]
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)

@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -8,6 +9,7 @@ import io
 import os
 import sqlite3
 import subprocess
+import tempfile
 import uuid
 import yaml
 from typing import Optional, Tuple, Dict, List, Literal
@@ -21,6 +23,7 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
+from .params import md_tracks
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve, write_strus
 from .tools.scf import qdyn_scf
@@ -403,16 +406,23 @@ class MainWorkflow:
             else:
                 prev_step = 'nve'
                 next_step = 'pre_namd'
-                trajectory_dir = ""
+                traj_file_path = ""
                 if prev_step in input.steps:
-                    # NVE in the same flow: OutputReference resolves to a directory
-                    trajectory_dir = jobs[prev_step][0].output['run_dir']
+                    # NVE in the same flow: OutputReference resolves to traj path
+                    traj_file_path = jobs[prev_step][0].output['traj_file_path']
                 elif first_step == 'scf' and resume:
                     # Resume SCF from a previous task
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                         nve_output = self.get_job_output(prev_job_uuid)
-                        trajectory_dir = nve_output['run_dir']
+                        if 'traj_file_path' in nve_output:
+                            traj_file_path = nve_output['traj_file_path']
+                        else:
+                            # Backward compat: old NVE output without traj_file_path
+                            traj_file_path = os.path.join(
+                                nve_output['run_dir'],
+                                md_tracks[software.lower()],
+                            )
                     except Exception as exc:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
@@ -420,12 +430,30 @@ class MainWorkflow:
                         ) from exc
                 elif stru:
                     # User-provided structure text: write to trajectory file
+                    # Content-addressed dedup: hash file content as filename
                     strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
                     work_dir = self.jf_config['workers']['local_slurm']['work_dir']
-                    stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
-                    stru_dir.mkdir(parents=True, exist_ok=True)
-                    write_strus(software, strus_ase, str(stru_dir))
-                    trajectory_dir = str(stru_dir)
+                    traj_dir = Path(work_dir) / "user_trajectories"
+                    traj_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Content-addressed dedup: write to temp, hash, atomic rename
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        tmp_file = write_strus(software, strus_ase, tmpdir)
+                        content_hash = hashlib.sha256(Path(tmp_file).read_bytes()).hexdigest()
+                        ext = os.path.basename(tmp_file)  # e.g. 'XDATCAR'
+                        target = traj_dir / f"{content_hash}.{ext}"
+                        if not target.exists():
+                            # Atomic: write to temp in target dir, then rename
+                            fd, stage = tempfile.mkstemp(dir=str(traj_dir), suffix=f'.{ext}.tmp')
+                            try:
+                                os.close(fd)
+                                shutil.copy2(tmp_file, stage)
+                                os.replace(stage, target)
+                            except BaseException:
+                                os.unlink(stage) if os.path.exists(stage) else None
+                                raise
+
+                    traj_file_path = str(target)
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -448,7 +476,7 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=pp_path,
                     orb_path=orb_path,
-                    trajectory_dir=trajectory_dir,
+                    traj_file_path=traj_file_path,
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,

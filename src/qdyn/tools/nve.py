@@ -130,6 +130,7 @@ def qdyn_nve(
         'md_files': md_file,
         'images': images,
         'strus': strus_list,
+        'traj_file_path': str(Path.cwd() / md_tracks[software_lower]),
     }
 
 
@@ -268,7 +269,11 @@ def write_strus(software: str, structures: List[Atoms], directory: str = '.') ->
     return track_file
 
 
-def read_strus(software: str, directory: str = '.') -> List[Atoms]:
+def read_strus(
+    software: str,
+    directory: str = '.',
+    traj_file_path: str | None = None,
+) -> List[Atoms]:
     """Read structures from trajectory file.
 
     Parameters
@@ -276,19 +281,22 @@ def read_strus(software: str, directory: str = '.') -> List[Atoms]:
     software : str
         Software name ('vasp', 'cp2k', etc.).
     directory : str
-        Directory containing the trajectory file. Default is current directory.
+        Directory containing the trajectory file (used when traj_file_path is None).
+    traj_file_path : str or None
+        Explicit path to the trajectory file. If given, directory is ignored.
 
     Returns
     -------
     List[Atoms]
         List of ASE Atoms objects representing the structures.
     """
-    track_name = md_tracks.get(software)
-    if track_name is None:
-        raise ValueError(f"Unsupported software: {software}")
-    track_file = os.path.join(directory, track_name)
+    if traj_file_path is None:
+        track_name = md_tracks.get(software)
+        if track_name is None:
+            raise ValueError(f"Unsupported software: {software}")
+        traj_file_path = os.path.join(directory, track_name)
     match software:
         case 'vasp':
-            return ase.io.read(track_file, format='vasp-xdatcar', index=':')
+            return ase.io.read(traj_file_path, format='vasp-xdatcar', index=':')
         case _:
             raise ValueError(f"Unsupported software: {software}")
