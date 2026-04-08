@@ -1,11 +1,13 @@
+import asyncio
 import hashlib
+import json
 import logging
 import os
 import tempfile
 from pathlib import Path
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import ase
 import ase.io
@@ -87,9 +89,44 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logging.warning(f"Failed to pre-warm MongoDB connection: {exc}")
 
+    # Start the queue poller background task (pool-based mode only).
+    poller_task: Optional[asyncio.Task] = None
+    if "worker_pools" in manager.config:
+        from .queue_poller import queue_dispatch_loop
+
+        # Read poll interval from pool config (default 60s).
+        _, _, pool_cfg = manager._resolve_pool_context()
+        poll_interval = pool_cfg.get("queue_poll_interval", 60)
+
+        poller_task = asyncio.create_task(
+            queue_dispatch_loop(
+                workflow=manager,
+                db=qdyndb,
+                dispatch_lock=_dispatch_lock,
+                interval=poll_interval,
+            ),
+            name="queue-poller",
+        )
+        logging.info(
+            "Queue poller background task started (interval=%ds).",
+            poll_interval,
+        )
+    else:
+        logging.info(
+            "Non-pool config detected — queue poller not started."
+        )
+
     yield
 
-    # cleanup
+    # --- shutdown ---
+    if poller_task is not None:
+        poller_task.cancel()
+        try:
+            await poller_task
+        except asyncio.CancelledError:
+            pass
+        logging.info("Queue poller background task stopped.")
+
     qdyndb.close_db()
 
 
@@ -211,6 +248,14 @@ frontend_router = create_frontend_router(_manager)
 app.include_router(frontend_router)
 
 
+# ---------------------------------------------------------------------------
+# Dispatch lock for pool-based submission
+# ---------------------------------------------------------------------------
+# Serialises "query MongoDB -> select worker -> submit_flow" so that two
+# concurrent requests cannot both pick the same idle worker.
+_dispatch_lock = asyncio.Lock()
+
+
 # --- helpers ---
 
 
@@ -228,7 +273,120 @@ def _verify_ownership(task_id: str, username: str) -> None:
         )
 
 
-def _submit_with_tracking(
+def _extract_structure_metadata(
+    input: InputT, resume: bool, prev_task_id: str
+) -> tuple:
+    """Extract (formula, num_atoms) from input or predecessor task."""
+    formula = None
+    num_atoms = None
+    if resume and prev_task_id:
+        prev_meta = qdyndb.get_task_metadata(prev_task_id)
+        if prev_meta:
+            formula = prev_meta.get("formula")
+            num_atoms = prev_meta.get("num_atoms")
+    else:
+        if input.stru:
+            try:
+                import io as _io
+                from ase.io import read as ase_read
+                atoms = ase_read(
+                    _io.StringIO(input.stru),
+                    format=input.stru_format or "vasp",
+                )
+                formula = atoms.get_chemical_formula()
+                num_atoms = len(atoms)
+            except Exception:
+                logging.warning("Failed to parse structure metadata from POSCAR")
+    return formula, num_atoms
+
+
+def _sync_dispatch(
+    m: MainWorkflow,
+    task_id: str,
+    username: str,
+    pool_name: str,
+    input_obj: InputT,
+    method: str,
+    resume: bool,
+    prev_task_id: str,
+    *,
+    runtime_worker: Optional[str] = None,
+) -> Optional[str]:
+    """Synchronous core of the dispatch: select worker + submit + persist.
+
+    Called inside ``asyncio.to_thread()`` while the dispatch lock is held.
+
+    Parameters
+    ----------
+    runtime_worker : str, optional
+        If provided, skip worker selection and submit directly to this
+        worker (used by the queue poller when it has already determined
+        the target worker).
+
+    Returns the runtime worker name on success, or None if no worker is
+    available (pool full).
+    """
+    if runtime_worker is None:
+        worker, mode = m._select_runtime_worker(username, pool_name)
+        if worker is None:
+            return None
+        runtime_worker = worker
+
+    # Submit via jobflow-remote
+    final_task_id, job_ids, effective_worker = m.submit(
+        input=input_obj,
+        method=method,
+        stru=input_obj.stru,
+        stru_format=input_obj.stru_format,
+        resume=resume,
+        prev_task_id=prev_task_id,
+        task_id=task_id,
+        username=username,
+        pool_name=pool_name,
+        runtime_worker=runtime_worker,
+    )
+
+    # Persist task ownership
+    qdyndb.assign_task(final_task_id, username, job_ids, pool_name=pool_name)
+
+    # Persist structure metadata
+    formula, num_atoms = _extract_structure_metadata(input_obj, resume, prev_task_id)
+    qdyndb.update_task_metadata(
+        final_task_id,
+        formula=formula,
+        num_atoms=num_atoms,
+        prev_task_id=prev_task_id if resume and prev_task_id else None,
+        worker=effective_worker,
+        pool_name=pool_name,
+    )
+
+    return runtime_worker
+
+
+async def _dispatch_task(
+    m: MainWorkflow,
+    task_id: str,
+    username: str,
+    pool_name: str,
+    input_obj: InputT,
+    method: str,
+    resume: bool,
+    prev_task_id: str,
+) -> Optional[str]:
+    """Acquire the dispatch lock, select a worker, and submit.
+
+    Returns the runtime worker name on success, or None if all workers
+    are occupied (caller should enqueue the task).
+    """
+    async with _dispatch_lock:
+        return await asyncio.to_thread(
+            _sync_dispatch,
+            m, task_id, username, pool_name,
+            input_obj, method, resume, prev_task_id,
+        )
+
+
+def _submit_with_tracking_legacy(
     input: InputT,
     method: Literal["namd", "n2amd"],
     resume: bool,
@@ -236,10 +394,14 @@ def _submit_with_tracking(
     username: str,
     worker: Optional[str] = None,
 ) -> str:
-    """Submit a task and persist task ownership and structure metadata."""
+    """Legacy synchronous submission path (non-pool configs).
+
+    Used when the config does not define ``worker_pools``, preserving
+    full backward compatibility with the old submission flow.
+    """
     m = _manager()
 
-    # Ownership check for resume: prev_task_id must belong to the same user
+    # Ownership check for resume
     if resume and prev_task_id:
         prev_owner = qdyndb.get_task_owner(prev_task_id)
         if prev_owner is None:
@@ -328,21 +490,31 @@ def _submit_with_tracking(
 
 @app.get("/workers", tags=["system"])
 def get_workers():
-    """Return available worker names and the configured default."""
+    """Return available worker/pool names and the configured default."""
     m = _manager()
-    if "workers" in m.config:
+    if "worker_pools" in m.config:
+        workers = list(m.config["worker_pools"].keys())
+    elif "workers" in m.config:
         workers = list(m.config["workers"].keys())
     else:
         # Legacy config format: only one implicit worker
         workers = [m.worker_name]
     return {
         "workers": workers,
-        "default": m.worker_name,
+        "default": m.active_pool_name,
     }
 
 
-@app.post("/submit", response_model=str, status_code=201)
-def submit_task(
+class SubmitResponse(BaseModel):
+    """Structured response from the /submit endpoint."""
+    task_id: str
+    status: Literal["SUBMITTED", "QUEUED"]
+    worker: Optional[str] = None
+    queue_position: Optional[int] = None
+
+
+@app.post("/submit", response_model=SubmitResponse, status_code=201)
+async def submit_task(
     input: InputT,
     method: Literal["namd", "n2amd"] = "namd",
     resume: bool = False,
@@ -350,14 +522,101 @@ def submit_task(
     worker: Optional[str] = None,
     username: str = Depends(get_current_user),
 ):
-    """Submit a new task and return its task ID."""
-    return _submit_with_tracking(
-        input=input,
-        method=method,
-        resume=resume,
-        prev_task_id=prev_task_id,
-        username=username,
-        worker=worker,
+    """Submit a new task.
+
+    In pool-based mode, the system automatically selects an idle worker.
+    If all workers are occupied, the task enters a FIFO waiting queue
+    and will be dispatched by the background poller when a worker becomes
+    available.
+
+    Returns a structured response with the task ID, submission status
+    (SUBMITTED or QUEUED), the assigned worker (if submitted), and the
+    queue position (if queued).
+    """
+    m = _manager()
+
+    # Ownership check for resume
+    if resume and prev_task_id:
+        prev_owner = qdyndb.get_task_owner(prev_task_id)
+        if prev_owner is None:
+            raise HTTPException(status_code=404, detail="Previous task not found")
+        if prev_owner != username:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Cannot resume a task owned by another user",
+            )
+
+    # Legacy (non-pool) config: use the old synchronous path and
+    # wrap the result in the new response model for consistency.
+    if "worker_pools" not in m.config:
+        task_id = await asyncio.to_thread(
+            _submit_with_tracking_legacy,
+            input, method, resume, prev_task_id, username, worker,
+        )
+        return SubmitResponse(task_id=task_id, status="SUBMITTED")
+
+    # --- Pool-based dispatch path ---
+    from jobflow.utils import suid
+    task_id = suid()
+    pool_name = m.active_pool_name
+
+    try:
+        runtime_worker = await _dispatch_task(
+            m, task_id, username, pool_name,
+            input, method, resume, prev_task_id,
+        )
+    except (AssertionError, ValidationError) as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
+    except ConfigError as e:
+        raise HTTPException(status_code=500, detail=f"Server config error: {e}")
+    except ResumeError as e:
+        raise HTTPException(status_code=404, detail=f"Resume error: {e}")
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=f"Not supported: {e}")
+
+    if runtime_worker is not None:
+        return SubmitResponse(
+            task_id=task_id,
+            status="SUBMITTED",
+            worker=runtime_worker,
+        )
+
+    # No worker available: enqueue the task.
+    payload = {
+        "input": input.model_dump() if hasattr(input, "model_dump") else input.dict(),
+        "method": method,
+        "resume": resume,
+        "prev_task_id": prev_task_id,
+        "pool_name": pool_name,
+    }
+    qdyndb.enqueue_submission(task_id, username, pool_name, json.dumps(payload))
+
+    # Also create a placeholder in task_owners so the task shows up in
+    # the user's task list immediately (with empty job_ids).
+    qdyndb.assign_task(task_id, username, {}, pool_name=pool_name)
+
+    # Compute the queue position (1-based)
+    all_queued = qdyndb.list_all_queued()
+    position = next(
+        (i + 1 for i, q in enumerate(all_queued) if q["task_id"] == task_id),
+        len(all_queued),
+    )
+
+    # Extract and persist structure metadata even for queued tasks
+    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id)
+    qdyndb.update_task_metadata(
+        task_id,
+        formula=formula,
+        num_atoms=num_atoms,
+        prev_task_id=prev_task_id if resume and prev_task_id else None,
+        worker=None,
+        pool_name=pool_name,
+    )
+
+    return SubmitResponse(
+        task_id=task_id,
+        status="QUEUED",
+        queue_position=position,
     )
 
 
@@ -559,3 +818,102 @@ def check_hash(
             exists = False
 
     return {"exists": exists, **summary}
+
+
+# ---------------------------------------------------------------------------
+# Pool status & queue management endpoints
+# ---------------------------------------------------------------------------
+
+class PoolStatusResponse(BaseModel):
+    """Response model for ``GET /pool/status``."""
+    pool_name: str
+    total_workers: int
+    idle_workers: int
+    busy_workers: int
+    user_occupied_workers: int
+    per_user_max_workers: int
+
+
+@app.get("/pool/status", response_model=PoolStatusResponse, tags=["pool"])
+def get_pool_status(username: str = Depends(get_current_user)):
+    """Return pool utilisation summary for the active pool.
+
+    Shows total, idle, and busy worker counts, as well as how many
+    workers the current user occupies vs. the per-user limit.
+    """
+    m = _manager()
+    if "worker_pools" not in m.config:
+        raise HTTPException(
+            status_code=501,
+            detail="Pool status is only available in pool-based config mode.",
+        )
+
+    pool_name = m.active_pool_name
+    pool_workers = m._get_pool_workers(pool_name)
+    _, _, pool_cfg = m._resolve_pool_context(pool_name)
+
+    # Query MongoDB for busy workers (any non-terminal job)
+    jc = m._ensure_job_controller()
+    busy_pipeline = [
+        {
+            "$match": {
+                "worker": {"$in": pool_workers},
+                "state": {"$nin": MainWorkflow._TERMINAL_STATES},
+            }
+        },
+        {"$group": {"_id": "$worker"}},
+    ]
+    busy_workers = {doc["_id"] for doc in jc.jobs.aggregate(busy_pipeline)}
+
+    user_workers = m._get_user_occupied_workers(username, pool_name)
+
+    return PoolStatusResponse(
+        pool_name=pool_name,
+        total_workers=len(pool_workers),
+        idle_workers=len(pool_workers) - len(busy_workers),
+        busy_workers=len(busy_workers),
+        user_occupied_workers=len(user_workers),
+        per_user_max_workers=pool_cfg.get("per_user_max_workers", 1),
+    )
+
+
+@app.delete("/queue/{task_id}", tags=["pool"])
+def cancel_queued_task(
+    task_id: str,
+    username: str = Depends(get_current_user),
+):
+    """Cancel a task that is currently in the waiting queue.
+
+    Only tasks in QUEUED status can be cancelled.  The requesting user
+    must own the task.  Returns the cancelled task_id on success, or
+    raises 404/403 on failure.
+    """
+    success = qdyndb.cancel_queued(task_id, username)
+    if not success:
+        # Determine the specific error reason
+        all_queued = qdyndb.list_queued_for_user(username)
+        task_in_queue = any(q["task_id"] == task_id for q in all_queued)
+        if not task_in_queue:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Task '{task_id}' not found in the queue for user "
+                    f"'{username}'.  It may have already been dispatched "
+                    f"or does not exist."
+                ),
+            )
+        # Task exists but is not in QUEUED status (e.g. DISPATCHING)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Task '{task_id}' is no longer in QUEUED status and "
+                f"cannot be cancelled."
+            ),
+        )
+    return {"task_id": task_id, "status": "CANCELLED"}
+
+
+@app.get("/queue", tags=["pool"])
+def list_user_queue(username: str = Depends(get_current_user)):
+    """List the current user's queued submissions."""
+    return qdyndb.list_queued_for_user(username)
