@@ -382,6 +382,10 @@ def get_task_summary_list(
     """
     Get a list of task summaries for the specified user.
 
+    Merges tasks that are already submitted (tracked in MongoDB via
+    jobflow-remote) with tasks that are still in the waiting queue
+    (tracked in SQLite ``queued_submissions`` table).
+
     Args:
         username: The username to query tasks for.
         manager_getter: A callable that returns the MainWorkflow instance.
@@ -392,12 +396,115 @@ def get_task_summary_list(
     task_ids = qdyndb.get_user_tasks(username)
     summaries = []
 
+    # Collect queue-tracked task IDs so we can annotate or skip them.
+    # Include QUEUED/DISPATCHING (active) and FAILED/CANCELLED (terminal)
+    # queue entries.  Without this, FAILED/CANCELLED queue tasks would
+    # fall through to _build_task_summary() which finds zero jobs and
+    # derive_task_status({}) would incorrectly return COMPLETED.
+    queued_entries = qdyndb.list_queued_for_user(username)
+    queued_map: Dict[str, dict] = {}
+    for entry in queued_entries:
+        if entry["status"] in ("QUEUED", "DISPATCHING", "FAILED", "CANCELLED"):
+            queued_map[entry["task_id"]] = entry
+
+    # Fix: If a queue entry is FAILED but the task already has real jobs
+    # in task_owners (i.e. update_task_dispatch_info succeeded before
+    # mark_submitted failed), the flow was actually submitted to jf-remote.
+    # In that case, remove from queued_map so the task is rendered via the
+    # normal _build_task_summary() path — otherwise the real running task
+    # would be masked by a misleading "queue FAILED" summary.
+    failed_but_submitted = []
+    for tid, entry in queued_map.items():
+        if entry["status"] == "FAILED":
+            real_job_ids = qdyndb.get_task_job_ids(tid)
+            if real_job_ids:
+                failed_but_submitted.append(tid)
+    for tid in failed_but_submitted:
+        del queued_map[tid]
+
+    # Compute global queue positions (1-based) across all users
+    all_queued = qdyndb.list_all_queued()
+    queue_positions: Dict[str, int] = {
+        q["task_id"]: i + 1 for i, q in enumerate(all_queued)
+    }
+
     for task_id in task_ids:
-        summary = _build_task_summary(task_id, manager_getter)
+        if task_id in queued_map:
+            # Task is still in the waiting queue — build a lightweight summary
+            # without querying MongoDB (the flow hasn't been submitted yet).
+            summary = _build_queued_task_summary(
+                task_id, username, queued_map[task_id], queue_positions
+            )
+        else:
+            summary = _build_task_summary(task_id, manager_getter)
         if summary is not None:
             summaries.append(summary)
 
     return summaries
+
+
+def _build_queued_task_summary(
+    task_id: str,
+    username: str,
+    queue_entry: dict,
+    queue_positions: Dict[str, int],
+) -> TaskSummary:
+    """Build a TaskSummary for a task that is still in the waiting queue.
+
+    These tasks have not been submitted to jobflow-remote yet, so there
+    are no MongoDB records to query.  The summary is constructed from
+    the SQLite ``queued_submissions`` and ``task_owners`` tables only.
+    """
+    import time as _time
+    from datetime import datetime, timezone
+
+    meta = qdyndb.get_task_metadata(task_id) or {}
+
+    # Parse created_at from the queue entry (SQLite datetime string)
+    created_at: float = _time.time()
+    try:
+        dt = datetime.strptime(
+            queue_entry["created_at"], "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=timezone.utc)
+        created_at = dt.timestamp()
+    except Exception:
+        pass
+
+    queue_status = queue_entry["status"]  # QUEUED / DISPATCHING / FAILED / CANCELLED
+
+    # Map queue-level status to a user-facing derived_status.
+    # QUEUED and DISPATCHING are shown as-is; FAILED and CANCELLED queue
+    # entries must surface the correct terminal state instead of falling
+    # through to derive_task_status({}) which would return COMPLETED.
+    _QUEUE_DERIVED_STATUS = {
+        "QUEUED": "QUEUED",
+        "DISPATCHING": "DISPATCHING",
+        "FAILED": "FAILED",
+        "CANCELLED": "CANCELLED",
+    }
+    derived_status = _QUEUE_DERIVED_STATUS.get(queue_status, queue_status)
+
+    return TaskSummary(
+        task_id=task_id,
+        owner=username,
+        created_at=created_at,
+        raw_status_counts={},
+        derived_status=derived_status,
+        total_jobs=0,
+        failed_job_names=[],
+        steps=[],
+        completed_steps=[],
+        formula=meta.get("formula"),
+        num_atoms=meta.get("num_atoms"),
+        prev_task_id=meta.get("prev_task_id"),
+        worker=meta.get("worker"),
+        resume_next_step=None,
+        resume_eligible=False,
+        queue_status=queue_status,
+        queue_position=queue_positions.get(task_id),
+        pool_name=queue_entry.get("pool_name") or meta.get("pool_name"),
+        runtime_worker=None,
+    )
 
 
 def get_task_detail(
@@ -426,6 +533,42 @@ def get_task_detail(
         raise ValueError(f"Task '{task_id}' not found")
 
     job_ids = qdyndb.get_task_job_ids(task_id)
+
+    # --- Queue-aware early return ---
+    # If the task is tracked in queued_submissions with a non-terminal-submitted
+    # status, check whether the flow was actually submitted to jf-remote.
+    # This handles two scenarios:
+    #   1. QUEUED / DISPATCHING / CANCELLED: no real jobs, return queue status
+    #   2. FAILED: may or may not have real jobs
+    #      - If job_ids is non-empty, flow was submitted; fall through to
+    #        normal detail logic (don't let queue FAILED mask real jobs)
+    #      - If job_ids is empty, genuinely failed; return queue FAILED status
+    queue_entry = qdyndb.get_queued_status(task_id)
+    if queue_entry is not None:
+        q_status = queue_entry["status"]
+        if q_status in ("QUEUED", "DISPATCHING", "CANCELLED"):
+            # No jobs submitted yet — return lightweight queue detail
+            task_meta = qdyndb.get_task_metadata(task_id)
+            prev_task_id = task_meta.get("prev_task_id") if task_meta else None
+            return TaskJobsStatusResponse(
+                task_id=task_id,
+                raw_status_counts={},
+                derived_status=q_status,
+                jobs=[],
+                prev_task_id=prev_task_id,
+            )
+        if q_status == "FAILED" and not job_ids:
+            # Queue dispatch genuinely failed, no jobs in jf-remote
+            task_meta = qdyndb.get_task_metadata(task_id)
+            prev_task_id = task_meta.get("prev_task_id") if task_meta else None
+            return TaskJobsStatusResponse(
+                task_id=task_id,
+                raw_status_counts={},
+                derived_status="FAILED",
+                jobs=[],
+                prev_task_id=prev_task_id,
+            )
+        # For FAILED with real job_ids, or SUBMITTED: fall through to normal path
 
     # Collect all UUIDs across steps
     all_uuids: List[str] = []
@@ -622,6 +765,9 @@ def _build_task_summary(
         worker=meta.get("worker"),
         resume_next_step=resume_next_step,
         resume_eligible=resume_eligible,
+        # Pool fields: queue_status/queue_position are None for submitted tasks
+        pool_name=meta.get("pool_name"),
+        runtime_worker=meta.get("worker"),
     )
 
 

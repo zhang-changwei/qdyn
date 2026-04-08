@@ -26,7 +26,7 @@ export interface ApiResponse<T> {
  * Derived states for UI display
  * Mapped from jobflow-remote raw states by backend
  */
-export type DerivedState = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING' | 'PAUSED' | 'STOPPED' | 'ERROR'
+export type DerivedState = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PENDING' | 'PAUSED' | 'STOPPED' | 'ERROR' | 'QUEUED' | 'DISPATCHING' | 'CANCELLED'
 
 /**
  * Single job status item (lightweight)
@@ -114,6 +114,14 @@ export interface TaskSummary {
   resume_next_step: string | null
   /** Whether this task can be resumed */
   resume_eligible: boolean
+  /** Queue status: "QUEUED" | "DISPATCHING" | null (for tasks in the waiting queue) */
+  queue_status?: string | null
+  /** 1-based position in the waiting queue (null if not queued) */
+  queue_position?: number | null
+  /** Logical pool name (e.g. "local_slurm") */
+  pool_name?: string | null
+  /** Runtime worker name (e.g. "local_slurm_007") */
+  runtime_worker?: string | null
 }
 
 /**
@@ -177,6 +185,28 @@ export interface HealthResponse {
   status: 'ok' | 'degraded'
   version: string
   timestamp: number
+}
+
+/**
+ * Structured response from POST /submit (pool-based mode)
+ */
+export interface SubmitResponse {
+  task_id: string
+  status: 'SUBMITTED' | 'QUEUED'
+  worker?: string | null
+  queue_position?: number | null
+}
+
+/**
+ * Pool status response from GET /pool/status
+ */
+export interface PoolStatusResponse {
+  pool_name: string
+  total_workers: number
+  idle_workers: number
+  busy_workers: number
+  user_occupied_workers: number
+  per_user_max_workers: number
 }
 
 // ============================================

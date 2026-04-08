@@ -61,7 +61,7 @@ class TaskSummary(BaseModel):
     # Raw status counts preserved from jobflow-remote
     raw_status_counts: Dict[str, int]
     # Derived status for UI
-    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
+    derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR" | "QUEUED" | "DISPATCHING"
     total_jobs: int
     # Optional: names of failed jobs for quick identification
     failed_job_names: List[str] = Field(default_factory=list)
@@ -80,6 +80,13 @@ class TaskSummary(BaseModel):
     resume_next_step: Optional[str] = None
     # Whether this task is eligible to be resumed
     resume_eligible: bool = False
+    # Pool-based queue fields (populated for tasks in the waiting queue)
+    queue_status: Optional[str] = None  # "QUEUED" | "DISPATCHING" | None
+    queue_position: Optional[int] = None  # 1-based position in queue
+    # Logical pool name (e.g. "local_slurm")
+    pool_name: Optional[str] = None
+    # Runtime worker name (e.g. "local_slurm_007")
+    runtime_worker: Optional[str] = None
 
 
 class TaskSummaryListResponse(BaseModel):

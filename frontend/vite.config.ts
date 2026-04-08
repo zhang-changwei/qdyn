@@ -27,6 +27,8 @@ export default defineConfig(({ mode }) => {
         '/frontend': { target: apiTarget, changeOrigin: true },
         '/schema': { target: apiTarget, changeOrigin: true },
         '/upload': { target: apiTarget, changeOrigin: true },
+        '/pool': { target: apiTarget, changeOrigin: true },
+        '/queue': { target: apiTarget, changeOrigin: true },
       }
     }
   }

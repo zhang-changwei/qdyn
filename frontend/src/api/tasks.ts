@@ -168,6 +168,24 @@ export async function deleteTask(taskId: string): Promise<void> {
 }
 
 /**
+ * Cancel a queued task (remove from waiting queue)
+ * Calls DELETE /queue/{taskId}
+ */
+export async function cancelQueuedTask(taskId: string): Promise<{ task_id: string; status: string }> {
+  const response = await http.delete<{ task_id: string; status: string }>(`/queue/${taskId}`)
+  return response.data
+}
+
+/**
+ * Get pool status (worker availability)
+ * Calls GET /pool/status
+ */
+export async function getPoolStatus(): Promise<import('./types').PoolStatusResponse> {
+  const response = await http.get<import('./types').PoolStatusResponse>('/pool/status')
+  return response.data
+}
+
+/**
  * List available files in a job's run directory
  */
 export async function getJobFiles(taskId: string, jobUuid: string): Promise<JobFilesResponse> {
