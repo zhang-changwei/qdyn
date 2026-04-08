@@ -83,26 +83,68 @@ class MainWorkflow:
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
         self.jc: Optional[JobController] = None
 
-        # Resolve active worker and its config block.
-        # New format: top-level 'active_worker' + 'workers' dict.
-        # Legacy format: top-level modules/export/etc. with 'machine.worker'.
-        if 'workers' in self.config:
-            self.worker_name: str = self.config.get(
+        # Resolve active pool / worker configuration.
+        # Three config formats are supported (newest first):
+        #
+        # 1. Pool-based (worker_pools):
+        #    active_pool + worker_pools.<name>.profile / .pool
+        #
+        # 2. Multi-worker (workers):
+        #    active_worker + workers.<name> flat dict
+        #    -> wrapped into pool-like structure for downstream compatibility
+        #
+        # 3. Legacy single-worker:
+        #    top-level modules/export + machine.worker
+        #    -> wrapped into pool-like structure
+        if 'worker_pools' in self.config:
+            # --- Pool-based format (new) ---
+            self.active_pool_name: str = self.config.get(
+                'active_pool', next(iter(self.config['worker_pools']))
+            )
+            if self.active_pool_name not in self.config['worker_pools']:
+                raise ConfigError(
+                    f"active_pool '{self.active_pool_name}' not found in "
+                    f"worker_pools section of qdyn.yaml. "
+                    f"Available: {list(self.config['worker_pools'].keys())}"
+                )
+            pool_def = self.config['worker_pools'][self.active_pool_name]
+            self.pool_profile_cfg: dict = pool_def.get('profile', {})
+            self.pool_config: dict = pool_def.get('pool', {})
+            # Backward-compat aliases: callers that still use
+            # self.worker_name / self.worker_cfg continue to work during
+            # the Stage 2 transition.  submit() uses pool_name as a
+            # placeholder worker name until Stage 3 introduces runtime
+            # worker selection.
+            self.worker_name: str = self.active_pool_name
+            self.worker_cfg: dict = self.pool_profile_cfg
+
+        elif 'workers' in self.config:
+            # --- Multi-worker format (old) ---
+            worker_name: str = self.config.get(
                 'active_worker', 'local_slurm'
             )
-            if self.worker_name not in self.config['workers']:
+            if worker_name not in self.config['workers']:
                 raise ConfigError(
-                    f"active_worker '{self.worker_name}' not found in "
+                    f"active_worker '{worker_name}' not found in "
                     f"workers section of qdyn.yaml. "
                     f"Available: {list(self.config['workers'].keys())}"
                 )
-            self.worker_cfg: dict = self.config['workers'][self.worker_name]
+            self.active_pool_name = worker_name
+            self.pool_profile_cfg = self.config['workers'][worker_name]
+            self.pool_config = {}  # no pool params in old format
+            self.worker_name = worker_name
+            self.worker_cfg = self.pool_profile_cfg
+
         else:
-            # Legacy mode: top-level config IS the worker config
-            self.worker_name: str = self.config.get('machine', {}).get(
+            # --- Legacy single-worker format ---
+            worker_name = self.config.get('machine', {}).get(
                 'worker', 'local_slurm'
             )
-            self.worker_cfg: dict = self.config
+            self.active_pool_name = worker_name
+            self.pool_profile_cfg = self.config  # top-level IS the profile
+            self.pool_config = {}
+            self.worker_name = worker_name
+            self.worker_cfg = self.config
 
     def __del__(self):
         jc = getattr(self, "jc", None)
@@ -127,14 +169,22 @@ class MainWorkflow:
             cfg = yaml.safe_load(f)
         logging.info(f"Loaded config from {path}.")
 
-        path = cfg.get('basic', {}).get('jf_project_path', '')
-        if path and os.path.exists(path):
-            with open(path) as f:
+        # Detect config format and log which one we are using
+        if 'worker_pools' in cfg:
+            logging.info("Using pool-based config format (worker_pools).")
+        elif 'workers' in cfg:
+            logging.info("Using multi-worker config format (workers).")
+        else:
+            logging.info("Using legacy single-worker config format.")
+
+        jf_path = cfg.get('basic', {}).get('jf_project_path', '')
+        if jf_path and os.path.exists(jf_path):
+            with open(jf_path) as f:
                 jf_cfg = yaml.safe_load(f)
-            logging.info(f"Found jobflow-remote project config at {path}.")
+            logging.info(f"Found jobflow-remote project config at {jf_path}.")
         else:
             raise ConfigError(
-                f"Jobflow-remote project config not found: {path}\n"
+                f"Jobflow-remote project config not found: {jf_path}\n"
                 f"Set basic.jf_project_path in qdyn.yaml to a valid path."
             )
         return cfg, jf_cfg
@@ -142,23 +192,265 @@ class MainWorkflow:
     def _resolve_worker_context(
         self, worker: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """Resolve the effective worker name and config for this operation."""
-        if 'workers' not in self.config:
-            if worker and worker != self.worker_name:
-                raise ValidationError(
-                    "This server uses legacy single-worker config; "
-                    "selecting a different worker is not supported."
-                )
-            return self.worker_name, self.worker_cfg
+        """Resolve the effective worker/pool name and profile config.
 
-        effective_worker = worker or self.worker_name
-        workers_cfg = self.config.get('workers', {})
-        if effective_worker not in workers_cfg:
+        In pool-based mode, *worker* is interpreted as a pool name.
+        Returns (pool_name, pool_profile_cfg) in all formats so that
+        callers can build ExecutionConfig / resource dicts uniformly.
+
+        This method is kept for backward compatibility; new code should
+        prefer _resolve_pool_context() instead.
+        """
+        if 'worker_pools' in self.config:
+            pool_name = worker or self.active_pool_name
+            if pool_name not in self.config['worker_pools']:
+                raise ValidationError(
+                    f"Pool '{pool_name}' not found in config. "
+                    f"Available: {list(self.config['worker_pools'].keys())}"
+                )
+            return pool_name, self.config['worker_pools'][pool_name].get('profile', {})
+
+        if 'workers' in self.config:
+            effective_worker = worker or self.worker_name
+            workers_cfg = self.config.get('workers', {})
+            if effective_worker not in workers_cfg:
+                raise ValidationError(
+                    f"Worker '{effective_worker}' not found in config. "
+                    f"Available: {list(workers_cfg.keys())}"
+                )
+            return effective_worker, workers_cfg[effective_worker]
+
+        # Legacy single-worker
+        if worker and worker != self.worker_name:
             raise ValidationError(
-                f"Worker '{effective_worker}' not found in config. "
-                f"Available: {list(workers_cfg.keys())}"
+                "This server uses legacy single-worker config; "
+                "selecting a different worker is not supported."
             )
-        return effective_worker, workers_cfg[effective_worker]
+        return self.worker_name, self.worker_cfg
+
+    # ------------------------------------------------------------------
+    # Pool helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_pool_context(
+        self, pool_name: Optional[str] = None
+    ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+        """Resolve pool name, profile config, and pool parameters.
+
+        Returns (pool_name, pool_profile_cfg, pool_config).
+        For non-pool config formats, pool_config is an empty dict.
+        """
+        if 'worker_pools' in self.config:
+            name = pool_name or self.active_pool_name
+            if name not in self.config['worker_pools']:
+                raise ValidationError(
+                    f"Pool '{name}' not found in config. "
+                    f"Available: {list(self.config['worker_pools'].keys())}"
+                )
+            pool_def = self.config['worker_pools'][name]
+            return name, pool_def.get('profile', {}), pool_def.get('pool', {})
+
+        # Fallback: no pool parameters available
+        name, profile = self._resolve_worker_context(pool_name)
+        return name, profile, {}
+
+    def _get_pool_workers(self, pool_name: Optional[str] = None) -> List[str]:
+        """Return runtime worker names belonging to a pool.
+
+        Scans jf_config['workers'] for names matching the pattern
+        ``{pool_name}_\\d{3,}`` (e.g. local_slurm_001, local_slurm_002).
+        Results are sorted lexicographically.
+        """
+        import re
+        name = pool_name or self.active_pool_name
+        prefix = f"{name}_"
+        pattern = re.compile(rf"^{re.escape(name)}_\d{{3,}}$")
+        workers = sorted(
+            w for w in self.jf_config.get('workers', {})
+            if pattern.match(w)
+        )
+        return workers
+
+    # ------------------------------------------------------------------
+    # Pool occupancy queries (MongoDB)
+    # ------------------------------------------------------------------
+
+    # Terminal states: jobs in these states are "done" and no longer occupy a worker.
+    # Aligned with jobflow-remote's JobState enum — note that jf-remote has
+    # USER_STOPPED but NOT CANCELLED as a job state.  CANCELLED only exists
+    # at the QDYN queue level (queued_submissions table), not in MongoDB.
+    _TERMINAL_STATES = [
+        "COMPLETED", "FAILED", "REMOTE_ERROR", "STOPPED", "USER_STOPPED",
+    ]
+
+    def _get_pool_occupancy(self, pool_name: Optional[str] = None) -> Dict[str, int]:
+        """Query the number of SUBMITTED+RUNNING jobs per pool worker.
+
+        Returns a dict mapping each pool worker name to its active slot
+        count.  Workers with zero active jobs are included with value 0.
+
+        Uses MongoDB aggregation on the jobs collection for accuracy,
+        matching the jf-remote Runner's own ``max_jobs`` accounting.
+        """
+        jc = self._ensure_job_controller()
+        pool_workers = self._get_pool_workers(pool_name)
+        if not pool_workers:
+            return {}
+
+        pipeline = [
+            {
+                "$match": {
+                    "worker": {"$in": pool_workers},
+                    "state": {"$in": ["SUBMITTED", "RUNNING"]},
+                }
+            },
+            {
+                "$group": {
+                    "_id": "$worker",
+                    "active_slots": {"$sum": 1},
+                }
+            },
+        ]
+        result = {w: 0 for w in pool_workers}
+        for doc in jc.jobs.aggregate(pipeline):
+            result[doc["_id"]] = doc["active_slots"]
+        return result
+
+    def _get_user_occupied_workers(
+        self, username: str, pool_name: Optional[str] = None
+    ) -> List[str]:
+        """Return the list of pool workers currently occupied by *username*.
+
+        A worker is "occupied" if it has at least one non-terminal job
+        whose ``job.metadata.qdyn_user`` matches *username*.
+        """
+        jc = self._ensure_job_controller()
+        pool_workers = self._get_pool_workers(pool_name)
+        if not pool_workers:
+            return []
+
+        pipeline = [
+            {
+                "$match": {
+                    "worker": {"$in": pool_workers},
+                    "job.metadata.qdyn_user": username,
+                    "state": {"$nin": self._TERMINAL_STATES},
+                }
+            },
+            {
+                "$group": {"_id": "$worker"}
+            },
+        ]
+        return [doc["_id"] for doc in jc.jobs.aggregate(pipeline)]
+
+    def _get_free_workers(self, pool_name: Optional[str] = None) -> List[str]:
+        """Return pool workers that have zero non-terminal jobs.
+
+        A worker is "free" (idle) when it has no jobs in any non-terminal
+        state.  Results are sorted lexicographically, matching the order
+        returned by :meth:`_get_pool_workers`.
+        """
+        jc = self._ensure_job_controller()
+        pool_workers = self._get_pool_workers(pool_name)
+        if not pool_workers:
+            return []
+
+        busy_pipeline = [
+            {
+                "$match": {
+                    "worker": {"$in": pool_workers},
+                    "state": {"$nin": self._TERMINAL_STATES},
+                }
+            },
+            {"$group": {"_id": "$worker"}},
+        ]
+        busy = {doc["_id"] for doc in jc.jobs.aggregate(busy_pipeline)}
+        return [w for w in pool_workers if w not in busy]
+
+    def _select_runtime_worker(
+        self, username: str, pool_name: Optional[str] = None
+    ) -> Tuple[Optional[str], str]:
+        """Select a runtime worker for a new submission.
+
+        Selection logic (final design):
+        1. Check whether the pool has any free worker (zero non-terminal
+           jobs).  If not, return ``(None, "pool_full")`` — the caller
+           must enqueue the task.
+        2. Check the user's currently occupied workers against
+           ``per_user_max_workers``.  If the user has fewer than the
+           limit, allocate a new free worker (``"new"``).  If the user
+           already has ``per_user_max_workers`` workers, submit to an
+           existing one (``"existing"``).
+
+        Returns
+        -------
+        (worker_name, "existing")
+            User already has ``per_user_max_workers`` workers; submit to
+            the first existing worker.
+        (worker_name, "new")
+            User has fewer workers than the limit; a free worker was
+            allocated.
+        (None, "pool_full")
+            No free workers in the pool; task must be queued.
+        """
+        name, _, pool_cfg = self._resolve_pool_context(pool_name)
+        per_user_max = pool_cfg.get('per_user_max_workers', 1)
+        pool_workers = self._get_pool_workers(name)
+        if not pool_workers:
+            logging.warning(
+                f"No runtime workers found for pool '{name}'. "
+                f"Did you run generate_jf_config.py?"
+            )
+            return None, "pool_full"
+
+        # 1. Any free worker in the pool?
+        free_workers = self._get_free_workers(name)
+        if not free_workers:
+            logging.info(
+                f"No free workers available in pool '{name}' "
+                f"(all {len(pool_workers)} workers are busy)."
+            )
+            return None, "pool_full"
+
+        # 2. Check the user's occupied workers against per_user_max.
+        user_workers = self._get_user_occupied_workers(username, name)
+
+        if len(user_workers) >= per_user_max:
+            # User has reached the per-user worker limit — route to an
+            # existing worker rather than consuming a new one.
+            logging.info(
+                f"User '{username}' already has {len(user_workers)} "
+                f"worker(s) (limit={per_user_max}) in pool '{name}' "
+                f"— submitting to existing worker '{user_workers[0]}'."
+            )
+            return user_workers[0], "existing"
+
+        # 3. Allocate a free worker for this user.
+        selected = free_workers[0]
+        logging.info(
+            f"Allocated free worker '{selected}' for user '{username}' "
+            f"in pool '{name}'."
+        )
+        return selected, "new"
+
+    def _get_worker_work_dir(self, worker_name: str) -> str:
+        """Return the work_dir for a worker or pool.
+
+        For a runtime worker (e.g. ``local_slurm_001``), reads directly
+        from ``jf_config['workers']``.  For a pool name, returns the
+        ``work_dir_base`` from the pool config — this is the shared
+        parent directory for all pool workers.
+        """
+        jf_workers = self.jf_config.get('workers', {})
+        if worker_name in jf_workers:
+            return jf_workers[worker_name].get('work_dir', '')
+
+        # Pool name: return pool.work_dir_base from qdyn.yaml
+        if 'worker_pools' in self.config:
+            pool_def = self.config['worker_pools'].get(worker_name, {})
+            return pool_def.get('pool', {}).get('work_dir_base', '')
+
+        return ''
 
     def _get_config(self, worker_name: str, worker_cfg: Dict[str, Any], *keys: str):
         """Traverse worker_cfg by key path, raising ConfigError if missing.
@@ -215,16 +507,35 @@ class MainWorkflow:
     # ------------------------------------------------------------------
 
     def _get_worker_resources(self, worker_name: str) -> dict:
-        """Get jfremote worker resources for the active worker."""
-        return self.jf_config['workers'][worker_name].get('resources', {})
+        """Get jfremote worker resources for the named worker.
+
+        In pool-based mode, *worker_name* might be a pool name (e.g.
+        ``local_slurm``) rather than a runtime worker name (e.g.
+        ``local_slurm_001``).  When the exact name is not found in
+        ``jf_config['workers']``, we fall back to reading pool.resources
+        from qdyn.yaml (which is what the jf config generator uses to
+        populate each runtime worker's resources).
+        """
+        jf_workers = self.jf_config.get('workers', {})
+        if worker_name in jf_workers:
+            return jf_workers[worker_name].get('resources', {})
+
+        # Fallback: pool-based config — use pool.resources from qdyn.yaml
+        if 'worker_pools' in self.config:
+            pool_def = self.config['worker_pools'].get(worker_name, {})
+            return pool_def.get('pool', {}).get('resources', {})
+
+        return {}
 
     def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
-        """Get machine config (partition, cpus_per_node, etc.) for the active worker.
+        """Get machine config (partition, cpus_per_node, etc.) for the active worker/pool.
 
-        In the new config format, worker_cfg already contains everything.
+        In pool-based format, worker_cfg is pool_profile_cfg which
+        contains partition, cpus_per_node, etc. directly.
+        In multi-worker format, worker_cfg already contains everything.
         In legacy mode, worker_cfg IS self.config, which has machine at top level.
         """
-        if 'workers' in self.config:
+        if 'worker_pools' in self.config or 'workers' in self.config:
             return worker_cfg
         # Legacy mode: merge machine section as before
         base = dict(self.config.get('machine', {}))
@@ -239,14 +550,16 @@ class MainWorkflow:
         self, worker_name: str, worker_cfg: Dict[str, Any], software: str, key: str
     ):
         """Get execution config (modules/export/pre_run/pp_path) for the
-        current worker and software.
+        current worker/pool and software.
 
-        In the new format, reads directly from worker_cfg.
+        In pool-based format, worker_cfg is pool_profile_cfg; reads
+        directly from profile.<key>.<software>.
+        In multi-worker format, same structure (workers.<name>.<key>.<software>).
         In legacy mode, worker_cfg IS self.config, so top-level keys
         are accessed directly; then falls back through worker_exec overrides.
         """
-        if 'workers' in self.config:
-            # New format: everything lives under workers.<name>
+        if 'worker_pools' in self.config or 'workers' in self.config:
+            # Pool-based or multi-worker format: profile / worker dict
             return worker_cfg.get(key, {}).get(software)
         # Legacy mode: check worker_exec overrides first, then top-level
         worker_exec = self.config.get('worker_exec', {}).get(
@@ -257,9 +570,22 @@ class MainWorkflow:
         return self.config.get(key, {}).get(software)
 
     def _is_remote_worker(self, worker_name: str) -> bool:
-        """Check if the active worker is a remote (SSH) worker."""
-        worker_cfg = self.jf_config['workers'].get(worker_name, {})
-        return worker_cfg.get('type') in _REMOTE_WORKER_TYPES
+        """Check if the named worker is a remote (SSH) worker.
+
+        In pool-based mode, if *worker_name* is a pool name (e.g.
+        ``local_slurm``), we check the first pool worker instead.
+        """
+        jf_workers = self.jf_config.get('workers', {})
+        if worker_name in jf_workers:
+            return jf_workers[worker_name].get('type') in _REMOTE_WORKER_TYPES
+
+        # Pool name: check the pool's type from qdyn.yaml pool config
+        if 'worker_pools' in self.config:
+            pool_def = self.config['worker_pools'].get(worker_name, {})
+            pool_type = pool_def.get('pool', {}).get('type', 'local')
+            return pool_type in _REMOTE_WORKER_TYPES
+
+        return False
 
     def _get_ssh_cmd(self, worker_name: str, *args: str) -> list[str]:
         """Build an SSH command list using the active worker's connection config."""
@@ -394,10 +720,20 @@ class MainWorkflow:
         prev_task_id: str = '',
         worker_name: Optional[str] = None,
         worker_cfg: Optional[Dict[str, Any]] = None,
+        runtime_worker: Optional[str] = None,
     ) -> Dict[str, List[Job | Flow]]:
         '''
         Notice: assume the config is valid,
                 no error handling for missing config entries.
+
+        Parameters
+        ----------
+        runtime_worker : str, optional
+            The actual jf-remote worker name (e.g. ``local_slurm_007``)
+            selected at dispatch time.  Used for ``_get_worker_resources()``
+            lookups so that resources come from the runtime worker's jf
+            config rather than the pool-level fallback.  If None, falls
+            back to *worker_name* (backward compat).
         '''
 
         # basic keys
@@ -406,6 +742,8 @@ class MainWorkflow:
         flag = ''
         effective_worker_name = worker_name or self.worker_name
         effective_worker_cfg = worker_cfg or self.worker_cfg
+        # For resource lookups, prefer the runtime worker (has exact jf config)
+        resource_worker = runtime_worker or effective_worker_name
 
         # pre-flight validation
         self._validate_input(input, method, stru, stru_format, stru_hash, resume, prev_task_id)
@@ -477,7 +815,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
-                    **self._get_worker_resources(effective_worker_name),
+                    **self._get_worker_resources(resource_worker),
                     'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
                     **effective_worker_cfg['nvt'][software],
                     'nodes': nodes,
@@ -549,7 +887,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
-                    **self._get_worker_resources(effective_worker_name),
+                    **self._get_worker_resources(resource_worker),
                     'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
                     **effective_worker_cfg['nve'][software],
                     'nodes': nodes,
@@ -602,14 +940,14 @@ class MainWorkflow:
                 elif stru:
                     # User-provided structure text: write to trajectory file
                     strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-                    work_dir = self.jf_config['workers'][effective_worker_name]['work_dir']
+                    work_dir = self._get_worker_work_dir(effective_worker_name)
 
                     if self._is_remote_worker(effective_worker_name):
                         # Remote worker: write locally then scp to remote host
                         import tempfile
                         stru_id = str(uuid.uuid4())
                         stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
-                        remote_host = self.jf_config['workers'][effective_worker_name].get('host', '')
+                        remote_host = self.jf_config['workers'].get(effective_worker_name, {}).get('host', '')
 
                         try:
                             with tempfile.TemporaryDirectory() as tmpdir:
@@ -682,7 +1020,7 @@ class MainWorkflow:
                             post_run=None,
                         ),
                         resources={
-                            **self._get_worker_resources(effective_worker_name),
+                            **self._get_worker_resources(resource_worker),
                             'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
                             **effective_worker_cfg['scf'][software],
                             'nodes': nodes,
@@ -745,7 +1083,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
-                    **self._get_worker_resources(effective_worker_name),
+                    **self._get_worker_resources(resource_worker),
                     'partition': machine_cfg['partition'],
                     'nodes': 1,
                     'ntasks_per_node': 1,
@@ -820,7 +1158,7 @@ class MainWorkflow:
                     post_run=None,
                 ),
                 resources={
-                    **self._get_worker_resources(effective_worker_name),
+                    **self._get_worker_resources(resource_worker),
                     'partition': machine_cfg['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
@@ -853,9 +1191,45 @@ class MainWorkflow:
         resume: bool = False,
         prev_task_id: str = '',
         worker: Optional[str] = None,
+        *,
+        task_id: Optional[str] = None,
+        username: Optional[str] = None,
+        pool_name: Optional[str] = None,
+        runtime_worker: Optional[str] = None,
     ) -> Tuple[str, Dict[str, List[str]], str]:
+        """Submit a workflow to jobflow-remote.
+
+        Parameters
+        ----------
+        task_id : str, optional
+            Pre-generated task ID (``suid()``).  When provided, the Flow
+            is created with ``Flow(uuid=task_id)`` so the ID is stable
+            across queue → dispatch transitions.  If None, the Flow
+            auto-generates its own UUID (backward compat).
+        username : str, optional
+            Authenticated user who submitted the task.  Written into
+            Flow/Job metadata as ``qdyn_user``.
+        pool_name : str, optional
+            Logical pool name (e.g. ``local_slurm``).  Used for config
+            lookup and metadata.
+        runtime_worker : str, optional
+            Actual jf-remote worker name (e.g. ``local_slurm_007``)
+            selected at dispatch time.  Passed to ``submit_flow()`` and
+            used for resource lookups.
+        """
         self._ensure_job_controller()
-        effective_worker_name, effective_worker_cfg = self._resolve_worker_context(worker)
+
+        # Resolve pool / worker context.
+        # In pool mode *worker* is interpreted as pool_name.
+        effective_pool = pool_name or worker
+        effective_worker_name, effective_worker_cfg = self._resolve_worker_context(
+            effective_pool
+        )
+
+        # Determine the worker name passed to submit_flow().
+        # If a runtime_worker is provided (pool dispatch), use it;
+        # otherwise fall back to effective_worker_name (legacy / old config).
+        submit_worker = runtime_worker or effective_worker_name
 
         jobs = self.main_workflow(
             input=input,
@@ -867,22 +1241,46 @@ class MainWorkflow:
             prev_task_id=prev_task_id,
             worker_name=effective_worker_name,
             worker_cfg=effective_worker_cfg,
+            runtime_worker=runtime_worker,
         )
         jobs_flatten = []
         for job_list in jobs.values():
             jobs_flatten.extend(job_list)
-        flow = Flow(jobs_flatten)
-        submit_flow(flow, worker=effective_worker_name)
 
-        task_id = flow.uuid
-        job_ids = {}
+        # Build metadata dict for traceability and per-user queries.
+        qdyn_metadata: Dict[str, Any] = {}
+        if username:
+            qdyn_metadata["qdyn_user"] = username
+        if task_id:
+            qdyn_metadata["qdyn_task_id"] = task_id
+        if pool_name:
+            qdyn_metadata["qdyn_pool"] = pool_name
+        if runtime_worker:
+            qdyn_metadata["qdyn_runtime_worker"] = runtime_worker
+
+        # Create Flow with optional pre-generated UUID and metadata.
+        flow_kwargs: Dict[str, Any] = {}
+        if task_id:
+            flow_kwargs["uuid"] = task_id
+        if qdyn_metadata:
+            flow_kwargs["metadata"] = qdyn_metadata
+        flow = Flow(jobs_flatten, **flow_kwargs)
+
+        # Propagate metadata to dynamically generated jobs as well.
+        if qdyn_metadata:
+            flow.update_metadata(qdyn_metadata, dynamic=True)
+
+        submit_flow(flow, worker=submit_worker)
+
+        final_task_id = flow.uuid
+        job_ids: Dict[str, List[str]] = {}
         for key, value in jobs.items():
             job_ids[key] = [v.uuid for v in value]
-        self.job_ids[task_id] = job_ids
+        self.job_ids[final_task_id] = job_ids
 
-        self.task_ids.append(task_id)
+        self.task_ids.append(final_task_id)
 
-        return task_id, job_ids, effective_worker_name
+        return final_task_id, job_ids, submit_worker
 
 
     def list_tasks(self) -> List[str]:
