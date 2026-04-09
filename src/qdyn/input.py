@@ -309,8 +309,9 @@ class InputT(BaseModel):
     namd_input: Optional[NAMDInputT] = None
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
-    stru: Optional[str] = ''
+    stru: str = ''
     stru_format: str = 'vasp'
+    stru_hash: str = ''
 
 
 # deprecated

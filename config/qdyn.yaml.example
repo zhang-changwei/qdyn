@@ -5,6 +5,7 @@ basic:
   jf_project_path: "config/jf_qdyn.yaml"
   jf_project_name: "jf_qdyn"
   user_db_path: "data/qdyn_users.db"
+  user_data: "data/user_data"
   mongo_dir: "mongo/"
   port: 8000
 

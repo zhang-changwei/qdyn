@@ -1,9 +1,12 @@
+import hashlib
 import logging
 import os
+from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
+import ase
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi import status as http_status
@@ -45,6 +48,13 @@ async def lifespan(app: FastAPI):
     secret_key = auth_cfg.get("secret_key", "")
     expire_hours = auth_cfg.get("token_expire_hours", 24)
     generated_key = configure_auth(secret_key, expire_hours)
+
+    # -- create user_data folder if not exist --
+    user_data_dir = manager.config['basic'].get('user_data', 'data/user_data')
+    traj_dir = os.path.join(user_data_dir, "trajs")
+    model_dir = os.path.join(user_data_dir, "models")
+    os.makedirs(traj_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
 
     # persist auto-generated key back to config file if it was empty
     if not auth_cfg.get("secret_key"):
@@ -236,6 +246,7 @@ def _submit_with_tracking(
             method=method,
             stru=input.stru,
             stru_format=input.stru_format,
+            stru_hash=input.stru_hash,
             resume=resume,
             prev_task_id=prev_task_id,
         )
@@ -348,3 +359,38 @@ def get_job_output(
         raise HTTPException(status_code=404, detail=f"Jobflow-remote query error: {e}")
 
     return output
+
+
+@app.post("/upload")
+def upload(
+    file: bytes,
+    file_type: Literal["trajectory", "model"],
+):
+    m = _manager()
+    type_mapping = {"trajectory": "trajs", "model": "models"}
+
+    data_dir = m.config['basic'].get('user_data', 'data/user_data')
+    target_dir = Path(data_dir) / type_mapping[file_type]
+    
+    # use MD5 for shorter filename
+    filename = hashlib.md5(file).hexdigest()
+
+    with open(target_dir / filename, "wb") as f:
+        f.write(file)
+    return {"hash": filename}
+
+
+@app.get("/upload/hash")
+def check_hash(
+    hash: str,
+    file_type: Literal["trajectory", "model"],
+):
+    m = _manager()
+    type_mapping = {"trajectory": "trajs", "model": "models"}
+
+    data_dir = m.config['basic'].get('user_data', 'data/user_data')
+    target_dir = Path(data_dir) / type_mapping[file_type]
+
+    file_path = target_dir / hash
+    exists = file_path.is_file()
+    return {"exists": exists}

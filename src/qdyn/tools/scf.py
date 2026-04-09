@@ -44,6 +44,7 @@ def qdyn_scf(
     pp_path: str,
     orb_path: str,
     traj_file_path: str,
+    traj_format: str = 'vasp-xdatcar',
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -67,6 +68,8 @@ def qdyn_scf(
         Path to orbital files.
     traj_file_path : str
         Path to the trajectory file (e.g. XDATCAR for VASP).
+    traj_format : str
+        Format of the trajectory file.
     nodes : int
         Number of nodes.
     ntasks_per_node : int
@@ -103,6 +106,7 @@ def qdyn_scf(
             pp_path=pp_path,
             orb_path=orb_path,
             traj_file_path=traj_file_path,
+            traj_format=traj_format,
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
@@ -122,6 +126,7 @@ def qdyn_scf_task(
     pp_path: str,
     orb_path: str,
     traj_file_path: str,
+    traj_format: str = 'vasp-xdatcar',
     frame_start: int = 0,
     frame_end: int = 0,
     nodes: int = 1,
@@ -150,6 +155,8 @@ def qdyn_scf_task(
         Orbital file path.
     traj_file_path : str
         Path to the trajectory file (e.g. XDATCAR for VASP).
+    traj_format : str
+        Format of the trajectory file (e.g. 'vasp-xdatcar').
     frame_start : int
         Global frame index of the first structure (0-based).
     frame_end : int
@@ -178,7 +185,7 @@ def qdyn_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    all_strus = read_strus(software_lower, traj_file_path=traj_file_path)
+    all_strus = read_strus(traj_format, traj_file_path=traj_file_path)
     selected_structures = all_strus[-scf_step:]
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)
