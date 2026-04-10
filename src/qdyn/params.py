@@ -72,8 +72,19 @@ params_default = {
     },
 }
 
+# MD5 hash pattern for uploaded file validation (32-char lowercase hex).
+# Used by InputT validator and /upload/hash endpoint.
+import re
+HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+
 md_tracks = {
     'vasp': 'XDATCAR',
+}
+
+# ASE format strings for reading/writing trajectory files per software.
+# Used by read_strus(), write_strus(), and upload validation.
+md_ase_formats = {
+    'vasp': 'vasp-xdatcar',
 }
 
 backup_files = {

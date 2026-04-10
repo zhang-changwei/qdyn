@@ -2,6 +2,7 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 import logging
@@ -23,7 +24,8 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
-from .params import md_tracks
+from .params import md_tracks, md_ase_formats
+
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
 from .tools.scf import qdyn_scf
@@ -227,16 +229,23 @@ class MainWorkflow:
                 ) from exc
             
         if stru_hash:
-            data_dir = Path(self.config['basic'].get('user_data', 'data/user_data'))
+            # Hash format already validated by InputT.validate_stru_hash (pydantic)
+            data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
             stru_path = data_dir / "trajs" / f"{stru_hash}"
             if not stru_path.is_file():
                 raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
+            ase_format = md_ase_formats.get(stru_format)
+            if ase_format is None:
+                raise ValidationError(
+                    f"Unsupported trajectory format: '{stru_format}'. "
+                    f"Supported: {', '.join(md_ase_formats.keys())}"
+                )
             try:
-                ase.io.read(stru_path, format=stru_format, index=':')
+                ase.io.read(stru_path, format=ase_format, index=0)
             except Exception as exc:
                 raise ValidationError(
                     f"Structure with hash '{stru_hash}' could not be parsed "
-                    f"by ASE with format '{stru_format}'."
+                    f"by ASE with format '{ase_format}'."
                 ) from exc
 
 
@@ -447,8 +456,8 @@ class MainWorkflow:
                             f"Cannot resume scf."
                         ) from exc
                 elif stru_hash:
-                    data_dir = self.jf_config['basic'].get('user_data', 'data/user_data')
-                    traj_file_path = str(Path(data_dir) / "trajs" / f"{stru_hash}")
+                    data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
+                    traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
                     traj_format = stru_format
                 else:
                     raise ValidationError(

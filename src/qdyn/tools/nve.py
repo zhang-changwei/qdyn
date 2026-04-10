@@ -9,7 +9,7 @@ from jobflow import job
 import numpy as np
 
 from ..input import NVEInputT
-from ..params import params_default, md_tracks
+from ..params import params_default, md_tracks, md_ase_formats
 from ..input_prepare import prepare_vasp_inputs
 from ..output_postprocess import (
     extract_md_data_from_oszicar,
@@ -260,12 +260,11 @@ def write_strus(software: str, structures: List[Atoms], directory: str = '.') ->
     track_name = md_tracks.get(software)
     if track_name is None:
         raise ValueError(f"Unsupported software: {software}")
+    ase_format = md_ase_formats.get(software)
+    if ase_format is None:
+        raise ValueError(f"Unsupported software: {software}")
     track_file = os.path.join(directory, track_name)
-    match software:
-        case 'vasp':
-            ase.io.write(track_file, structures, format='vasp-xdatcar')
-        case _:
-            raise ValueError(f"Unsupported software: {software}")
+    ase.io.write(track_file, structures, format=ase_format)
     return track_file
 
 
@@ -295,8 +294,7 @@ def read_strus(
         if track_name is None:
             raise ValueError(f"Unsupported software: {software}")
         traj_file_path = os.path.join(directory, track_name)
-    match software:
-        case 'vasp':
-            return ase.io.read(traj_file_path, format='vasp-xdatcar', index=':')
-        case _:
-            raise ValueError(f"Unsupported software: {software}")
+    ase_format = md_ase_formats.get(software)
+    if ase_format is None:
+        raise ValueError(f"Unsupported software: {software}")
+    return ase.io.read(traj_file_path, format=ase_format, index=':')

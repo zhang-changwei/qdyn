@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal, List, Optional, Any
 
@@ -312,6 +314,17 @@ class InputT(BaseModel):
     stru: str = ''
     stru_format: str = 'vasp'
     stru_hash: str = ''
+
+    @field_validator('stru_hash')
+    @classmethod
+    def validate_stru_hash(cls, v: str) -> str:
+        """Ensure stru_hash is either empty or a valid 32-char hex string (MD5)."""
+        from .params import HASH_PATTERN
+        if v and not HASH_PATTERN.match(v):
+            raise ValueError(
+                'stru_hash must be a 32-character lowercase hex string (MD5 digest)'
+            )
+        return v
 
 
 # deprecated

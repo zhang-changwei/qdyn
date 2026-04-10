@@ -1,14 +1,16 @@
 import hashlib
 import logging
 import os
+import tempfile
 from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
 import ase
+import ase.io
 import yaml
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi import status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,7 +22,14 @@ from .auth.security import configure as configure_auth
 from .database import qdyndb
 from .frontend_api import create_frontend_router
 from .input import InputT, NVTInputT, NVEInputT, SCFInputT, PreNAMDInputT, NAMDInputT
-from .main_workflow import MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError
+from .main_workflow import (
+    MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError,
+)
+from .params import HASH_PATTERN as _HASH_PATTERN
+
+# Maximum upload file size: 500 MB.
+# Trajectory files are typically a few tens of MB; 500 MB provides ample headroom.
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -50,7 +59,7 @@ async def lifespan(app: FastAPI):
     generated_key = configure_auth(secret_key, expire_hours)
 
     # -- create user_data folder if not exist --
-    user_data_dir = manager.config['basic'].get('user_data', 'data/user_data')
+    user_data_dir = str(Path(manager.config['basic'].get('user_data', 'data/user_data')).resolve())
     traj_dir = os.path.join(user_data_dir, "trajs")
     model_dir = os.path.join(user_data_dir, "models")
     os.makedirs(traj_dir, exist_ok=True)
@@ -281,6 +290,25 @@ def _submit_with_tracking(
                 num_atoms = len(atoms)
             except Exception:
                 logging.warning("Failed to parse structure metadata from POSCAR")
+        elif input.stru_hash:
+            # Hash format already validated by InputT.validate_stru_hash (pydantic)
+            # Parse metadata from the trajectory file referenced by hash
+            data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
+            traj_path = Path(data_dir) / "trajs" / input.stru_hash
+            if traj_path.is_file():
+                try:
+                    from .params import md_ase_formats
+                    ase_fmt = md_ase_formats.get(
+                        input.stru_format, input.stru_format
+                    )
+                    atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+                    formula = atoms.get_chemical_formula()
+                    num_atoms = len(atoms)
+                except Exception:
+                    logging.warning(
+                        "Failed to parse structure metadata from trajectory hash %s",
+                        input.stru_hash,
+                    )
 
     qdyndb.update_task_metadata(
         task_id,
@@ -361,36 +389,153 @@ def get_job_output(
     return output
 
 
+def _count_trajectory_frames(path: str, ase_format: str) -> int:
+    """Count frames in a trajectory file without loading all atoms into memory.
+
+    Uses format-specific lightweight scanning when available, falls back
+    to ASE iread for unknown formats.
+
+    Parameters
+    ----------
+    path : str
+        Path to the trajectory file.
+    ase_format : str
+        ASE I/O format string (e.g. 'vasp-xdatcar').
+    """
+    if ase_format == "vasp-xdatcar":
+        # Scan for "Direct configuration=" markers — O(n) read, no Atoms created
+        with open(path, "r", encoding="utf-8", errors="replace") as fd:
+            count = sum(1 for line in fd if "Direct configuration=" in line)
+        # If no markers found but file is readable (e.g. single-frame POSCAR),
+        # fall back to ASE to determine actual frame count
+        if count > 0:
+            return count
+
+    # Generic fallback: may or may not be truly streaming depending on format.
+    # TODO: add lightweight frame counters for other formats (e.g. xyz, cp2k)
+    #       as they are supported, similar to the XDATCAR fast path above.
+    from ase.io import iread
+    return sum(1 for _ in iread(path, format=ase_format, index=":"))
+
+
 @app.post("/upload")
-def upload(
-    file: bytes,
-    file_type: Literal["trajectory", "model"],
+async def upload(
+    file: UploadFile = File(...),
+    file_type: Literal["trajectory", "model"] = Form(...),
+    user: str = Depends(get_current_user),
 ):
     m = _manager()
     type_mapping = {"trajectory": "trajs", "model": "models"}
 
-    data_dir = m.config['basic'].get('user_data', 'data/user_data')
+    data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
     target_dir = Path(data_dir) / type_mapping[file_type]
-    
-    # use MD5 for shorter filename
-    filename = hashlib.md5(file).hexdigest()
+    target_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(target_dir / filename, "wb") as f:
-        f.write(file)
-    return {"hash": filename}
+    # Stream read: compute MD5 while writing to temp file, enforcing size limit
+    md5 = hashlib.md5()
+    total_size = 0
+    fd, tmp_path = tempfile.mkstemp(dir=str(target_dir), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as tmp_f:
+            while chunk := await file.read(8 * 1024 * 1024):  # 8 MiB chunks
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_SIZE:
+                    os.unlink(tmp_path)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large (max {MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+                    )
+                md5.update(chunk)
+                tmp_f.write(chunk)
+        file_hash = md5.hexdigest()
+        final_path = target_dir / file_hash
+        if final_path.exists():
+            os.unlink(tmp_path)  # dedup: already have it
+        else:
+            os.replace(tmp_path, final_path)  # atomic rename
+    except HTTPException:
+        raise  # re-raise size limit error as-is
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    # For trajectory files, validate format and extract summary.
+    # If the file cannot be parsed as any supported trajectory format,
+    # delete it and return an error — don't keep garbage files on disk.
+    summary = {}
+    if file_type == "trajectory":
+        from .params import md_ase_formats
+        parsed = False
+        for fmt in md_ase_formats.values():
+            try:
+                atoms = ase.io.read(str(final_path), format=fmt, index=0)
+                summary = {
+                    "formula": atoms.get_chemical_formula(),
+                    "num_atoms": len(atoms),
+                    "num_frames": _count_trajectory_frames(
+                        str(final_path), fmt
+                    ),
+                }
+                parsed = True
+                break
+            except Exception:
+                continue
+        if not parsed:
+            # Unrecognizable file — clean up and reject
+            final_path.unlink(missing_ok=True)
+            tried = ', '.join(f'{k} ({v})' for k, v in md_ase_formats.items())
+            raise HTTPException(
+                status_code=422,
+                detail=f"File is not a valid trajectory. "
+                       f"Tried parsing as: {tried}. "
+                       f"Please upload a trajectory file (e.g. XDATCAR for VASP).",
+            )
+
+    return {"hash": file_hash, **summary}
 
 
 @app.get("/upload/hash")
 def check_hash(
     hash: str,
     file_type: Literal["trajectory", "model"],
+    user: str = Depends(get_current_user),
 ):
+    # Validate hash format to prevent path traversal
+    if not _HASH_PATTERN.match(hash):
+        raise HTTPException(status_code=422, detail="Invalid hash format: expected 32-char hex string")
+
     m = _manager()
     type_mapping = {"trajectory": "trajs", "model": "models"}
 
-    data_dir = m.config['basic'].get('user_data', 'data/user_data')
+    data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
     target_dir = Path(data_dir) / type_mapping[file_type]
 
     file_path = target_dir / hash
     exists = file_path.is_file()
-    return {"exists": exists}
+
+    # If file exists and is a trajectory, validate format and return summary.
+    # If the file is invalid (e.g. leftover from before validation was added),
+    # delete it and report as not existing — forces a clean re-upload.
+    summary = {}
+    if exists and file_type == "trajectory":
+        from .params import md_ase_formats
+        parsed = False
+        for fmt in md_ase_formats.values():
+            try:
+                atoms = ase.io.read(str(file_path), format=fmt, index=0)
+                summary = {
+                    "formula": atoms.get_chemical_formula(),
+                    "num_atoms": len(atoms),
+                    "num_frames": _count_trajectory_frames(str(file_path), fmt),
+                }
+                parsed = True
+                break
+            except Exception:
+                continue
+        if not parsed:
+            # Stale invalid file — clean up
+            file_path.unlink(missing_ok=True)
+            exists = False
+
+    return {"exists": exists, **summary}
