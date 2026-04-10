@@ -502,4 +502,5 @@ export interface InputT {
   steps: Array<'nvt' | 'nve' | 'scf' | 'pre_namd' | 'namd'>
   stru: string
   stru_format: string
+  stru_hash?: string
 }

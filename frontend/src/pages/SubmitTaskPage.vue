@@ -24,27 +24,6 @@
       label-position="top"
       class="submit-form"
     >
-      <!-- POSCAR upload section (new mode only) -->
-      <el-card v-if="submitMode === 'new'" class="form-section">
-        <template #header>
-          <span class="section-title">1. Structure (POSCAR)</span>
-        </template>
-        <PoscarUploader
-          @file-loaded="handlePoscarLoaded"
-          @clear="handlePoscarCleared"
-        />
-        <el-alert
-          v-if="poscarValidation"
-          :title="poscarValidation.valid ? 'Structure valid' : 'Validation failed'"
-          :type="poscarValidation.valid ? 'success' : 'error'"
-          :description="poscarValidation.valid
-            ? `${poscarValidation.structure?.formula} (${poscarValidation.structure?.num_atoms} atoms)`
-            : poscarValidation.error"
-          show-icon
-          class="validation-alert"
-        />
-      </el-card>
-
       <!-- Resume task selector (resume mode only) -->
       <el-card v-if="submitMode === 'resume'" class="form-section">
         <template #header>
@@ -65,10 +44,10 @@
         />
       </el-card>
 
-      <!-- Step selection section -->
+      <!-- Step selection section — shown first so user picks steps before uploading -->
       <el-card class="form-section">
         <template #header>
-          <span class="section-title">2. Workflow Steps</span>
+          <span class="section-title">{{ submitMode === 'resume' ? '2' : '1' }}. Workflow Steps</span>
         </template>
         <el-form-item prop="steps">
           <StepSelector
@@ -79,10 +58,135 @@
         </el-form-item>
       </el-card>
 
+      <!-- Structure upload — only for new tasks, after steps are chosen -->
+      <!-- POSCAR upload (NVT/NVE first step) -->
+      <el-card v-if="submitMode === 'new' && formData.steps.length > 0 && !isSCFFirstStep" class="form-section">
+        <template #header>
+          <span class="section-title">2. Structure (POSCAR)</span>
+        </template>
+        <PoscarUploader
+          @file-loaded="handlePoscarLoaded"
+          @clear="handlePoscarCleared"
+        />
+        <el-alert
+          v-if="poscarValidation"
+          :title="poscarValidation.valid ? 'Structure valid' : 'Validation failed'"
+          :type="poscarValidation.valid ? 'success' : 'error'"
+          :description="poscarValidation.valid
+            ? `${poscarValidation.structure?.formula} (${poscarValidation.structure?.num_atoms} atoms)`
+            : poscarValidation.error"
+          show-icon
+          class="validation-alert"
+        />
+      </el-card>
+
+      <!-- Trajectory upload (SCF first step) -->
+      <el-card v-if="submitMode === 'new' && isSCFFirstStep" class="form-section">
+        <template #header>
+          <span class="section-title">2. Trajectory File</span>
+        </template>
+        <div
+          class="traj-uploader"
+          :class="{ 'is-dragover': trajDragover }"
+          @dragenter.prevent="trajDragover = true"
+          @dragover.prevent="trajDragover = true"
+          @dragleave.prevent="trajDragover = false"
+          @drop.prevent="handleTrajDrop"
+          @click="triggerTrajInput"
+        >
+          <input
+            ref="trajInputRef"
+            type="file"
+            hidden
+            @change="handleTrajFileChange"
+          />
+
+          <!-- idle state -->
+          <div v-if="trajStatus === 'idle'" class="upload-prompt">
+            <el-icon class="upload-icon" :size="40"><Upload /></el-icon>
+            <div class="upload-text">
+              <span>Drag trajectory file here or </span>
+              <el-button type="primary" link>click to upload</el-button>
+            </div>
+            <div class="upload-hint">
+              Supports XDATCAR or other trajectory formats
+            </div>
+          </div>
+
+          <!-- hashing / checking / uploading / done / error -->
+          <div v-else class="traj-status-area" @click.stop>
+            <div class="traj-file-info">
+              <el-icon><Document /></el-icon>
+              <span class="traj-file-name">{{ trajFileName }}</span>
+              <span class="traj-file-size">({{ formatFileSize(trajFileSize) }})</span>
+              <el-button
+                v-if="trajStatus !== 'uploading'"
+                type="danger"
+                link
+                @click.stop="clearTrajFile"
+              >
+                Remove
+              </el-button>
+            </div>
+
+            <!-- hashing progress -->
+            <div v-if="trajStatus === 'hashing'" class="traj-progress-row">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>Calculating file hash...</span>
+              <el-progress
+                :percentage="trajHashProgress"
+                :show-text="true"
+                :stroke-width="8"
+                style="flex: 1; margin-left: 8px;"
+              />
+            </div>
+
+            <!-- checking server -->
+            <div v-if="trajStatus === 'checking'" class="traj-progress-row">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>Checking server...</span>
+            </div>
+
+            <!-- uploading progress -->
+            <div v-if="trajStatus === 'uploading'" class="traj-progress-row">
+              <span>Uploading...</span>
+              <el-progress
+                :percentage="trajUploadProgress"
+                :show-text="true"
+                :stroke-width="8"
+                status="warning"
+                style="flex: 1; margin-left: 8px;"
+              />
+            </div>
+
+            <!-- done -->
+            <div v-if="trajStatus === 'done'" class="traj-done-area">
+              <div class="traj-progress-row traj-done">
+                <el-icon color="var(--el-color-success)"><SuccessFilled /></el-icon>
+                <span>{{ trajSkippedUpload ? 'File already on server' : 'Upload complete' }}</span>
+              </div>
+              <div v-if="trajSummary" class="traj-summary">
+                {{ trajSummary.formula }} · {{ trajSummary.num_atoms }} atoms{{ trajSummary.num_frames ? ` · ${trajSummary.num_frames} frames` : '' }}
+              </div>
+              <div class="traj-hash-display">
+                MD5: <code>{{ trajHash }}</code>
+              </div>
+            </div>
+
+            <!-- error -->
+            <div v-if="trajStatus === 'error'" class="traj-progress-row traj-error">
+              <el-icon color="var(--el-color-danger)"><CircleClose /></el-icon>
+              <span>{{ trajErrorMsg }}</span>
+              <el-button type="primary" link @click.stop="retryTrajUpload">Retry</el-button>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
       <!-- Method & Basic Settings section -->
       <el-card class="form-section">
         <template #header>
-          <span class="section-title">3. Method & Settings</span>
+          <span class="section-title">{{ submitMode === 'resume' ? '3' : '3' }}. Method & Settings</span>
         </template>
         <el-row :gutter="16">
           <el-col :span="24">
@@ -168,6 +272,7 @@
           type="primary"
           size="large"
           :loading="submitting"
+          :disabled="isSubmitDisabled"
           @click="handleSubmit"
         >
           {{ submitMode === 'resume' ? 'Resume Task' : 'Submit Task' }}
@@ -178,17 +283,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, QuestionFilled, Upload, Document, Loading, SuccessFilled, CircleClose } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import SparkMD5 from 'spark-md5'
 import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
 import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import { validatePoscar } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
-import { getTaskSummaryList } from '@/api/tasks'
+import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, TaskSummary, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
@@ -221,6 +327,42 @@ const resumeTasks = ref<TaskSummary[]>([])
 const resumeTasksLoading = ref(false)
 const selectedResumeTaskId = ref<string | null>(null)
 const selectedResumeTask = ref<TaskSummary | null>(null)
+
+// Trajectory upload state
+type TrajStatus = 'idle' | 'hashing' | 'checking' | 'uploading' | 'done' | 'error'
+const trajInputRef = ref<HTMLInputElement>()
+const trajDragover = ref(false)
+const trajStatus = ref<TrajStatus>('idle')
+const trajFile = ref<File | null>(null)
+const trajFileName = ref('')
+const trajFileSize = ref(0)
+const trajHash = ref('')
+const trajHashProgress = ref(0)
+const trajUploadProgress = ref(0)
+const trajSkippedUpload = ref(false)
+const trajSummary = ref<{ formula: string; num_atoms: number; num_frames?: number } | null>(null)
+const trajErrorMsg = ref('')
+const trajVersion = ref(0) // Concurrency guard: prevents stale async flows from overwriting state
+
+/**
+ * Whether the first selected step is SCF (and not resume mode).
+ * Determines if trajectory upload should be shown instead of POSCAR.
+ */
+const isSCFFirstStep = computed(() => {
+  if (submitMode.value !== 'new') return false
+  if (formData.steps.length === 0) return false
+  return formData.steps[0] === 'scf'
+})
+
+/**
+ * Whether the submit button should be disabled due to ongoing upload operations.
+ */
+const isSubmitDisabled = computed(() => {
+  if (isSCFFirstStep.value) {
+    return ['hashing', 'checking', 'uploading'].includes(trajStatus.value)
+  }
+  return false
+})
 
 onMounted(async () => {
   try {
@@ -308,6 +450,10 @@ watch(
   { deep: true }
 )
 
+// ---------------------------------------------------------------------------
+// POSCAR upload handlers (existing)
+// ---------------------------------------------------------------------------
+
 async function handlePoscarLoaded(content: string): Promise<void> {
   poscarContent.value = content
   poscarVersion.value++ // Increment version to track this request
@@ -337,6 +483,149 @@ function handlePoscarCleared(): void {
   poscarVersion.value++ // Increment version to invalidate pending validations
 }
 
+// ---------------------------------------------------------------------------
+// Trajectory upload handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute MD5 hash of a file using spark-md5 with streaming chunks.
+ * Yields progress callbacks to avoid blocking the UI.
+ */
+async function computeFileMD5(file: File, onProgress?: (percent: number) => void): Promise<string> {
+  const chunkSize = 4 * 1024 * 1024 // 4 MiB
+  const spark = new SparkMD5.ArrayBuffer()
+  let offset = 0
+  while (offset < file.size) {
+    const end = Math.min(offset + chunkSize, file.size)
+    const chunk = await file.slice(offset, end).arrayBuffer()
+    spark.append(chunk)
+    offset = end
+    if (onProgress) onProgress(Math.round((offset / file.size) * 100))
+  }
+  return spark.end()
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function triggerTrajInput(): void {
+  if (trajStatus.value === 'idle') {
+    trajInputRef.value?.click()
+  }
+}
+
+function handleTrajDrop(e: DragEvent): void {
+  trajDragover.value = false
+  const files = e.dataTransfer?.files
+  if (files && files.length > 0) {
+    processTrajFile(files[0])
+  }
+}
+
+function handleTrajFileChange(e: Event): void {
+  const input = e.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    processTrajFile(input.files[0])
+  }
+  // Reset input value so selecting the same file again triggers change
+  input.value = ''
+}
+
+function clearTrajFile(): void {
+  trajVersion.value++ // Invalidate any in-flight async operations
+  trajFile.value = null
+  trajFileName.value = ''
+  trajFileSize.value = 0
+  trajHash.value = ''
+  trajHashProgress.value = 0
+  trajUploadProgress.value = 0
+  trajSkippedUpload.value = false
+  trajSummary.value = null
+  trajErrorMsg.value = ''
+  trajStatus.value = 'idle'
+}
+
+async function processTrajFile(file: File): Promise<void> {
+  // Capture a version token; if it changes during async work, bail out
+  const myVersion = ++trajVersion.value
+
+  // Reset state
+  trajFile.value = file
+  trajFileName.value = file.name
+  trajFileSize.value = file.size
+  trajHash.value = ''
+  trajHashProgress.value = 0
+  trajUploadProgress.value = 0
+  trajSkippedUpload.value = false
+  trajSummary.value = null
+  trajErrorMsg.value = ''
+
+  try {
+    // Step 1: Compute hash
+    trajStatus.value = 'hashing'
+    const hash = await computeFileMD5(file, (p) => {
+      if (trajVersion.value === myVersion) trajHashProgress.value = p
+    })
+    if (trajVersion.value !== myVersion) return // Superseded by newer operation
+    trajHash.value = hash
+
+    // Step 2: Check server
+    trajStatus.value = 'checking'
+    const checkResult = await checkTrajectoryHash(hash)
+    if (trajVersion.value !== myVersion) return // Superseded
+
+    if (checkResult.exists) {
+      // File already on server, skip upload
+      trajSkippedUpload.value = true
+      if (checkResult.formula) {
+        trajSummary.value = {
+          formula: checkResult.formula,
+          num_atoms: checkResult.num_atoms ?? 0,
+          num_frames: checkResult.num_frames,
+        }
+      }
+      trajStatus.value = 'done'
+      return
+    }
+
+    // Step 3: Upload
+    trajStatus.value = 'uploading'
+    const uploadResult = await uploadTrajectory(file, (p) => {
+      if (trajVersion.value === myVersion) trajUploadProgress.value = p
+    })
+    if (trajVersion.value !== myVersion) return // Superseded
+    if (uploadResult.formula) {
+      trajSummary.value = {
+        formula: uploadResult.formula,
+        num_atoms: uploadResult.num_atoms ?? 0,
+        num_frames: uploadResult.num_frames,
+      }
+    }
+    trajStatus.value = 'done'
+  } catch (err) {
+    if (trajVersion.value !== myVersion) return // Superseded; discard stale error
+    // Extract detail from axios error response, fall back to generic message
+    const axiosErr = err as any
+    trajErrorMsg.value = axiosErr?.response?.data?.detail
+      || (err instanceof Error ? err.message : 'Upload failed')
+    trajStatus.value = 'error'
+  }
+}
+
+function retryTrajUpload(): void {
+  if (trajFile.value) {
+    processTrajFile(trajFile.value)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Navigation and mode handling
+// ---------------------------------------------------------------------------
+
 function goBack(): void {
   router.push({ name: 'task-list' })
 }
@@ -360,6 +649,7 @@ function handleModeChange(mode: string | number | boolean): void {
     formData.steps = []
     selectedResumeTaskId.value = null
     selectedResumeTask.value = null
+    clearTrajFile()
     fetchResumeTasks()
   } else {
     // Clear resume state and stale POSCAR from previous session
@@ -369,6 +659,7 @@ function handleModeChange(mode: string | number | boolean): void {
     poscarContent.value = ''
     poscarValidation.value = null
     poscarVersion.value++
+    clearTrajFile()
   }
 }
 
@@ -382,6 +673,10 @@ function handleResumeTaskSelected(task: TaskSummary | null): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Submit
+// ---------------------------------------------------------------------------
+
 async function handleSubmit(): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
@@ -394,13 +689,18 @@ async function handleSubmit(): Promise<void> {
       ElMessage.error('Please select a task to resume from')
       return
     }
+  } else if (isSCFFirstStep.value) {
+    // SCF first step: require trajectory hash
+    if (trajStatus.value !== 'done' || !trajHash.value) {
+      ElMessage.error('Please upload a trajectory file first')
+      return
+    }
   } else {
-    // Validate POSCAR uploaded
+    // NVT/NVE first step: require POSCAR
     if (!poscarContent.value) {
       ElMessage.error('Please upload a POSCAR file')
       return
     }
-    // Validate POSCAR passed validation
     if (!poscarValidation.value?.valid) {
       ElMessage.error('Please fix POSCAR validation errors before submitting')
       return
@@ -424,6 +724,7 @@ async function handleSubmit(): Promise<void> {
   }
 
   // Build submit payload matching backend InputT exactly
+  const useTrajHash = !isResume && isSCFFirstStep.value && !!trajHash.value
   const payload = {
     basic_input: {
       software: formData.basic_input.software,
@@ -431,8 +732,9 @@ async function handleSubmit(): Promise<void> {
     },
     scheduler_config: {},
     steps: formData.steps,
-    stru: isResume ? '' : poscarContent.value,
+    stru: useTrajHash ? '' : (isResume ? '' : poscarContent.value),
     stru_format: 'vasp',
+    ...(useTrajHash ? { stru_hash: trajHash.value } : {}),
     // Include inputs for selected steps
     ...(formData.steps.includes('nvt') && { nvt_input: formData.nvt_input }),
     ...(formData.steps.includes('nve') && { nve_input: formData.nve_input }),
@@ -531,12 +833,120 @@ async function handleSubmit(): Promise<void> {
 }
 
 .disabled-radio-wrapper {
-  display: inline-block;
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 :deep(.param-help-icon) {
   font-size: 14px;
   color: var(--el-text-color-placeholder);
   cursor: help;
+}
+
+/* Trajectory uploader styles */
+/* Trajectory uploader — visually matched to PoscarUploader */
+.traj-uploader {
+  border: 2px dashed var(--el-border-color);
+  border-radius: 8px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+  background-color: var(--el-fill-color-blank);
+}
+
+.traj-uploader:hover {
+  border-color: var(--el-color-primary);
+  background-color: var(--el-fill-color-light);
+}
+
+.traj-uploader.is-dragover {
+  border-color: var(--el-color-primary);
+  background-color: var(--el-color-primary-light-9);
+}
+
+.upload-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-icon {
+  font-size: 48px;
+  color: var(--el-text-color-placeholder);
+}
+
+.upload-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--el-text-color-secondary);
+}
+
+.upload-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.traj-status-area {
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.traj-file-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.traj-file-name {
+  font-weight: 500;
+}
+
+.traj-file-size {
+  color: var(--el-text-color-secondary);
+}
+
+.traj-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.traj-done {
+  color: var(--el-color-success);
+}
+
+.traj-error {
+  color: var(--el-color-danger);
+}
+
+.traj-done-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.traj-summary {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.traj-hash-display {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.traj-hash-display code {
+  font-family: monospace;
+  background: var(--el-fill-color-light);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 </style>

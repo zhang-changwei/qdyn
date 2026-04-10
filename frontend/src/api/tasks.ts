@@ -28,6 +28,41 @@ import type {
   JobMdTimeseriesResponse
 } from './types'
 
+// ============================================
+// Trajectory Upload API (direct endpoints, not /frontend)
+// ============================================
+
+/**
+ * Upload a trajectory file to the server.
+ * Uses multipart/form-data with streaming progress.
+ */
+export async function uploadTrajectory(
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<{ hash: string; formula?: string; num_atoms?: number; num_frames?: number }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('file_type', 'trajectory')
+  const resp = await http.post('/upload', formData, {
+    timeout: 0, // no timeout for large files
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) {
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+    },
+  })
+  return resp.data
+}
+
+/**
+ * Check if a trajectory file with the given hash already exists on the server.
+ */
+export async function checkTrajectoryHash(hash: string): Promise<{ exists: boolean; formula?: string; num_atoms?: number; num_frames?: number }> {
+  const resp = await http.get('/upload/hash', { params: { hash, file_type: 'trajectory' } })
+  return resp.data
+}
+
 /**
  * Unwrap API response (extract data from { success, data } wrapper)
  * Throws error if success is false
