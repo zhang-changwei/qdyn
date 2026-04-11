@@ -89,32 +89,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logging.warning(f"Failed to pre-warm MongoDB connection: {exc}")
 
-    # Start the queue poller background task (pool-based mode only).
-    poller_task: Optional[asyncio.Task] = None
-    if "worker_pools" in manager.config:
-        from .queue_poller import queue_dispatch_loop
+    # Start the queue poller background task.
+    from .queue_poller import queue_dispatch_loop
 
-        # Read poll interval from pool config (default 60s).
-        _, _, pool_cfg = manager._resolve_pool_context()
-        poll_interval = pool_cfg.get("queue_poll_interval", 60)
+    # Read poll interval from pool config (default 60s).
+    _, _, pool_cfg = manager._resolve_pool_context()
+    poll_interval = pool_cfg.get("queue_poll_interval", 60)
 
-        poller_task = asyncio.create_task(
-            queue_dispatch_loop(
-                workflow=manager,
-                db=qdyndb,
-                dispatch_lock=_dispatch_lock,
-                interval=poll_interval,
-            ),
-            name="queue-poller",
-        )
-        logging.info(
-            "Queue poller background task started (interval=%ds).",
-            poll_interval,
-        )
-    else:
-        logging.info(
-            "Non-pool config detected — queue poller not started."
-        )
+    poller_task: Optional[asyncio.Task] = asyncio.create_task(
+        queue_dispatch_loop(
+            workflow=manager,
+            db=qdyndb,
+            dispatch_lock=_dispatch_lock,
+            interval=poll_interval,
+        ),
+        name="queue-poller",
+    )
+    logging.info(
+        "Queue poller background task started (interval=%ds).",
+        poll_interval,
+    )
 
     yield
 
@@ -404,80 +398,14 @@ async def _dispatch_task(
         )
 
 
-def _submit_with_tracking_legacy(
-    input: InputT,
-    method: Literal["namd", "n2amd"],
-    resume: bool,
-    prev_task_id: str,
-    username: str,
-    worker: Optional[str] = None,
-) -> str:
-    """Legacy synchronous submission path (non-pool configs).
-
-    Used when the config does not define ``worker_pools``, preserving
-    full backward compatibility with the old submission flow.
-    """
-    m = _manager()
-
-    # Ownership check for resume
-    if resume and prev_task_id:
-        prev_owner = qdyndb.get_task_owner(prev_task_id)
-        if prev_owner is None:
-            raise HTTPException(status_code=404, detail="Previous task not found")
-        if prev_owner != username:
-            raise HTTPException(
-                status_code=http_status.HTTP_403_FORBIDDEN,
-                detail="Cannot resume a task owned by another user",
-            )
-
-    try:
-        task_id, job_ids, effective_worker = m.submit(
-            input=input,
-            method=method,
-            stru=input.stru,
-            stru_format=input.stru_format,
-            stru_hash=input.stru_hash,
-            resume=resume,
-            prev_task_id=prev_task_id,
-            worker=worker,
-        )
-    except (AssertionError, ValidationError) as e:
-        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
-    except ConfigError as e:
-        raise HTTPException(status_code=500, detail=f"Server config error: {e}")
-    except ResumeError as e:
-        raise HTTPException(status_code=404, detail=f"Resume error: {e}")
-    except NotImplementedError as e:
-        raise HTTPException(status_code=501, detail=f"Not supported: {e}")
-
-    qdyndb.assign_task(task_id, username, job_ids)
-
-    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id, config=m.config)
-    qdyndb.update_task_metadata(
-        task_id,
-        formula=formula,
-        num_atoms=num_atoms,
-        prev_task_id=prev_task_id if resume and prev_task_id else None,
-        worker=effective_worker,
-    )
-
-    return task_id
-
-
 # --- endpoints ---
 
 
 @app.get("/workers", tags=["system"])
 def get_workers():
-    """Return available worker/pool names and the configured default."""
+    """Return available pool names and the configured default."""
     m = _manager()
-    if "worker_pools" in m.config:
-        workers = list(m.config["worker_pools"].keys())
-    elif "workers" in m.config:
-        workers = list(m.config["workers"].keys())
-    else:
-        # Legacy config format: only one implicit worker
-        workers = [m.worker_name]
+    workers = list(m.config["worker_pools"].keys())
     return {
         "workers": workers,
         "default": m.active_pool_name,
@@ -498,12 +426,11 @@ async def submit_task(
     method: Literal["namd", "n2amd"] = "namd",
     resume: bool = False,
     prev_task_id: str = "",
-    worker: Optional[str] = None,
     username: str = Depends(get_current_user),
 ):
     """Submit a new task.
 
-    In pool-based mode, the system automatically selects an idle worker.
+    The system automatically selects an idle worker from the active pool.
     If all workers are occupied, the task enters a FIFO waiting queue
     and will be dispatched by the background poller when a worker becomes
     available.
@@ -525,16 +452,6 @@ async def submit_task(
                 detail="Cannot resume a task owned by another user",
             )
 
-    # Legacy (non-pool) config: use the old synchronous path and
-    # wrap the result in the new response model for consistency.
-    if "worker_pools" not in m.config:
-        task_id = await asyncio.to_thread(
-            _submit_with_tracking_legacy,
-            input, method, resume, prev_task_id, username, worker,
-        )
-        return SubmitResponse(task_id=task_id, status="SUBMITTED")
-
-    # --- Pool-based dispatch path ---
     from jobflow.utils import suid
     task_id = suid()
     pool_name = m.active_pool_name
@@ -821,12 +738,6 @@ def get_pool_status(username: str = Depends(get_current_user)):
     workers the current user occupies vs. the per-user limit.
     """
     m = _manager()
-    if "worker_pools" not in m.config:
-        raise HTTPException(
-            status_code=501,
-            detail="Pool status is only available in pool-based config mode.",
-        )
-
     pool_name = m.active_pool_name
     pool_workers = m._get_pool_workers(pool_name)
     _, _, pool_cfg = m._resolve_pool_context(pool_name)

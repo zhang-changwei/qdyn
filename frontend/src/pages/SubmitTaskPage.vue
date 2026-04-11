@@ -374,13 +374,9 @@ const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
 const schemas = ref<StepInputSchemas | null>(null)
 
-// Pool status (pool-based mode)
+// Pool status
 const poolStatus = ref<PoolStatusResponse | null>(null)
 const selectedPool = ref<string>('')
-
-// Legacy: available workers for non-pool configs
-const availableWorkers = ref<string[]>([])
-const selectedWorker = ref<string>('')
 
 // Resume mode state
 const submitMode = ref<'new' | 'resume'>('new')
@@ -426,26 +422,21 @@ const isSubmitDisabled = computed(() => {
 })
 
 onMounted(async () => {
-  // Fetch available workers/pool info
+  // Fetch pool info
   try {
     const resp = await http.get<{ workers: string[]; default: string }>('/workers')
-    availableWorkers.value = resp.data.workers
-    selectedWorker.value = resp.data.default
     selectedPool.value = resp.data.default
   } catch {
-    // Fallback: single default worker, selector stays hidden
-    availableWorkers.value = []
-    selectedWorker.value = ''
+    // Fallback: selector stays hidden
   }
 
-  // Try to fetch pool status (only available in pool-based mode)
+  // Fetch pool status
   try {
     poolStatus.value = await getPoolStatus()
     if (poolStatus.value) {
       selectedPool.value = poolStatus.value.pool_name
     }
   } catch {
-    // Non-pool config or endpoint not available — ignore
     poolStatus.value = null
   }
 
@@ -836,15 +827,10 @@ async function handleSubmit(): Promise<void> {
     ...(formData.steps.includes('namd') && { namd_input: formData.namd_input })
   }
 
-  // Build URL with optional resume and worker parameters
+  // Build URL with optional resume parameters
   let submitUrl = `/submit?method=${formData.method}`
   if (isResume) {
     submitUrl += `&resume=true&prev_task_id=${selectedResumeTaskId.value}`
-  }
-  // In pool-based mode the backend selects the worker automatically;
-  // only pass the worker param for legacy non-pool configs.
-  if (!poolStatus.value && selectedWorker.value) {
-    submitUrl += `&worker=${encodeURIComponent(selectedWorker.value)}`
   }
 
   submitting.value = true

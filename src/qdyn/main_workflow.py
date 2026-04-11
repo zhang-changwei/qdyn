@@ -84,67 +84,34 @@ class MainWorkflow:
         self.jc: Optional[JobController] = None
 
         # Resolve active pool / worker configuration.
-        # Three config formats are supported (newest first):
-        #
-        # 1. Pool-based (worker_pools):
-        #    active_pool + worker_pools.<name>.profile / .pool
-        #
-        # 2. Multi-worker (workers):
-        #    active_worker + workers.<name> flat dict
-        #    -> wrapped into pool-like structure for downstream compatibility
-        #
-        # 3. Legacy single-worker:
-        #    top-level modules/export + machine.worker
-        #    -> wrapped into pool-like structure
-        if 'worker_pools' in self.config:
-            # --- Pool-based format (new) ---
-            self.active_pool_name: str = self.config.get(
-                'active_pool', next(iter(self.config['worker_pools']))
+        # Only the pool-based format (worker_pools) is supported.
+        if 'workers' in self.config:
+            raise ConfigError(
+                "Legacy 'workers' config format is no longer supported. "
+                "Please migrate to the 'worker_pools' format. "
+                "See config/qdyn.yaml.example for the expected structure."
             )
-            if self.active_pool_name not in self.config['worker_pools']:
-                raise ConfigError(
-                    f"active_pool '{self.active_pool_name}' not found in "
-                    f"worker_pools section of qdyn.yaml. "
-                    f"Available: {list(self.config['worker_pools'].keys())}"
-                )
-            pool_def = self.config['worker_pools'][self.active_pool_name]
-            self.pool_profile_cfg: dict = pool_def.get('profile', {})
-            self.pool_config: dict = pool_def.get('pool', {})
-            # Backward-compat aliases: callers that still use
-            # self.worker_name / self.worker_cfg continue to work during
-            # the Stage 2 transition.  submit() uses pool_name as a
-            # placeholder worker name until Stage 3 introduces runtime
-            # worker selection.
-            self.worker_name: str = self.active_pool_name
-            self.worker_cfg: dict = self.pool_profile_cfg
+        if 'worker_pools' not in self.config:
+            raise ConfigError(
+                "Missing 'worker_pools' section in qdyn.yaml. "
+                "See config/qdyn.yaml.example for the expected structure."
+            )
 
-        elif 'workers' in self.config:
-            # --- Multi-worker format (old) ---
-            worker_name: str = self.config.get(
-                'active_worker', 'local_slurm'
+        self.active_pool_name: str = self.config.get(
+            'active_pool', next(iter(self.config['worker_pools']))
+        )
+        if self.active_pool_name not in self.config['worker_pools']:
+            raise ConfigError(
+                f"active_pool '{self.active_pool_name}' not found in "
+                f"worker_pools section of qdyn.yaml. "
+                f"Available: {list(self.config['worker_pools'].keys())}"
             )
-            if worker_name not in self.config['workers']:
-                raise ConfigError(
-                    f"active_worker '{worker_name}' not found in "
-                    f"workers section of qdyn.yaml. "
-                    f"Available: {list(self.config['workers'].keys())}"
-                )
-            self.active_pool_name = worker_name
-            self.pool_profile_cfg = self.config['workers'][worker_name]
-            self.pool_config = {}  # no pool params in old format
-            self.worker_name = worker_name
-            self.worker_cfg = self.pool_profile_cfg
-
-        else:
-            # --- Legacy single-worker format ---
-            worker_name = self.config.get('machine', {}).get(
-                'worker', 'local_slurm'
-            )
-            self.active_pool_name = worker_name
-            self.pool_profile_cfg = self.config  # top-level IS the profile
-            self.pool_config = {}
-            self.worker_name = worker_name
-            self.worker_cfg = self.config
+        pool_def = self.config['worker_pools'][self.active_pool_name]
+        self.pool_profile_cfg: dict = pool_def.get('profile', {})
+        self.pool_config: dict = pool_def.get('pool', {})
+        # Convenience aliases used throughout the codebase.
+        self.worker_name: str = self.active_pool_name
+        self.worker_cfg: dict = self.pool_profile_cfg
 
     def __del__(self):
         jc = getattr(self, "jc", None)
@@ -169,13 +136,19 @@ class MainWorkflow:
             cfg = yaml.safe_load(f)
         logging.info(f"Loaded config from {path}.")
 
-        # Detect config format and log which one we are using
-        if 'worker_pools' in cfg:
-            logging.info("Using pool-based config format (worker_pools).")
-        elif 'workers' in cfg:
-            logging.info("Using multi-worker config format (workers).")
-        else:
-            logging.info("Using legacy single-worker config format.")
+        # Validate config format: only pool-based is supported.
+        if 'workers' in cfg:
+            raise ConfigError(
+                "Legacy 'workers' config format is no longer supported. "
+                "Please migrate to the 'worker_pools' format. "
+                "See config/qdyn.yaml.example for the expected structure."
+            )
+        if 'worker_pools' not in cfg:
+            raise ConfigError(
+                "Missing 'worker_pools' section in qdyn.yaml. "
+                "See config/qdyn.yaml.example for the expected structure."
+            )
+        logging.info("Using pool-based config format (worker_pools).")
 
         jf_path = cfg.get('basic', {}).get('jf_project_path', '')
         if jf_path and os.path.exists(jf_path):
@@ -190,43 +163,20 @@ class MainWorkflow:
         return cfg, jf_cfg
 
     def _resolve_worker_context(
-        self, worker: Optional[str] = None
+        self, pool_name_override: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """Resolve the effective worker/pool name and profile config.
+        """Resolve the effective pool name and profile config.
 
-        In pool-based mode, *worker* is interpreted as a pool name.
-        Returns (pool_name, pool_profile_cfg) in all formats so that
-        callers can build ExecutionConfig / resource dicts uniformly.
-
-        This method is kept for backward compatibility; new code should
-        prefer _resolve_pool_context() instead.
+        Returns (pool_name, pool_profile_cfg) so that callers can build
+        ExecutionConfig / resource dicts uniformly.
         """
-        if 'worker_pools' in self.config:
-            pool_name = worker or self.active_pool_name
-            if pool_name not in self.config['worker_pools']:
-                raise ValidationError(
-                    f"Pool '{pool_name}' not found in config. "
-                    f"Available: {list(self.config['worker_pools'].keys())}"
-                )
-            return pool_name, self.config['worker_pools'][pool_name].get('profile', {})
-
-        if 'workers' in self.config:
-            effective_worker = worker or self.worker_name
-            workers_cfg = self.config.get('workers', {})
-            if effective_worker not in workers_cfg:
-                raise ValidationError(
-                    f"Worker '{effective_worker}' not found in config. "
-                    f"Available: {list(workers_cfg.keys())}"
-                )
-            return effective_worker, workers_cfg[effective_worker]
-
-        # Legacy single-worker
-        if worker and worker != self.worker_name:
+        pool_name = pool_name_override or self.active_pool_name
+        if pool_name not in self.config['worker_pools']:
             raise ValidationError(
-                "This server uses legacy single-worker config; "
-                "selecting a different worker is not supported."
+                f"Pool '{pool_name}' not found in config. "
+                f"Available: {list(self.config['worker_pools'].keys())}"
             )
-        return self.worker_name, self.worker_cfg
+        return pool_name, self.config['worker_pools'][pool_name].get('profile', {})
 
     # ------------------------------------------------------------------
     # Pool helpers
@@ -238,21 +188,15 @@ class MainWorkflow:
         """Resolve pool name, profile config, and pool parameters.
 
         Returns (pool_name, pool_profile_cfg, pool_config).
-        For non-pool config formats, pool_config is an empty dict.
         """
-        if 'worker_pools' in self.config:
-            name = pool_name or self.active_pool_name
-            if name not in self.config['worker_pools']:
-                raise ValidationError(
-                    f"Pool '{name}' not found in config. "
-                    f"Available: {list(self.config['worker_pools'].keys())}"
-                )
-            pool_def = self.config['worker_pools'][name]
-            return name, pool_def.get('profile', {}), pool_def.get('pool', {})
-
-        # Fallback: no pool parameters available
-        name, profile = self._resolve_worker_context(pool_name)
-        return name, profile, {}
+        name = pool_name or self.active_pool_name
+        if name not in self.config['worker_pools']:
+            raise ValidationError(
+                f"Pool '{name}' not found in config. "
+                f"Available: {list(self.config['worker_pools'].keys())}"
+            )
+        pool_def = self.config['worker_pools'][name]
+        return name, pool_def.get('profile', {}), pool_def.get('pool', {})
 
     def _get_pool_workers(self, pool_name: Optional[str] = None) -> List[str]:
         """Return runtime worker names belonging to a pool.
@@ -532,19 +476,8 @@ class MainWorkflow:
 
         In pool-based format, worker_cfg is pool_profile_cfg which
         contains partition, cpus_per_node, etc. directly.
-        In multi-worker format, worker_cfg already contains everything.
-        In legacy mode, worker_cfg IS self.config, which has machine at top level.
         """
-        if 'worker_pools' in self.config or 'workers' in self.config:
-            return worker_cfg
-        # Legacy mode: merge machine section as before
-        base = dict(self.config.get('machine', {}))
-        base.pop('workers', None)
-        base.pop('worker', None)
-        workers_cfg = self.config.get('machine', {}).get('workers', {})
-        if worker_name in workers_cfg:
-            base.update(workers_cfg[worker_name])
-        return base
+        return worker_cfg
 
     def _get_exec_config(
         self, worker_name: str, worker_cfg: Dict[str, Any], software: str, key: str
@@ -554,20 +487,8 @@ class MainWorkflow:
 
         In pool-based format, worker_cfg is pool_profile_cfg; reads
         directly from profile.<key>.<software>.
-        In multi-worker format, same structure (workers.<name>.<key>.<software>).
-        In legacy mode, worker_cfg IS self.config, so top-level keys
-        are accessed directly; then falls back through worker_exec overrides.
         """
-        if 'worker_pools' in self.config or 'workers' in self.config:
-            # Pool-based or multi-worker format: profile / worker dict
-            return worker_cfg.get(key, {}).get(software)
-        # Legacy mode: check worker_exec overrides first, then top-level
-        worker_exec = self.config.get('worker_exec', {}).get(
-            worker_name, {}
-        )
-        if key in worker_exec and software in worker_exec[key]:
-            return worker_exec[key][software]
-        return self.config.get(key, {}).get(software)
+        return worker_cfg.get(key, {}).get(software)
 
     def _is_remote_worker(self, worker_name: str) -> bool:
         """Check if the named worker is a remote (SSH) worker.
@@ -1190,7 +1111,6 @@ class MainWorkflow:
         stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
-        worker: Optional[str] = None,
         *,
         task_id: Optional[str] = None,
         username: Optional[str] = None,
@@ -1219,9 +1139,8 @@ class MainWorkflow:
         """
         self._ensure_job_controller()
 
-        # Resolve pool / worker context.
-        # In pool mode *worker* is interpreted as pool_name.
-        effective_pool = pool_name or worker
+        # Resolve pool context.
+        effective_pool = pool_name
         effective_worker_name, effective_worker_cfg = self._resolve_worker_context(
             effective_pool
         )

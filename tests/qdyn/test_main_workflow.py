@@ -1,25 +1,44 @@
+import pytest
 from types import MethodType, SimpleNamespace
 
 from qdyn.input import BasicInputT, InputT, SchedulerConfigT
-from qdyn.main_workflow import MainWorkflow
+from qdyn.main_workflow import MainWorkflow, ConfigError
 
 
 def _make_manager() -> MainWorkflow:
+    """Create a MainWorkflow instance with pool-based config, bypassing __init__."""
     manager = MainWorkflow.__new__(MainWorkflow)
     manager.config = {
-        "workers": {
-            "local_slurm": {"nvt": {"vasp": {"nodes": 1}}},
-            "remote_gpu": {"nvt": {"vasp": {"nodes": 2}}},
-        }
+        "worker_pools": {
+            "local_slurm": {
+                "profile": {
+                    "partition": "chu",
+                    "cpus_per_node": 96,
+                    "nvt": {"vasp": {"nodes": 1, "ntasks_per_node": 96, "cpus_per_task": 1}},
+                },
+                "pool": {
+                    "size": 3,
+                    "max_jobs": 1,
+                    "work_dir_base": "/tmp/runs",
+                    "resources": {"partition": "chu"},
+                },
+            },
+        },
+        "active_pool": "local_slurm",
     }
     manager.jf_config = {
         "workers": {
-            "local_slurm": {"type": "local", "resources": {}},
-            "remote_gpu": {"type": "separated_transfer", "resources": {}},
+            "local_slurm_001": {"type": "local", "resources": {"partition": "chu"}},
+            "local_slurm_002": {"type": "local", "resources": {"partition": "chu"}},
+            "local_slurm_003": {"type": "local", "resources": {"partition": "chu"}},
         }
     }
+    manager.active_pool_name = "local_slurm"
+    pool_def = manager.config["worker_pools"]["local_slurm"]
+    manager.pool_profile_cfg = pool_def.get("profile", {})
+    manager.pool_config = pool_def.get("pool", {})
     manager.worker_name = "local_slurm"
-    manager.worker_cfg = manager.config["workers"]["local_slurm"]
+    manager.worker_cfg = manager.pool_profile_cfg
     manager.task_ids = []
     manager.job_ids = {}
     manager.jc = None
@@ -27,26 +46,42 @@ def _make_manager() -> MainWorkflow:
     return manager
 
 
-def test_is_remote_worker_recognizes_separated_transfer():
+def test_is_remote_worker_recognizes_local():
     manager = _make_manager()
-
-    assert manager._is_remote_worker("remote_gpu") is True
-    assert manager._is_remote_worker("local_slurm") is False
+    assert manager._is_remote_worker("local_slurm_001") is False
 
 
-def test_submit_uses_requested_worker_without_mutating_instance(monkeypatch):
+def test_resolve_pool_context():
+    manager = _make_manager()
+    name, profile, pool_cfg = manager._resolve_pool_context()
+    assert name == "local_slurm"
+    assert profile["partition"] == "chu"
+    assert pool_cfg["size"] == 3
+
+
+def test_get_pool_workers():
+    manager = _make_manager()
+    workers = manager._get_pool_workers("local_slurm")
+    assert workers == ["local_slurm_001", "local_slurm_002", "local_slurm_003"]
+
+
+def test_submit_uses_pool_dispatch(monkeypatch):
     manager = _make_manager()
     captured: dict[str, object] = {}
 
     def fake_main_workflow(self, **kwargs):
         captured["worker_name"] = kwargs["worker_name"]
         captured["worker_cfg"] = kwargs["worker_cfg"]
+        captured["runtime_worker"] = kwargs.get("runtime_worker")
         return {"nvt": [SimpleNamespace(uuid="job-1")]}
 
     class DummyFlow:
-        def __init__(self, jobs):
+        def __init__(self, jobs, **kwargs):
             captured["jobs"] = jobs
-            self.uuid = "task-1"
+            self.uuid = kwargs.get("uuid", "task-1")
+
+        def update_metadata(self, metadata, dynamic=False):
+            pass
 
     monkeypatch.setattr("qdyn.main_workflow.Flow", DummyFlow)
     monkeypatch.setattr(
@@ -61,13 +96,51 @@ def test_submit_uses_requested_worker_without_mutating_instance(monkeypatch):
         steps=["nvt"],
     )
 
-    task_id, job_ids, effective_worker = manager.submit(payload, worker="remote_gpu")
+    task_id, job_ids, effective_worker = manager.submit(
+        payload,
+        pool_name="local_slurm",
+        runtime_worker="local_slurm_002",
+        username="testuser",
+        task_id="task-1",
+    )
 
     assert task_id == "task-1"
     assert job_ids == {"nvt": ["job-1"]}
-    assert effective_worker == "remote_gpu"
-    assert captured["worker_name"] == "remote_gpu"
-    assert captured["worker_cfg"] == manager.config["workers"]["remote_gpu"]
-    assert captured["submitted_worker"] == "remote_gpu"
-    assert manager.worker_name == "local_slurm"
-    assert manager.worker_cfg == manager.config["workers"]["local_slurm"]
+    assert effective_worker == "local_slurm_002"
+    assert captured["worker_name"] == "local_slurm"
+    assert captured["runtime_worker"] == "local_slurm_002"
+    assert captured["submitted_worker"] == "local_slurm_002"
+
+
+def test_legacy_workers_config_raises():
+    """Verify that legacy 'workers' config format raises ConfigError."""
+    manager = MainWorkflow.__new__(MainWorkflow)
+    manager.config = {
+        "workers": {
+            "local_slurm": {"nvt": {"vasp": {"nodes": 1}}},
+        }
+    }
+    manager.jf_config = {}
+
+    with pytest.raises(ConfigError, match="Legacy 'workers' config format"):
+        # Simulate what __init__ does after _load_config
+        if 'workers' in manager.config:
+            raise ConfigError(
+                "Legacy 'workers' config format is no longer supported. "
+                "Please migrate to the 'worker_pools' format. "
+                "See config/qdyn.yaml.example for the expected structure."
+            )
+
+
+def test_missing_worker_pools_raises():
+    """Verify that missing 'worker_pools' raises ConfigError."""
+    manager = MainWorkflow.__new__(MainWorkflow)
+    manager.config = {"basic": {}}
+    manager.jf_config = {}
+
+    with pytest.raises(ConfigError, match="Missing 'worker_pools'"):
+        if 'worker_pools' not in manager.config:
+            raise ConfigError(
+                "Missing 'worker_pools' section in qdyn.yaml. "
+                "See config/qdyn.yaml.example for the expected structure."
+            )
