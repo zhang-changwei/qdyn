@@ -74,6 +74,8 @@ class TaskSummary(BaseModel):
     num_atoms: Optional[int] = None
     # Resume chain: id of the predecessor task (if this is a resume task)
     prev_task_id: Optional[str] = None
+    # Worker used for this task (e.g. "local_slurm", "remote_djs")
+    worker: Optional[str] = None
     # The next step that can be resumed from
     resume_next_step: Optional[str] = None
     # Whether this task is eligible to be resumed
@@ -155,10 +157,33 @@ class JobFileItem(BaseModel):
     category: str  # One of: input, output, data, image
 
 
+class SubdirInfo(BaseModel):
+    """Metadata for a subdirectory in a job's run directory.
+
+    Returned as part of the files listing so the frontend can display
+    collapsible subdirectory groups without loading all file contents
+    up front (lazy loading).
+    """
+
+    name: str
+    file_count: int
+    # Status derived from marker files: "completed", "failed", "running", "unknown"
+    status: str = "unknown"
+
+
 class JobFilesResponse(BaseModel):
     """Response listing available files in a job's run directory."""
 
     available: bool
+    files: List[JobFileItem] = Field(default_factory=list)
+    subdirs: List[SubdirInfo] = Field(default_factory=list)
+
+
+class SubdirFilesResponse(BaseModel):
+    """Response listing files inside a specific subdirectory."""
+
+    available: bool
+    subdir: str
     files: List[JobFileItem] = Field(default_factory=list)
 
 
@@ -220,11 +245,13 @@ class JobImagesResponse(BaseModel):
 
 
 class JobInputParamsResponse(BaseModel):
-    """Response containing parsed INCAR and KPOINTS data for a job."""
+    """Response containing input parameters for a job."""
 
     available: bool
     incar: Optional[Dict[str, str]] = None
     kpoints_text: Optional[str] = None
+    parameters: Optional[Dict[str, str]] = None
+    parameters_title: Optional[str] = None
     warning: Optional[str] = None
 
 

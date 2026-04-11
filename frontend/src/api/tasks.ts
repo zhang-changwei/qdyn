@@ -25,7 +25,8 @@ import type {
   JobProgressResponse,
   JobImagesResponse,
   JobInputParamsResponse,
-  JobMdTimeseriesResponse
+  JobMdTimeseriesResponse,
+  SubdirFilesResponse
 } from './types'
 
 // ============================================
@@ -183,6 +184,32 @@ export async function getJobFiles(taskId: string, jobUuid: string): Promise<JobF
 export async function getJobFile(taskId: string, jobUuid: string, filename: string): Promise<Blob> {
   const response = await http.get(
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/files/${encodeURIComponent(filename)}`,
+    { responseType: 'blob' }
+  )
+  return response.data
+}
+
+/**
+ * List files inside a specific subdirectory of a job's run directory (lazy load).
+ */
+export async function getSubdirFiles(
+  taskId: string, jobUuid: string, subdir: string
+): Promise<SubdirFilesResponse> {
+  const response = await http.get<ApiResponse<SubdirFilesResponse> | SubdirFilesResponse>(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/subdirs/${encodeURIComponent(subdir)}/files`
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
+ * Download a specific file from a job's subdirectory.
+ * Returns a Blob that can be used with URL.createObjectURL().
+ */
+export async function getSubdirFile(
+  taskId: string, jobUuid: string, subdir: string, filename: string
+): Promise<Blob> {
+  const response = await http.get(
+    `/frontend/tasks/${taskId}/jobs/${jobUuid}/files/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`,
     { responseType: 'blob' }
   )
   return response.data

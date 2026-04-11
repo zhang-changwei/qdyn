@@ -85,6 +85,7 @@
           :data="sortedJobs"
           row-key="uuid"
           stripe
+          :expand-row-keys="expandedRowKeys"
           @expand-change="handleExpandChange"
         >
           <el-table-column prop="index" label="#" width="60" />
@@ -170,8 +171,13 @@
                   </div>
                 </div>
 
+                <!-- Progress loading skeleton -->
+                <div v-if="progressLoading.has(row.uuid)" class="section-skeleton">
+                  <el-skeleton :rows="2" animated />
+                </div>
+
                 <!-- Progress -->
-                <div v-if="jobProgress.get(row.uuid)?.available" class="progress-section">
+                <div v-if="!progressLoading.has(row.uuid) && jobProgress.get(row.uuid)?.available" class="progress-section">
                   <el-progress
                     v-if="jobProgress.get(row.uuid)?.percent != null"
                     :percentage="Math.min(jobProgress.get(row.uuid)!.percent!, 100)"
@@ -258,13 +264,36 @@
                   </div>
                 </div>
 
-                <!-- Input Parameters (INCAR + KPOINTS, lazy loaded) -->
+                <!-- Input Parameters loading skeleton -->
+                <div v-if="inputParamsLoading.has(row.uuid)" class="section-skeleton">
+                  <el-skeleton :rows="3" animated />
+                </div>
+
+                <!-- Input Parameters (lazy loaded) -->
                 <div
-                  v-if="jobInputParams.get(row.uuid)?.available"
+                  v-if="!inputParamsLoading.has(row.uuid) && jobInputParams.get(row.uuid)?.available"
                   class="input-params-section"
                 >
                   <el-collapse>
                     <el-collapse-item title="Input Parameters">
+                      <!-- Generic parameters table (PRE_NAMD / NAMD) -->
+                      <template v-if="jobInputParams.get(row.uuid)?.parameters">
+                        <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">
+                          {{ jobInputParams.get(row.uuid)?.parameters_title || 'Parameters' }}
+                        </el-text>
+                        <el-descriptions :column="2" border size="small" class="incar-table">
+                          <el-descriptions-item
+                            v-for="(val, key) in jobInputParams.get(row.uuid)!.parameters!"
+                            :key="key"
+                          >
+                            <template #label>
+                              <span>{{ key }}</span>
+                            </template>
+                            {{ val }}
+                          </el-descriptions-item>
+                        </el-descriptions>
+                      </template>
+
                       <!-- INCAR table -->
                       <template v-if="jobInputParams.get(row.uuid)?.incar">
                         <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">INCAR</el-text>
@@ -309,17 +338,22 @@
                   </el-collapse>
                 </div>
 
-                <!-- MD Timeseries chart (NVT/NVE jobs) -->
+                <!-- MD Timeseries chart (NVT/NVE jobs) — visible once progress data is available -->
                 <JobMdTimeseriesPanel
-                  v-if="isMdJob(row)"
+                  v-if="!progressLoading.has(row.uuid) && isMdJob(row)"
                   :task-id="taskId"
                   :job-uuid="row.uuid"
                   :step-type="jobProgress.get(row.uuid)?.step_type"
                 />
 
+                <!-- Output files loading skeleton -->
+                <div v-if="filesLoading.has(row.uuid)" class="section-skeleton">
+                  <el-skeleton :rows="3" animated />
+                </div>
+
                 <!-- Output files section (categorized, images first with preview) -->
                 <div
-                  v-if="jobFiles.get(row.uuid)?.files?.length"
+                  v-if="!filesLoading.has(row.uuid) && jobFiles.get(row.uuid)?.files?.length"
                   class="files-section"
                 >
                   <template
@@ -402,6 +436,101 @@
                     </el-table>
                   </template>
                 </div>
+
+                <!-- Subdirectory groups (SCF frames, NVT attempts, etc.) -->
+                <div
+                  v-if="!filesLoading.has(row.uuid) && jobFiles.get(row.uuid)?.subdirs?.length"
+                  class="subdirs-section"
+                >
+                  <template
+                    v-for="sdGroup in groupSubdirsByPrefix(jobFiles.get(row.uuid)!.subdirs)"
+                    :key="sdGroup.prefix"
+                  >
+                    <el-divider content-position="left">
+                      <el-icon><FolderOpened /></el-icon>
+                      {{ sdGroup.label }} ({{ sdGroup.subdirs.length }})
+                    </el-divider>
+
+                    <el-collapse class="subdir-collapse" accordion>
+                      <el-collapse-item
+                        v-for="sd in sdGroup.subdirs"
+                        :key="sd.name"
+                        :name="sd.name"
+                        @click="loadSubdirFiles(row.uuid, sd.name)"
+                      >
+                        <template #title>
+                          <div class="subdir-title">
+                            <el-icon><Folder /></el-icon>
+                            <span class="subdir-name">{{ sd.name }}</span>
+                            <el-tag
+                              :type="subdirStatusType(sd.status)"
+                              size="small"
+                              effect="plain"
+                              class="subdir-status-tag"
+                            >
+                              {{ sd.status }}
+                            </el-tag>
+                            <span class="subdir-file-count">{{ sd.file_count }} files</span>
+                          </div>
+                        </template>
+
+                        <!-- Lazy-loaded subdirectory contents -->
+                        <div v-if="subdirFilesLoading.has(`${row.uuid}/${sd.name}`)" class="section-skeleton">
+                          <el-skeleton :rows="2" animated />
+                        </div>
+                        <div v-else-if="subdirFiles.get(`${row.uuid}/${sd.name}`)?.files?.length" class="subdir-files-content">
+                          <el-table
+                            :data="subdirFiles.get(`${row.uuid}/${sd.name}`)!.files"
+                            size="small"
+                            class="files-table"
+                            :show-header="false"
+                          >
+                            <el-table-column prop="name" min-width="200">
+                              <template #default="{ row: file }">
+                                <div class="file-name-cell">
+                                  <el-icon><Document /></el-icon>
+                                  <span class="file-name-text">{{ file.name }}</span>
+                                </div>
+                              </template>
+                            </el-table-column>
+                            <el-table-column width="100" align="right">
+                              <template #default="{ row: file }">
+                                <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column width="120" align="center">
+                              <template #default="{ row: file }">
+                                <div class="file-action-cell">
+                                  <el-tooltip
+                                    v-if="file.size > LARGE_FILE_THRESHOLD"
+                                    :content="`Large file (${formatFileSize(file.size)})`"
+                                    placement="top"
+                                  >
+                                    <el-icon class="large-file-warning"><WarningFilled /></el-icon>
+                                  </el-tooltip>
+                                  <el-button
+                                    size="small"
+                                    text
+                                    type="primary"
+                                    @click="downloadSubdirFile(row, sd.name, file.name)"
+                                  >
+                                    <el-icon><Download /></el-icon>
+                                    Download
+                                  </el-button>
+                                </div>
+                              </template>
+                            </el-table-column>
+                          </el-table>
+                        </div>
+                        <el-empty
+                          v-else-if="subdirFiles.has(`${row.uuid}/${sd.name}`) && !subdirFiles.get(`${row.uuid}/${sd.name}`)?.files?.length"
+                          description="No files"
+                          :image-size="40"
+                        />
+                      </el-collapse-item>
+                    </el-collapse>
+                  </template>
+                </div>
               </div>
             </template>
           </el-table-column>
@@ -422,15 +551,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Document, Download, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Document, Download, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, continueTask, deleteTask, getJobFiles, getJobFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { fetchJobError, stopTask, continueTask, deleteTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
 import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
-import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse } from '@/api/types'
+import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
 const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB
@@ -447,6 +576,9 @@ const loading = computed(() => tasksStore.loading)
 // Table ref for programmatic row expansion
 const jobTableRef = ref<ComponentPublicInstance & { toggleRowExpansion: (row: JobStatusItem, expanded: boolean) => void } | null>(null)
 
+// Explicitly tracked expand-row-keys so polling data refreshes do not collapse open rows
+const expandedRowKeys = ref<string[]>([])
+
 // Error expansion state
 const expandedErrors = ref<Set<string>>(new Set())
 const jobErrors = ref<Map<string, JobErrorResponse>>(new Map())
@@ -457,6 +589,15 @@ const jobProgress = ref<Map<string, JobProgressResponse>>(new Map())
 const jobFiles = ref<Map<string, JobFilesResponse>>(new Map())
 const jobInputParams = ref<Map<string, JobInputParamsResponse>>(new Map())
 const imageBlobUrls = ref<Map<string, string>>(new Map())
+
+// Subdirectory file state: keyed by "jobUuid/subdirName"
+const subdirFiles = ref<Map<string, SubdirFilesResponse>>(new Map())
+const subdirFilesLoading = ref<Set<string>>(new Set())
+
+// Per-job loading states for expanded-row sections
+const filesLoading = ref<Set<string>>(new Set())
+const inputParamsLoading = ref<Set<string>>(new Set())
+const progressLoading = ref<Set<string>>(new Set())
 
 // Operation loading states
 const stopping = ref(false)
@@ -526,6 +667,12 @@ async function loadTaskData(): Promise<void> {
   jobInputParams.value.clear()
   expandedErrors.value.clear()
   jobErrors.value.clear()
+  subdirFiles.value.clear()
+  subdirFilesLoading.value.clear()
+  filesLoading.value.clear()
+  inputParamsLoading.value.clear()
+  progressLoading.value.clear()
+  expandedRowKeys.value = []
   for (const url of imageBlobUrls.value.values()) {
     URL.revokeObjectURL(url)
   }
@@ -630,19 +777,30 @@ async function retryJobError(job: JobStatusItem): Promise<void> {
 // Job progress, images, and files
 // ============================================
 
-async function loadJobProgress(job: JobStatusItem): Promise<void> {
+async function loadJobProgress(job: JobStatusItem, showLoading = true): Promise<void> {
+  if (showLoading) {
+    progressLoading.value.add(job.uuid)
+    progressLoading.value = new Set(progressLoading.value)
+  }
   try {
     const progress = await getJobProgress(taskId.value, job.uuid)
     jobProgress.value.set(job.uuid, progress)
     jobProgress.value = new Map(jobProgress.value)
   } catch {
     // Silently ignore progress fetch errors
+  } finally {
+    if (showLoading) {
+      progressLoading.value.delete(job.uuid)
+      progressLoading.value = new Set(progressLoading.value)
+    }
   }
 }
 
 
 async function loadJobFiles(job: JobStatusItem): Promise<void> {
   if (jobFiles.value.has(job.uuid)) return
+  filesLoading.value.add(job.uuid)
+  filesLoading.value = new Set(filesLoading.value)
   try {
     const files = await getJobFiles(taskId.value, job.uuid)
     jobFiles.value.set(job.uuid, files)
@@ -655,7 +813,80 @@ async function loadJobFiles(job: JobStatusItem): Promise<void> {
     }
   } catch {
     // Silently ignore
+  } finally {
+    filesLoading.value.delete(job.uuid)
+    filesLoading.value = new Set(filesLoading.value)
   }
+}
+
+async function loadSubdirFiles(jobUuid: string, subdirName: string): Promise<void> {
+  const key = `${jobUuid}/${subdirName}`
+  if (subdirFiles.value.has(key)) return
+
+  subdirFilesLoading.value.add(key)
+  subdirFilesLoading.value = new Set(subdirFilesLoading.value)
+  try {
+    const result = await getSubdirFiles(taskId.value, jobUuid, subdirName)
+    subdirFiles.value.set(key, result)
+    subdirFiles.value = new Map(subdirFiles.value)
+  } catch {
+    // Silently ignore
+  } finally {
+    subdirFilesLoading.value.delete(key)
+    subdirFilesLoading.value = new Set(subdirFilesLoading.value)
+  }
+}
+
+function downloadSubdirFile(job: JobStatusItem, subdir: string, filename: string): void {
+  getSubdirFile(taskId.value, job.uuid, subdir, filename).then(blob => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }).catch(() => {
+    ElMessage.error(`Failed to download ${subdir}/${filename}`)
+  })
+}
+
+function subdirStatusType(status: string): string {
+  switch (status) {
+    case 'completed': return 'success'
+    case 'running': return 'warning'
+    case 'failed': return 'danger'
+    case 'pending': return 'info'
+    default: return 'info'
+  }
+}
+
+/** Group subdirs by prefix (e.g. "scf_" -> "SCF Frames") for nested collapse */
+interface SubdirGroup {
+  label: string
+  prefix: string
+  subdirs: SubdirInfo[]
+}
+
+function groupSubdirsByPrefix(subdirs: SubdirInfo[]): SubdirGroup[] {
+  const groups = new Map<string, SubdirInfo[]>()
+  for (const sd of subdirs) {
+    // Extract prefix: everything before the last _ + digits
+    const match = sd.name.match(/^(.+?)_\d+$/)
+    const prefix = match ? match[1] : sd.name
+    if (!groups.has(prefix)) groups.set(prefix, [])
+    groups.get(prefix)!.push(sd)
+  }
+  const LABELS: Record<string, string> = {
+    'scf': 'SCF Frames',
+    'nvt_attempt': 'NVT Attempts',
+  }
+  return Array.from(groups.entries()).map(([prefix, sds]) => ({
+    label: LABELS[prefix] || `${prefix} Directories`,
+    prefix,
+    subdirs: sds,
+  }))
 }
 
 async function loadFileBlobUrl(jobUuid: string, fileName: string): Promise<void> {
@@ -675,12 +906,17 @@ async function loadJobInputParams(job: JobStatusItem): Promise<void> {
   // Allow retry if previously cached as unavailable (run_dir may not have existed yet)
   const cached = jobInputParams.value.get(job.uuid)
   if (cached?.available) return
+  inputParamsLoading.value.add(job.uuid)
+  inputParamsLoading.value = new Set(inputParamsLoading.value)
   try {
     const params = await getJobInputParams(taskId.value, job.uuid)
     jobInputParams.value.set(job.uuid, params)
     jobInputParams.value = new Map(jobInputParams.value)
   } catch {
     // Silently ignore
+  } finally {
+    inputParamsLoading.value.delete(job.uuid)
+    inputParamsLoading.value = new Set(inputParamsLoading.value)
   }
 }
 
@@ -743,7 +979,8 @@ async function refreshJobExtras(): Promise<void> {
   const promises: Promise<void>[] = []
   for (const job of jobsStatus.value.jobs) {
     if (job.derived_state === 'RUNNING') {
-      promises.push(loadJobProgress(job))
+      // Pass showLoading=false so background polling does not flash spinners
+      promises.push(loadJobProgress(job, false))
     }
   }
   await Promise.allSettled(promises)
@@ -992,6 +1229,9 @@ function isScfJob(job: JobStatusItem): boolean {
 }
 
 function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): void {
+  // Sync expandedRowKeys so the explicit binding survives data refreshes caused by polling
+  expandedRowKeys.value = expandedRows.map(r => r.uuid)
+
   const isExpanded = expandedRows.some(r => r.uuid === row.uuid)
   if (!isExpanded) return
 
@@ -1261,6 +1501,12 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 /* Input parameters section */
+/* Skeleton placeholder for lazy-loaded sections within an expanded row */
+.section-skeleton {
+  margin: 8px 0;
+  padding: 8px 0;
+}
+
 .input-params-section {
   margin-bottom: 8px;
 }
@@ -1291,5 +1537,53 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   padding: 10px 12px;
   border-radius: 4px;
   margin: 0;
+}
+
+/* Subdirectory section styles */
+.subdirs-section {
+  margin-top: 8px;
+}
+
+.subdir-collapse {
+  border: none;
+}
+
+.subdir-collapse :deep(.el-collapse-item__header) {
+  height: 36px;
+  line-height: 36px;
+  font-size: 13px;
+  background-color: transparent;
+}
+
+.subdir-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.subdir-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.subdir-name {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.subdir-status-tag {
+  font-size: 11px;
+}
+
+.subdir-file-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.subdir-files-content {
+  padding: 0 8px 8px;
 }
 </style>

@@ -108,6 +108,8 @@ export interface TaskSummary {
   num_atoms: number | null
   /** Predecessor task id if this is a resume task */
   prev_task_id: string | null
+  /** Worker used for this task (e.g. "local_slurm", "remote_djs") */
+  worker: string | null
   /** The next step eligible for resume */
   resume_next_step: string | null
   /** Whether this task can be resumed */
@@ -265,10 +267,31 @@ export interface JobFileItem {
 }
 
 /**
+ * Metadata for a subdirectory in a job's run directory.
+ * Returned as part of the initial files listing for lazy-load display.
+ */
+export interface SubdirInfo {
+  name: string
+  file_count: number
+  /** Status derived from marker files: "completed", "failed", "running", "pending", "unknown" */
+  status: string
+}
+
+/**
  * Response listing available files in a job's run directory
  */
 export interface JobFilesResponse {
   available: boolean
+  files: JobFileItem[]
+  subdirs: SubdirInfo[]
+}
+
+/**
+ * Response listing files inside a specific subdirectory (lazy loaded)
+ */
+export interface SubdirFilesResponse {
+  available: boolean
+  subdir: string
   files: JobFileItem[]
 }
 
@@ -333,13 +356,15 @@ export interface JobImagesResponse {
 // ============================================
 
 /**
- * Response containing parsed INCAR and KPOINTS data for a job
+ * Response containing input parameters for a job
  * Returned by GET /frontend/tasks/{taskId}/jobs/{jobUuid}/input-params
  */
 export interface JobInputParamsResponse {
   available: boolean
   incar: Record<string, string> | null
   kpoints_text: string | null
+  parameters: Record<string, string> | null
+  parameters_title: string | null
   warning: string | null
 }
 
