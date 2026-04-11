@@ -1,6 +1,8 @@
 import asyncio
 from copy import deepcopy
+import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 import logging
@@ -8,6 +10,7 @@ import io
 import os
 import sqlite3
 import subprocess
+import tempfile
 import uuid
 import yaml
 from typing import Optional, Tuple, Dict, List, Literal
@@ -21,7 +24,8 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .input import InputT
-from .params import md_tracks
+from .params import md_tracks, md_ase_formats
+
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
 from .tools.scf import qdyn_scf
@@ -168,8 +172,9 @@ class MainWorkflow:
         self,
         input: InputT,
         method: str,
-        stru: Optional[str],
+        stru: str,
         stru_format: str,
+        stru_hash: str,
         resume: bool,
         prev_task_id: str,
     ) -> None:
@@ -222,6 +227,27 @@ class MainWorkflow:
                     f"Provided structure string could not be parsed "
                     f"by ASE with format '{stru_format}'."
                 ) from exc
+            
+        if stru_hash:
+            # Hash format already validated by InputT.validate_stru_hash (pydantic)
+            data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
+            stru_path = data_dir / "trajs" / f"{stru_hash}"
+            if not stru_path.is_file():
+                raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
+            ase_format = md_ase_formats.get(stru_format)
+            if ase_format is None:
+                raise ValidationError(
+                    f"Unsupported trajectory format: '{stru_format}'. "
+                    f"Supported: {', '.join(md_ase_formats.keys())}"
+                )
+            try:
+                ase.io.read(stru_path, format=ase_format, index=0)
+            except Exception as exc:
+                raise ValidationError(
+                    f"Structure with hash '{stru_hash}' could not be parsed "
+                    f"by ASE with format '{ase_format}'."
+                ) from exc
+
 
     # ------------------------------------------------------------------
     # Core logic
@@ -231,8 +257,9 @@ class MainWorkflow:
         self,
         input: InputT,
         method: Literal['namd', 'n2amd'] = 'namd',
-        stru: Optional[str] = '',
+        stru: str = '',
         stru_format: str = 'vasp',
+        stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
     ) -> Dict[str, List[Job | Flow]]:
@@ -247,7 +274,7 @@ class MainWorkflow:
         flag = ''
 
         # pre-flight validation
-        self._validate_input(input, method, stru, stru_format, resume, prev_task_id)
+        self._validate_input(input, method, stru, stru_format, stru_hash, resume, prev_task_id)
 
         if method == 'namd':
             key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
@@ -404,30 +431,34 @@ class MainWorkflow:
             else:
                 prev_step = 'nve'
                 next_step = 'pre_namd'
-                xdatcar_path = ""
                 if prev_step in input.steps:
-                    # NVE in the same flow: OutputReference resolves to a directory
-                    xdatcar_path = jobs[prev_step][0].output['run_dir']
+                    # NVE in the same flow: OutputReference resolves to traj path
+                    traj_file_path = jobs[prev_step][0].output['traj_file_path']
+                    traj_format = input.basic_input.software
                 elif first_step == 'scf' and resume:
                     # Resume SCF from a previous task
                     try:
                         prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
                         nve_output = self.get_job_output(prev_job_uuid)
-                        xdatcar_path = nve_output['run_dir']
+                        if 'traj_file_path' in nve_output:
+                            traj_file_path = nve_output['traj_file_path']
+                        else:
+                            # Backward compat: old NVE output without traj_file_path
+                            # TODO: remove this fallback
+                            traj_file_path = os.path.join(
+                                nve_output['run_dir'],
+                                md_tracks[software.lower()],
+                            )
+                        traj_format = input.basic_input.software
                     except Exception as exc:
                         raise ResumeError(
                             f"Previous job for step '{prev_step}' not found or has no output. "
                             f"Cannot resume scf."
                         ) from exc
-                elif stru:
-                    # User-provided structure text: write to trajectory file
-                    strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-                    work_dir = self.jf_config['workers']['local_slurm']['work_dir']
-                    stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
-                    stru_dir.mkdir(parents=True, exist_ok=True)
-                    xdatcar_file = str(stru_dir / md_tracks[software])
-                    ase.io.write(xdatcar_file, strus_ase, format='vasp-xdatcar')
-                    xdatcar_path = xdatcar_file
+                elif stru_hash:
+                    data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
+                    traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
+                    traj_format = stru_format
                 else:
                     raise ValidationError(
                         "SCF step requires NVE output. Include 'nve' in steps, "
@@ -450,7 +481,8 @@ class MainWorkflow:
                     parameters=input.scf_input,
                     pp_path=pp_path,
                     orb_path=orb_path,
-                    xdatcar_path=xdatcar_path,
+                    traj_file_path=traj_file_path,
+                    traj_format=traj_format,
                     nodes=nodes,
                     ntasks_per_node=ntasks_per_node,
                     cpus_per_task=cpus_per_task,
@@ -630,8 +662,9 @@ class MainWorkflow:
         self,
         input: InputT,
         method: Literal['namd', 'n2amd'] = 'namd',
-        stru: Optional[str] = '',
+        stru: str = '',
         stru_format: str = 'vasp',
+        stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
     ) -> Tuple[str, Dict[str, List[str]]]:
@@ -642,6 +675,7 @@ class MainWorkflow:
             method=method,
             stru=stru,
             stru_format=stru_format,
+            stru_hash=stru_hash,
             resume=resume,
             prev_task_id=prev_task_id,
         )

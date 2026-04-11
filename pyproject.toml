@@ -10,6 +10,7 @@ dependencies = [
     # This fork mirrors the PR content; switch back to upstream after merge.
     "jobflow-remote @ git+https://github.com/bud-primordium/jobflow-remote.git@b3e7694",
     "fastapi>=0.135.1",
+    "python-multipart>=0.0.20",
     "uvicorn>=0.41.0",
     "pyjwt>=2.8.0",
     "bcrypt>=4.0.0",

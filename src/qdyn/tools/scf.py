@@ -27,8 +27,9 @@ from ase import Atoms
 from jobflow import job
 
 from ..input import SCFInputT
-from ..params import params_default, chg_name, ipt_files, stru_files, md_tracks
+from ..params import params_default, chg_name, ipt_files, stru_files
 from ..input_prepare import prepare_vasp_inputs
+from .nve import read_strus
 from .run_software import run_software
 
 # Status file names
@@ -42,7 +43,8 @@ def qdyn_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    xdatcar_path: str,
+    traj_file_path: str,
+    traj_format: str = 'vasp-xdatcar',
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
@@ -64,10 +66,10 @@ def qdyn_scf(
         Path to pseudopotential files.
     orb_path : str
         Path to orbital files.
-    xdatcar_path : str
-        Path to the trajectory file (e.g. XDATCAR for VASP), or to
-        a directory containing it. If a directory is given, the
-        appropriate trajectory filename is appended automatically.
+    traj_file_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP).
+    traj_format : str
+        Format of the trajectory file.
     nodes : int
         Number of nodes.
     ntasks_per_node : int
@@ -103,7 +105,8 @@ def qdyn_scf(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            xdatcar_path=xdatcar_path,
+            traj_file_path=traj_file_path,
+            traj_format=traj_format,
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
@@ -122,7 +125,8 @@ def qdyn_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    xdatcar_path: str,
+    traj_file_path: str,
+    traj_format: str = 'vasp-xdatcar',
     frame_start: int = 0,
     frame_end: int = 0,
     nodes: int = 1,
@@ -149,10 +153,10 @@ def qdyn_scf_task(
         Pseudopotential path.
     orb_path : str
         Orbital file path.
-    xdatcar_path : str
-        Path to the trajectory file (e.g. XDATCAR for VASP), or to
-        a directory containing it. If a directory is given, the
-        appropriate trajectory filename is appended automatically.
+    traj_file_path : str
+        Path to the trajectory file (e.g. XDATCAR for VASP).
+    traj_format : str
+        Format of the trajectory file (e.g. 'vasp-xdatcar').
     frame_start : int
         Global frame index of the first structure (0-based).
     frame_end : int
@@ -181,17 +185,7 @@ def qdyn_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    # Resolve trajectory file path
-    if os.path.isdir(xdatcar_path):
-        track_file = os.path.join(xdatcar_path, md_tracks[software_lower])
-    else:
-        track_file = xdatcar_path
-
-    match software_lower:
-        case 'vasp':
-            all_strus = ase.io.read(track_file, format='vasp-xdatcar', index=':')
-        case _:
-            raise ValueError(f"Unsupported software: {software_lower}")
+    all_strus = read_strus(traj_format, traj_file_path=traj_file_path)
     selected_structures = all_strus[-scf_step:]
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)

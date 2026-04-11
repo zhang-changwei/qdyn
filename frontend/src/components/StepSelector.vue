@@ -37,7 +37,7 @@
         <span v-else-if="resume">
           Resume mode: Select contiguous steps to run.
         </span>
-        <span v-else>Steps must be selected in order: nvt, nvt + nve, nvt + nve + scf, etc.</span>
+        <span v-else>Select contiguous steps starting from NVT or SCF (e.g. nvt + nve + scf, or scf + pre_namd + namd).</span>
       </el-text>
     </div>
   </div>
@@ -110,24 +110,44 @@ function isStepSelectable(step: string): boolean {
     return props.modelValue.includes(prevStep)
   }
 
-  // Resume mode without completed steps: standard contiguous from nvt
-  // (fall through to normal mode logic)
-
-  // Normal mode
-  if (props.modelValue.length === 0) {
-    return step === 'nvt'
+  // Resume mode without completed steps: only allow starting from nvt
+  if (props.resume) {
+    const allowedFirstSteps = ['nvt']
+    if (props.modelValue.length === 0) {
+      return allowedFirstSteps.includes(step)
+    }
+    if (props.modelValue.includes(step)) return true
+    const selectedIndices = props.modelValue.map(s => stepOrder.value.indexOf(s)).sort((a, b) => a - b)
+    return stepIndex === selectedIndices[selectedIndices.length - 1] + 1
   }
 
+  // Normal (new task) mode — allow starting from nvt or scf
+  const allowedFirstSteps = ['nvt', 'scf']
+  if (props.modelValue.length === 0) {
+    return allowedFirstSteps.includes(step)
+  }
+
+  // Already selected — always allow unchecking
   if (props.modelValue.includes(step)) {
     return true
   }
 
-  if (stepIndex === 0) {
+  // Determine the current contiguous range boundaries
+  const selectedIndices = props.modelValue.map(s => stepOrder.value.indexOf(s)).sort((a, b) => a - b)
+  const minIdx = selectedIndices[0]
+  const maxIdx = selectedIndices[selectedIndices.length - 1]
+
+  // Allow extending one step after the current range
+  if (stepIndex === maxIdx + 1) {
     return true
   }
 
-  const previousStep = stepOrder.value[stepIndex - 1]
-  return props.modelValue.includes(previousStep)
+  // Allow extending one step before the current range (but not below allowed first steps)
+  if (stepIndex === minIdx - 1 && allowedFirstSteps.includes(step)) {
+    return true
+  }
+
+  return false
 }
 
 function isArrowActive(step: string): boolean {

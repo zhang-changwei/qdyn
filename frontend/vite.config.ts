@@ -25,6 +25,7 @@ export default defineConfig(({ mode }) => {
         '/healthz': { target: apiTarget, changeOrigin: true },
         '/frontend': { target: apiTarget, changeOrigin: true },
         '/schema': { target: apiTarget, changeOrigin: true },
+        '/upload': { target: apiTarget, changeOrigin: true },
       }
     }
   }
