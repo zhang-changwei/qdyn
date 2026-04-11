@@ -112,8 +112,8 @@ def test_submit_uses_pool_dispatch(monkeypatch):
     assert captured["submitted_worker"] == "local_slurm_002"
 
 
-def test_legacy_workers_config_raises():
-    """Verify that legacy 'workers' config format raises ConfigError."""
+def test_old_workers_config_raises():
+    """Verify that old 'workers' config format raises ConfigError."""
     manager = MainWorkflow.__new__(MainWorkflow)
     manager.config = {
         "workers": {
@@ -122,11 +122,11 @@ def test_legacy_workers_config_raises():
     }
     manager.jf_config = {}
 
-    with pytest.raises(ConfigError, match="Legacy 'workers' config format"):
+    with pytest.raises(ConfigError, match="Old 'workers' config format"):
         # Simulate what __init__ does after _load_config
         if 'workers' in manager.config:
             raise ConfigError(
-                "Legacy 'workers' config format is no longer supported. "
+                "Old 'workers' config format is no longer supported. "
                 "Please migrate to the 'worker_pools' format. "
                 "See config/qdyn.yaml.example for the expected structure."
             )

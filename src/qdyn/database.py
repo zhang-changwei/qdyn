@@ -77,7 +77,7 @@ class QdynDB:
                 if col == "pool_name":
                     added_pool_name = True
 
-        # Backfill pool_name for legacy rows: worker='local_slurm' -> pool_name='local_slurm'
+        # Backfill pool_name for pre-pool rows: worker='local_slurm' -> pool_name='local_slurm'
         if added_pool_name:
             self._conn.execute(
                 "UPDATE task_owners SET pool_name = 'local_slurm' "

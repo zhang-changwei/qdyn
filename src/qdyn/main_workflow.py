@@ -87,7 +87,7 @@ class MainWorkflow:
         # Only the pool-based format (worker_pools) is supported.
         if 'workers' in self.config:
             raise ConfigError(
-                "Legacy 'workers' config format is no longer supported. "
+                "Old 'workers' config format is no longer supported. "
                 "Please migrate to the 'worker_pools' format. "
                 "See config/qdyn.yaml.example for the expected structure."
             )
@@ -146,7 +146,7 @@ class MainWorkflow:
         # Validate config format: only pool-based is supported.
         if 'workers' in cfg:
             raise ConfigError(
-                "Legacy 'workers' config format is no longer supported. "
+                "Old 'workers' config format is no longer supported. "
                 "Please migrate to the 'worker_pools' format. "
                 "See config/qdyn.yaml.example for the expected structure."
             )
@@ -1137,8 +1137,6 @@ class MainWorkflow:
         )
 
         # Determine the worker name passed to submit_flow().
-        # If a runtime_worker is provided (pool dispatch), use it;
-        # otherwise fall back to effective_worker_name (legacy / old config).
         submit_worker = runtime_worker or effective_worker_name
 
         jobs = self.main_workflow(

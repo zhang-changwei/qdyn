@@ -119,7 +119,7 @@ def _validate(
                     )
                     continue
 
-                # Reject legacy 'profile' key
+                # Reject deprecated 'profile' key
                 if "profile" in pool_def:
                     errors.append(
                         f"{qdyn_path}: worker_pools.{pool_name} uses deprecated "
