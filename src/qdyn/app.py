@@ -355,6 +355,7 @@ def _sync_dispatch(
         method=method,
         stru=input_obj.stru,
         stru_format=input_obj.stru_format,
+        stru_hash=input_obj.stru_hash,
         resume=resume,
         prev_task_id=prev_task_id,
         task_id=task_id,

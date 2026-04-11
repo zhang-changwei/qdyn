@@ -431,13 +431,13 @@ async def _locked_dispatch(
         # Submit via jobflow-remote (synchronous, offloaded to thread).
         final_task_id, job_ids, effective_worker = await asyncio.to_thread(
             workflow.submit,
-            input_obj,              # input
-            method,                 # method
-            input_obj.stru,         # stru
-            input_obj.stru_format,  # stru_format
-            resume,                 # resume
-            prev_task_id,           # prev_task_id
-            None,                   # worker (positional — not used in pool mode)
+            input=input_obj,
+            method=method,
+            stru=input_obj.stru,
+            stru_format=input_obj.stru_format,
+            stru_hash=input_obj.stru_hash,
+            resume=resume,
+            prev_task_id=prev_task_id,
             task_id=task_id,
             username=username,
             pool_name=pool_name,
