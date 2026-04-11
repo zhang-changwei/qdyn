@@ -18,7 +18,6 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Reusable json_schema_extra constants for UI metadata
 # ---------------------------------------------------------------------------
-SCF_THR_OPTIONS = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
 HIDDEN_FIELD: dict[str, Any] = {"hidden": True}
 ADVANCED_GROUP: dict[str, Any] = {"group": "advanced"}
 
@@ -49,9 +48,9 @@ class NAMDInputT(BaseModel):
 
     md_dt: float = Field(
         1.0,
-        ge=0.1, le=10,
+        ge=1e-6, le=1000,
         description="MD time step in fs",
-        json_schema_extra={"precision": 2},
+        json_schema_extra={"step": 0.01, "precision": 4},
     )
     adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
     surface_hopping: Literal['FSSH', 'DISH'] = Field(
@@ -62,15 +61,15 @@ class NAMDInputT(BaseModel):
     nelm: int = Field(10, ge=1, le=1000, description="Number of electronic substeps")
     namdtime: int = Field(
         1_000_000,
-        ge=1000,
+        ge=1,
         description="Total number of NAMD time steps",
         json_schema_extra={"step": 100000},
     )
     temperature: float = Field(
         300.0,
-        ge=1, le=10000,
+        ge=0.0,
         description="Simulation temperature in K",
-        json_schema_extra={"precision": 1},
+        json_schema_extra={"step": 1.0, "precision": 3},
     )
     lhole: bool = Field(False, description="Whether to simulate hole dynamics")
     inibands: List[int] = Field(
@@ -126,9 +125,9 @@ class PreNAMDInputT(BaseModel):
     )
     md_dt: float = Field(
         1.0,
-        ge=0.1, le=10,
+        ge=1e-6, le=1000,
         description="MD time step in fs",
-        json_schema_extra={"precision": 2},
+        json_schema_extra={"step": 0.01, "precision": 4},
     )
     adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
     surface_hopping: Literal['FSSH', 'DISH'] = Field(
@@ -156,42 +155,42 @@ class NVTInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=0.01, le=1,
+        ge=1e-4, le=10.0,
         description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.01, "precision": 3},
+        json_schema_extra={"step": 0.001, "precision": 4},
     )
     md_thermostat: Literal['nhc', 'rescale_v'] = Field(
         'rescale_v', description="MD thermostat method",
     )
     md_dt: float = Field(
         1.0,
-        ge=0.1, le=10,
+        ge=1e-6, le=1000,
         description="MD time step in fs",
-        json_schema_extra={"step": 0.5, "precision": 1},
+        json_schema_extra={"step": 0.01, "precision": 4},
     )
     md_step: int = Field(
         1000,
-        ge=100, le=100000,
+        ge=1, le=10000000,
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
     temp_begin: float = Field(
         300.0,
-        ge=1, le=10000,
+        ge=0.0,
         description="Initial temperature in K",
-        json_schema_extra={"step": 50, "precision": 1},
+        json_schema_extra={"step": 1.0, "precision": 3},
     )
     temp_end: float = Field(
         300.0,
-        ge=1, le=10000,
+        ge=0.0,
         description="Final temperature in K",
-        json_schema_extra={"step": 50, "precision": 1},
+        json_schema_extra={"step": 1.0, "precision": 3},
     )
     scf_thr: float = Field(
         1e-6,
-        ge=1e-8, le=1e-4,
+        ge=1e-12, le=1.0,
         description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+        json_schema_extra={"widget": "log-step"},
     )
 
     parameters: str = Field(
@@ -216,29 +215,29 @@ class NVEInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=0.01, le=1,
+        ge=1e-4, le=10.0,
         description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.01, "precision": 3},
+        json_schema_extra={"step": 0.001, "precision": 4},
     )
 
     # MD parameters
     md_dt: float = Field(
         1.0,
-        ge=0.1, le=10,
+        ge=1e-6, le=1000,
         description="MD time step in fs",
-        json_schema_extra={"step": 0.5, "precision": 1},
+        json_schema_extra={"step": 0.01, "precision": 4},
     )
     md_step: int = Field(
         1000,
-        ge=100, le=100000,
+        ge=1, le=10000000,
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
     scf_thr: float = Field(
         1e-6,
-        ge=1e-8, le=1e-4,
+        ge=1e-12, le=1.0,
         description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+        json_schema_extra={"widget": "log-step"},
     )
 
     parameters: str = Field(
@@ -263,30 +262,30 @@ class SCFInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=0.01, le=1,
+        ge=1e-4, le=10.0,
         description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.01, "precision": 3},
+        json_schema_extra={"step": 0.001, "precision": 4},
     )
 
     # SCF-specific
     scf_thr: float = Field(
         1e-6,
-        ge=1e-8, le=1e-4,
+        ge=1e-12, le=1.0,
         description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "exp-select", "options": SCF_THR_OPTIONS},
+        json_schema_extra={"widget": "log-step"},
     )
 
     # job control
     scf_step: int = Field(
         1000,
-        ge=1, le=10000,
+        ge=1, le=10000000,
         description="Number of SCF frames to calculate",
         json_schema_extra={"step": 100},
     )
 
     batch_size: int = Field(
         100,
-        ge=1, le=500,
+        ge=1, le=10000,
         description="Number of frames per batch task. Smaller batches mean more parallel tasks.",
         json_schema_extra={"step": 10},
     )

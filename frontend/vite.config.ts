@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
         '/auth': { target: apiTarget, changeOrigin: true },
         '/submit': { target: apiTarget, changeOrigin: true },
         '/tasks': { target: apiTarget, changeOrigin: true },
+        '/workers': { target: apiTarget, changeOrigin: true },
         '/healthz': { target: apiTarget, changeOrigin: true },
         '/frontend': { target: apiTarget, changeOrigin: true },
         '/schema': { target: apiTarget, changeOrigin: true },

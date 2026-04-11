@@ -17,6 +17,23 @@
       </el-radio-group>
     </el-card>
 
+    <!-- Worker selector (shown when multiple workers available) -->
+    <el-card v-if="availableWorkers.length > 1" class="form-section">
+      <template #header>
+        <span class="section-title">Compute Worker</span>
+      </template>
+      <el-form-item label="Submit to">
+        <el-select v-model="selectedWorker" style="width: 100%;">
+          <el-option
+            v-for="w in availableWorkers"
+            :key="w"
+            :label="w"
+            :value="w"
+          />
+        </el-select>
+      </el-form-item>
+    </el-card>
+
     <el-form
       ref="formRef"
       :model="formData"
@@ -30,7 +47,7 @@
           <span class="section-title">1. Select Previous Task</span>
         </template>
         <el-alert
-          title="Structure will be inherited from the selected task"
+          title="Structure will be inherited from the selected task. Only tasks from the same worker are shown — cross-worker resume is not currently supported as some steps rely on run directory paths that are not accessible across workers."
           type="info"
           show-icon
           :closable="false"
@@ -40,6 +57,7 @@
           v-model="selectedResumeTaskId"
           :tasks="resumeTasks"
           :loading="resumeTasksLoading"
+          :selected-worker="selectedWorker"
           @task-selected="handleResumeTaskSelected"
         />
       </el-card>
@@ -321,6 +339,10 @@ const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
 const schemas = ref<StepInputSchemas | null>(null)
 
+// Worker selection state
+const availableWorkers = ref<string[]>([])
+const selectedWorker = ref<string>('')
+
 // Resume mode state
 const submitMode = ref<'new' | 'resume'>('new')
 const resumeTasks = ref<TaskSummary[]>([])
@@ -365,6 +387,17 @@ const isSubmitDisabled = computed(() => {
 })
 
 onMounted(async () => {
+  // Fetch available workers
+  try {
+    const resp = await http.get<{ workers: string[]; default: string }>('/workers')
+    availableWorkers.value = resp.data.workers
+    selectedWorker.value = resp.data.default
+  } catch {
+    // Fallback: single default worker, selector stays hidden
+    availableWorkers.value = []
+    selectedWorker.value = ''
+  }
+
   try {
     schemas.value = await getStepInputSchemas()
     // Backfill defaults for any steps already selected before schema loaded
@@ -449,6 +482,15 @@ watch(
   },
   { deep: true }
 )
+
+watch(selectedWorker, (newWorker, oldWorker) => {
+  if (!oldWorker || newWorker === oldWorker) {
+    return
+  }
+  selectedResumeTaskId.value = null
+  selectedResumeTask.value = null
+  formData.steps = []
+})
 
 // ---------------------------------------------------------------------------
 // POSCAR upload handlers (existing)
@@ -743,10 +785,13 @@ async function handleSubmit(): Promise<void> {
     ...(formData.steps.includes('namd') && { namd_input: formData.namd_input })
   }
 
-  // Build URL with optional resume parameters
+  // Build URL with optional resume and worker parameters
   let submitUrl = `/submit?method=${formData.method}`
   if (isResume) {
     submitUrl += `&resume=true&prev_task_id=${selectedResumeTaskId.value}`
+  }
+  if (selectedWorker.value) {
+    submitUrl += `&worker=${encodeURIComponent(selectedWorker.value)}`
   }
 
   submitting.value = true
