@@ -118,6 +118,15 @@ def _validate(
                         f"{qdyn_path}: worker_pools.{pool_name} must be a mapping"
                     )
                     continue
+
+                # Reject legacy 'profile' key
+                if "profile" in pool_def:
+                    errors.append(
+                        f"{qdyn_path}: worker_pools.{pool_name} uses deprecated "
+                        f"'profile' key. Rename 'profile' to 'worker' and move "
+                        f"type/scheduler_type/max_jobs/resources from 'pool' to 'worker'."
+                    )
+
                 pool_params = pool_def.get("pool", {})
                 if not pool_params.get("size"):
                     errors.append(
@@ -127,6 +136,14 @@ def _validate(
                     errors.append(
                         f"{qdyn_path}: worker_pools.{pool_name}.pool.work_dir_base is required"
                     )
+
+                # Reject jf-remote fields still under 'pool' (should be under 'worker')
+                for stale_key in ("type", "scheduler_type", "max_jobs", "resources"):
+                    if stale_key in pool_params:
+                        errors.append(
+                            f"{qdyn_path}: worker_pools.{pool_name}.pool.{stale_key} "
+                            f"should be under 'worker', not 'pool'."
+                        )
 
     # active_pool must reference a defined pool
     active_pool = qdyn_cfg.get("active_pool")
@@ -156,16 +173,22 @@ def _expand_pool_workers(
     Returns a dict mapping worker names to their jf-remote worker configs.
     Example: local_slurm with size=3 produces:
         local_slurm_001, local_slurm_002, local_slurm_003
+
+    jf-remote fields (type, scheduler_type, max_jobs, resources) are read
+    from pool_def['worker'].  Pool-level fields (size, work_dir_base) are
+    read from pool_def['pool'].
     """
     pool_params = pool_def.get("pool", {})
-    size: int = pool_params["size"]
-    max_jobs: int = pool_params.get("max_jobs", 1)
-    work_dir_base: str = pool_params["work_dir_base"]
-    resources: dict = pool_params.get("resources", {})
+    worker_params = pool_def.get("worker", {})
 
-    # Determine worker type from pool config (default: local)
-    worker_type: str = pool_params.get("type", "local")
-    scheduler_type: str = pool_params.get("scheduler_type", "slurm")
+    size: int = pool_params["size"]
+    work_dir_base: str = pool_params["work_dir_base"]
+
+    # jf-remote worker fields come from the 'worker' section
+    max_jobs: int = worker_params.get("max_jobs", 1)
+    resources: dict = worker_params.get("resources", {})
+    worker_type: str = worker_params.get("type", "local")
+    scheduler_type: str = worker_params.get("scheduler_type", "slurm")
 
     workers: Dict[str, Dict[str, Any]] = {}
     # Zero-pad width: enough digits for the pool size

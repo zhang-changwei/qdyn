@@ -1,12 +1,11 @@
 # qdyn.yaml.example — QDYN configuration template
 # Copy to config/qdyn.yaml and modify as needed.
 #
-# Config format: "worker pool" — each pool defines execution profile and
-# pool parameters.  Workers are auto-generated as {pool_name}_{NNN}.
+# Config format: "worker pool" — each pool has two sub-sections:
+#   'pool'   — pool-level parameters (size, polling, work directory)
+#   'worker' — per-worker execution environment and jf-remote settings
+# Workers are auto-generated as {pool_name}_{NNN} in the jf config.
 # Use scripts/generate_jf_config.py to produce the jf project YAML.
-#
-# Legacy format (top-level 'workers' key with flat worker dicts) is still
-# supported for backward compatibility.
 
 basic:
   jf_project_path: "config/jf_qdyn.yaml"
@@ -21,11 +20,22 @@ active_pool: local_slurm
 
 # Worker pool definitions.
 # Each pool generates N workers named {pool_name}_{NNN} in the jf config.
-# 'profile' contains execution environment (modules, exports, pre_run, etc.).
-# 'pool' contains pool parameters (size, quotas, resources for jf workers).
+# 'pool' contains pool-level parameters (size, polling interval, work dir).
+# 'worker' contains per-worker settings: jf-remote fields (type, scheduler_type,
+# resources, max_jobs) plus QDYN execution environment (partition, modules, etc.).
 worker_pools:
   local_slurm:
-    profile:
+    pool:
+      size: 30
+      queue_poll_interval: 60    # seconds between queue polling rounds
+      work_dir_base: /absolute/path/to/runs
+    worker:
+      type: local                # jf-remote worker type
+      scheduler_type: slurm      # jf-remote scheduler type
+      max_jobs: 20
+      resources:
+        partition: chu
+        time: "48:00:00"
       partition: chu
       cpus_per_node: 96
       modules:
@@ -54,14 +64,6 @@ worker_pools:
         vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
       scf:
         vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
-    pool:
-      size: 30
-      max_jobs: 20
-      queue_poll_interval: 60    # seconds between queue polling rounds
-      work_dir_base: /absolute/path/to/runs
-      resources:
-        partition: chu
-        time: "48:00:00"
 
 auth:
   secret_key: ""  # leave empty to auto-generate on first start

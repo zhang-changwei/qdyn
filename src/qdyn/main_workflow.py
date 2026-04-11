@@ -107,7 +107,14 @@ class MainWorkflow:
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
         pool_def = self.config['worker_pools'][self.active_pool_name]
-        self.pool_profile_cfg: dict = pool_def.get('profile', {})
+        if 'profile' in pool_def:
+            raise ConfigError(
+                f"Pool '{self.active_pool_name}' uses deprecated 'profile' key. "
+                f"Rename 'profile' to 'worker' and move type/scheduler_type/"
+                f"max_jobs/resources from 'pool' to 'worker'. "
+                f"See config/qdyn.yaml.example for the expected structure."
+            )
+        self.pool_profile_cfg: dict = pool_def.get('worker', {})
         self.pool_config: dict = pool_def.get('pool', {})
         # Convenience aliases used throughout the codebase.
         self.worker_name: str = self.active_pool_name
@@ -165,9 +172,9 @@ class MainWorkflow:
     def _resolve_worker_context(
         self, pool_name_override: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
-        """Resolve the effective pool name and profile config.
+        """Resolve the effective pool name and worker config.
 
-        Returns (pool_name, pool_profile_cfg) so that callers can build
+        Returns (pool_name, worker_cfg) so that callers can build
         ExecutionConfig / resource dicts uniformly.
         """
         pool_name = pool_name_override or self.active_pool_name
@@ -176,7 +183,7 @@ class MainWorkflow:
                 f"Pool '{pool_name}' not found in config. "
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
-        return pool_name, self.config['worker_pools'][pool_name].get('profile', {})
+        return pool_name, self.config['worker_pools'][pool_name].get('worker', {})
 
     # ------------------------------------------------------------------
     # Pool helpers
@@ -185,9 +192,9 @@ class MainWorkflow:
     def _resolve_pool_context(
         self, pool_name: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
-        """Resolve pool name, profile config, and pool parameters.
+        """Resolve pool name, worker config, and pool parameters.
 
-        Returns (pool_name, pool_profile_cfg, pool_config).
+        Returns (pool_name, worker_cfg, pool_config).
         """
         name = pool_name or self.active_pool_name
         if name not in self.config['worker_pools']:
@@ -196,7 +203,7 @@ class MainWorkflow:
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
         pool_def = self.config['worker_pools'][name]
-        return name, pool_def.get('profile', {}), pool_def.get('pool', {})
+        return name, pool_def.get('worker', {}), pool_def.get('pool', {})
 
     def _get_pool_workers(self, pool_name: Optional[str] = None) -> List[str]:
         """Return runtime worker names belonging to a pool.
@@ -375,7 +382,7 @@ class MainWorkflow:
 
         For a runtime worker (e.g. ``local_slurm_001``), reads directly
         from ``jf_config['workers']``.  For a pool name, returns the
-        ``work_dir_base`` from the pool config — this is the shared
+        ``work_dir_base`` from the pool config -- this is the shared
         parent directory for all pool workers.
         """
         jf_workers = self.jf_config.get('workers', {})
@@ -383,11 +390,8 @@ class MainWorkflow:
             return jf_workers[worker_name].get('work_dir', '')
 
         # Pool name: return pool.work_dir_base from qdyn.yaml
-        if 'worker_pools' in self.config:
-            pool_def = self.config['worker_pools'].get(worker_name, {})
-            return pool_def.get('pool', {}).get('work_dir_base', '')
-
-        return ''
+        pool_def = self.config['worker_pools'].get(worker_name, {})
+        return pool_def.get('pool', {}).get('work_dir_base', '')
 
     def _get_config(self, worker_name: str, worker_cfg: Dict[str, Any], *keys: str):
         """Traverse worker_cfg by key path, raising ConfigError if missing.
@@ -449,7 +453,7 @@ class MainWorkflow:
         In pool-based mode, *worker_name* might be a pool name (e.g.
         ``local_slurm``) rather than a runtime worker name (e.g.
         ``local_slurm_001``).  When the exact name is not found in
-        ``jf_config['workers']``, we fall back to reading pool.resources
+        ``jf_config['workers']``, we fall back to reading worker.resources
         from qdyn.yaml (which is what the jf config generator uses to
         populate each runtime worker's resources).
         """
@@ -457,12 +461,9 @@ class MainWorkflow:
         if worker_name in jf_workers:
             return jf_workers[worker_name].get('resources', {})
 
-        # Fallback: pool-based config — use pool.resources from qdyn.yaml
-        if 'worker_pools' in self.config:
-            pool_def = self.config['worker_pools'].get(worker_name, {})
-            return pool_def.get('pool', {}).get('resources', {})
-
-        return {}
+        # Fallback: pool-based config — use worker.resources from qdyn.yaml
+        pool_def = self.config['worker_pools'].get(worker_name, {})
+        return pool_def.get('worker', {}).get('resources', {})
 
     def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
         """Get machine config (partition, cpus_per_node, etc.) for the active worker/pool.
@@ -487,19 +488,16 @@ class MainWorkflow:
         """Check if the named worker is a remote (SSH) worker.
 
         In pool-based mode, if *worker_name* is a pool name (e.g.
-        ``local_slurm``), we check the first pool worker instead.
+        ``local_slurm``), we check the pool's worker.type from qdyn.yaml.
         """
         jf_workers = self.jf_config.get('workers', {})
         if worker_name in jf_workers:
             return jf_workers[worker_name].get('type') in _REMOTE_WORKER_TYPES
 
-        # Pool name: check the pool's type from qdyn.yaml pool config
-        if 'worker_pools' in self.config:
-            pool_def = self.config['worker_pools'].get(worker_name, {})
-            pool_type = pool_def.get('pool', {}).get('type', 'local')
-            return pool_type in _REMOTE_WORKER_TYPES
-
-        return False
+        # Pool name: check the worker's type from qdyn.yaml worker config
+        pool_def = self.config['worker_pools'].get(worker_name, {})
+        worker_type = pool_def.get('worker', {}).get('type', 'local')
+        return worker_type in _REMOTE_WORKER_TYPES
 
     def _get_ssh_cmd(self, worker_name: str, *args: str) -> list[str]:
         """Build an SSH command list using the active worker's connection config."""

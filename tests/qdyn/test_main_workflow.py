@@ -11,7 +11,7 @@ def _make_manager() -> MainWorkflow:
     manager.config = {
         "worker_pools": {
             "local_slurm": {
-                "profile": {
+                "worker": {
                     "partition": "chu",
                     "cpus_per_node": 96,
                     "nvt": {"vasp": {"nodes": 1, "ntasks_per_node": 96, "cpus_per_task": 1}},
@@ -35,7 +35,7 @@ def _make_manager() -> MainWorkflow:
     }
     manager.active_pool_name = "local_slurm"
     pool_def = manager.config["worker_pools"]["local_slurm"]
-    manager.pool_profile_cfg = pool_def.get("profile", {})
+    manager.pool_profile_cfg = pool_def.get("worker", {})
     manager.pool_config = pool_def.get("pool", {})
     manager.worker_name = "local_slurm"
     manager.worker_cfg = manager.pool_profile_cfg
