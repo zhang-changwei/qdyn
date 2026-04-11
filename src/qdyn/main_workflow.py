@@ -316,29 +316,24 @@ class MainWorkflow:
     ) -> Tuple[Optional[str], str]:
         """Select a runtime worker for a new submission.
 
-        Selection logic (final design):
+        Selection logic:
         1. Check whether the pool has any free worker (zero non-terminal
-           jobs).  If not, return ``(None, "pool_full")`` — the caller
+           jobs).  If not, return ``(None, "pool_full")`` -- the caller
            must enqueue the task.
-        2. Check the user's currently occupied workers against
-           ``per_user_max_workers``.  If the user has fewer than the
-           limit, allocate a new free worker (``"new"``).  If the user
-           already has ``per_user_max_workers`` workers, submit to an
-           existing one (``"existing"``).
+        2. If the user already occupies a worker, submit to that existing
+           worker (``"existing"``).  Otherwise allocate a free worker
+           (``"new"``).  Each user occupies at most one worker.
 
         Returns
         -------
         (worker_name, "existing")
-            User already has ``per_user_max_workers`` workers; submit to
-            the first existing worker.
+            User already has a worker; submit to it.
         (worker_name, "new")
-            User has fewer workers than the limit; a free worker was
-            allocated.
+            User has no worker yet; a free worker was allocated.
         (None, "pool_full")
             No free workers in the pool; task must be queued.
         """
         name, _, pool_cfg = self._resolve_pool_context(pool_name)
-        per_user_max = pool_cfg.get('per_user_max_workers', 1)
         pool_workers = self._get_pool_workers(name)
         if not pool_workers:
             logging.warning(
@@ -356,16 +351,14 @@ class MainWorkflow:
             )
             return None, "pool_full"
 
-        # 2. Check the user's occupied workers against per_user_max.
+        # 2. Check whether the user already occupies a worker.
         user_workers = self._get_user_occupied_workers(username, name)
 
-        if len(user_workers) >= per_user_max:
-            # User has reached the per-user worker limit — route to an
-            # existing worker rather than consuming a new one.
+        if user_workers:
+            # User already has a worker -- route to it.
             logging.info(
-                f"User '{username}' already has {len(user_workers)} "
-                f"worker(s) (limit={per_user_max}) in pool '{name}' "
-                f"— submitting to existing worker '{user_workers[0]}'."
+                f"User '{username}' already has worker '{user_workers[0]}' "
+                f"in pool '{name}' -- submitting to existing worker."
             )
             return user_workers[0], "existing"
 

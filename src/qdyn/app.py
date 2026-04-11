@@ -727,7 +727,6 @@ class PoolStatusResponse(BaseModel):
     idle_workers: int
     busy_workers: int
     user_occupied_workers: int
-    per_user_max_workers: int
 
 
 @app.get("/pool/status", response_model=PoolStatusResponse, tags=["pool"])
@@ -763,7 +762,6 @@ def get_pool_status(username: str = Depends(get_current_user)):
         idle_workers=len(pool_workers) - len(busy_workers),
         busy_workers=len(busy_workers),
         user_occupied_workers=len(user_workers),
-        per_user_max_workers=pool_cfg.get("per_user_max_workers", 1),
     )
 
 

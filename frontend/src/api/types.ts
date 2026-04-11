@@ -206,7 +206,6 @@ export interface PoolStatusResponse {
   idle_workers: number
   busy_workers: number
   user_occupied_workers: number
-  per_user_max_workers: number
 }
 
 // ============================================

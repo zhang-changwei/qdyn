@@ -23,7 +23,7 @@
         <span class="section-title">Compute Pool</span>
       </template>
       <ul class="pool-description">
-        <li>Each user can occupy up to <b>{{ poolStatus.per_user_max_workers }}</b> worker at a time.</li>
+        <li>Each user can occupy up to <b>1</b> worker at a time.</li>
         <li>When the pool has free workers: your task goes to your active worker if you have one, or a free worker is assigned to you.</li>
         <li>When all workers are busy: your task enters a shared queue.
           When a worker frees up, users without a worker are served first;
@@ -55,7 +55,7 @@
                 : 'All workers are busy. Your task will be queued and dispatched automatically.')"
             placement="top"
           >
-            <span class="pool-value pool-value-help">{{ poolStatus.user_occupied_workers }} / {{ poolStatus.per_user_max_workers }}</span>
+            <span class="pool-value pool-value-help">{{ poolStatus.user_occupied_workers }} / 1</span>
           </el-tooltip>
         </div>
         <el-alert

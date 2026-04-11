@@ -57,7 +57,6 @@ worker_pools:
     pool:
       size: 30
       max_jobs: 20
-      per_user_max_workers: 1
       queue_poll_interval: 60    # seconds between queue polling rounds
       work_dir_base: /absolute/path/to/runs
       resources:
