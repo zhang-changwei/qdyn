@@ -35,7 +35,7 @@ def _make_manager() -> MainWorkflow:
     }
     manager.active_pool_name = "local_slurm"
     pool_def = manager.config["worker_pools"]["local_slurm"]
-    manager.pool_profile_cfg = pool_def.get("worker", {})
+    manager.pool_worker_cfg = pool_def.get("worker", {})
     manager.pool_config = pool_def.get("pool", {})
     manager.task_ids = []
     manager.job_ids = {}
@@ -51,9 +51,9 @@ def test_is_remote_worker_recognizes_local():
 
 def test_resolve_pool_context():
     manager = _make_manager()
-    name, profile, pool_cfg = manager._resolve_pool_context()
+    name, worker_cfg, pool_cfg = manager._resolve_pool_context()
     assert name == "local_slurm"
-    assert profile["partition"] == "chu"
+    assert worker_cfg["partition"] == "chu"
     assert pool_cfg["size"] == 3
 
 
@@ -108,26 +108,6 @@ def test_submit_uses_pool_dispatch(monkeypatch):
     assert captured["worker_name"] == "local_slurm"
     assert captured["runtime_worker"] == "local_slurm_002"
     assert captured["submitted_worker"] == "local_slurm_002"
-
-
-def test_old_workers_config_raises():
-    """Verify that old 'workers' config format raises ConfigError."""
-    manager = MainWorkflow.__new__(MainWorkflow)
-    manager.config = {
-        "workers": {
-            "local_slurm": {"nvt": {"vasp": {"nodes": 1}}},
-        }
-    }
-    manager.jf_config = {}
-
-    with pytest.raises(ConfigError, match="Old 'workers' config format"):
-        # Simulate what __init__ does after _load_config
-        if 'workers' in manager.config:
-            raise ConfigError(
-                "Old 'workers' config format is no longer supported. "
-                "Please migrate to the 'worker_pools' format. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
 
 
 def test_missing_worker_pools_raises():

@@ -119,14 +119,6 @@ def _validate(
                     )
                     continue
 
-                # Reject deprecated 'profile' key
-                if "profile" in pool_def:
-                    errors.append(
-                        f"{qdyn_path}: worker_pools.{pool_name} uses deprecated "
-                        f"'profile' key. Rename 'profile' to 'worker' and move "
-                        f"type/scheduler_type/max_jobs/resources from 'pool' to 'worker'."
-                    )
-
                 pool_params = pool_def.get("pool", {})
                 if not pool_params.get("size"):
                     errors.append(

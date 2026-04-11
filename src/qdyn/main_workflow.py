@@ -84,13 +84,6 @@ class MainWorkflow:
         self.jc: Optional[JobController] = None
 
         # Resolve active pool / worker configuration.
-        # Only the pool-based format (worker_pools) is supported.
-        if 'workers' in self.config:
-            raise ConfigError(
-                "Old 'workers' config format is no longer supported. "
-                "Please migrate to the 'worker_pools' format. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
         if 'worker_pools' not in self.config:
             raise ConfigError(
                 "Missing 'worker_pools' section in qdyn.yaml. "
@@ -107,14 +100,7 @@ class MainWorkflow:
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
         pool_def = self.config['worker_pools'][self.active_pool_name]
-        if 'profile' in pool_def:
-            raise ConfigError(
-                f"Pool '{self.active_pool_name}' uses unsupported 'profile' key. "
-                f"Rename 'profile' to 'worker' and move type/scheduler_type/"
-                f"max_jobs/resources from 'pool' to 'worker'. "
-                f"See config/qdyn.yaml.example for the expected structure."
-            )
-        self.pool_profile_cfg: dict = pool_def.get('worker', {})
+        self.pool_worker_cfg: dict = pool_def.get('worker', {})
         self.pool_config: dict = pool_def.get('pool', {})
 
     def __del__(self):
@@ -141,12 +127,6 @@ class MainWorkflow:
         logging.info(f"Loaded config from {path}.")
 
         # Validate config format: only pool-based is supported.
-        if 'workers' in cfg:
-            raise ConfigError(
-                "Old 'workers' config format is no longer supported. "
-                "Please migrate to the 'worker_pools' format. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
         if 'worker_pools' not in cfg:
             raise ConfigError(
                 "Missing 'worker_pools' section in qdyn.yaml. "
@@ -465,7 +445,7 @@ class MainWorkflow:
     def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
         """Get machine config (partition, cpus_per_node, etc.) for the active worker/pool.
 
-        In pool-based format, worker_cfg is pool_profile_cfg which
+        In pool-based format, worker_cfg is pool_worker_cfg which
         contains partition, cpus_per_node, etc. directly.
         """
         return worker_cfg
@@ -476,8 +456,7 @@ class MainWorkflow:
         """Get execution config (modules/export/pre_run/pp_path) for the
         current worker/pool and software.
 
-        In pool-based format, worker_cfg is pool_profile_cfg; reads
-        directly from profile.<key>.<software>.
+        Reads from worker_cfg.<key>.<software>.
         """
         return worker_cfg.get(key, {}).get(software)
 
@@ -650,7 +629,7 @@ class MainWorkflow:
         software = input.basic_input.software
         flag = ''
         effective_worker_name = worker_name or self.active_pool_name
-        effective_worker_cfg = worker_cfg or self.pool_profile_cfg
+        effective_worker_cfg = worker_cfg or self.pool_worker_cfg
         # For resource lookups, prefer the runtime worker (has exact jf config)
         resource_worker = runtime_worker or effective_worker_name
 
@@ -830,8 +809,7 @@ class MainWorkflow:
                         if 'traj_file_path' in nve_output:
                             traj_file_path = nve_output['traj_file_path']
                         else:
-                            # Backward compat: old NVE output without traj_file_path
-                            # TODO: remove this fallback
+                            # NVE output before traj_file_path was added
                             traj_file_path = os.path.join(
                                 nve_output['run_dir'],
                                 md_tracks[software.lower()],
