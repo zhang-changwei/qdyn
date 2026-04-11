@@ -274,7 +274,7 @@ def _verify_ownership(task_id: str, username: str) -> None:
 
 
 def _extract_structure_metadata(
-    input: InputT, resume: bool, prev_task_id: str
+    input: InputT, resume: bool, prev_task_id: str, config: dict | None = None
 ) -> tuple:
     """Extract (formula, num_atoms) from input or predecessor task."""
     formula = None
@@ -297,6 +297,23 @@ def _extract_structure_metadata(
                 num_atoms = len(atoms)
             except Exception:
                 logging.warning("Failed to parse structure metadata from POSCAR")
+        elif input.stru_hash and config:
+            data_dir = str(Path(config['basic'].get('user_data', 'data/user_data')).resolve())
+            traj_path = Path(data_dir) / "trajs" / input.stru_hash
+            if traj_path.is_file():
+                try:
+                    from .params import md_ase_formats
+                    ase_fmt = md_ase_formats.get(
+                        input.stru_format, input.stru_format
+                    )
+                    atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+                    formula = atoms.get_chemical_formula()
+                    num_atoms = len(atoms)
+                except Exception:
+                    logging.warning(
+                        "Failed to parse structure metadata from trajectory hash %s",
+                        input.stru_hash,
+                    )
     return formula, num_atoms
 
 
@@ -350,7 +367,7 @@ def _sync_dispatch(
     qdyndb.assign_task(final_task_id, username, job_ids, pool_name=pool_name)
 
     # Persist structure metadata
-    formula, num_atoms = _extract_structure_metadata(input_obj, resume, prev_task_id)
+    formula, num_atoms = _extract_structure_metadata(input_obj, resume, prev_task_id, config=m.config)
     qdyndb.update_task_metadata(
         final_task_id,
         formula=formula,
@@ -434,46 +451,7 @@ def _submit_with_tracking_legacy(
 
     qdyndb.assign_task(task_id, username, job_ids)
 
-    # Persist structure metadata for task summary / resume UI
-    formula = None
-    num_atoms = None
-    if resume and prev_task_id:
-        # Inherit metadata from the predecessor task
-        prev_meta = qdyndb.get_task_metadata(prev_task_id)
-        if prev_meta:
-            formula = prev_meta.get("formula")
-            num_atoms = prev_meta.get("num_atoms")
-    else:
-        # Parse from the uploaded POSCAR content
-        if input.stru:
-            try:
-                import io
-                from ase.io import read as ase_read
-                atoms = ase_read(io.StringIO(input.stru), format=input.stru_format or "vasp")
-                formula = atoms.get_chemical_formula()
-                num_atoms = len(atoms)
-            except Exception:
-                logging.warning("Failed to parse structure metadata from POSCAR")
-        elif input.stru_hash:
-            # Hash format already validated by InputT.validate_stru_hash (pydantic)
-            # Parse metadata from the trajectory file referenced by hash
-            data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
-            traj_path = Path(data_dir) / "trajs" / input.stru_hash
-            if traj_path.is_file():
-                try:
-                    from .params import md_ase_formats
-                    ase_fmt = md_ase_formats.get(
-                        input.stru_format, input.stru_format
-                    )
-                    atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
-                    formula = atoms.get_chemical_formula()
-                    num_atoms = len(atoms)
-                except Exception:
-                    logging.warning(
-                        "Failed to parse structure metadata from trajectory hash %s",
-                        input.stru_hash,
-                    )
-
+    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id, config=m.config)
     qdyndb.update_task_metadata(
         task_id,
         formula=formula,
@@ -603,7 +581,7 @@ async def submit_task(
     )
 
     # Extract and persist structure metadata even for queued tasks
-    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id)
+    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id, config=m.config)
     qdyndb.update_task_metadata(
         task_id,
         formula=formula,
