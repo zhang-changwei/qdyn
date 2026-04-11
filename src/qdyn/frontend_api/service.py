@@ -860,39 +860,6 @@ def _is_blacklisted(name: str) -> bool:
     return False
 
 
-def get_job_run_dir(
-    manager: MainWorkflow, job_uuid: str
-) -> Optional[Path]:
-    """
-    Get the run directory path for a job (local only, legacy).
-
-    Returns None if the job has no run_dir yet (e.g. WAITING/READY state),
-    or if the run_dir is on a remote worker and not locally accessible.
-    Callers treat None as "data unavailable" which provides graceful
-    degradation for remote workers.
-
-    .. deprecated::
-        Prefer ``get_run_dir_access()`` which handles both local and remote.
-    """
-    jc = manager._ensure_job_controller()
-    try:
-        job_info = jc.get_job_info(job_id=job_uuid)
-    except Exception:
-        return None
-
-    if job_info is None:
-        return None
-
-    run_dir = getattr(job_info, "run_dir", None)
-    if not run_dir:
-        return None
-
-    p = Path(str(run_dir))
-    if p.is_dir():
-        return p
-    return None
-
-
 def get_run_dir_access(
     job_uuid: str, manager: MainWorkflow
 ) -> Optional[RunDirAccess]:

@@ -109,16 +109,13 @@ class MainWorkflow:
         pool_def = self.config['worker_pools'][self.active_pool_name]
         if 'profile' in pool_def:
             raise ConfigError(
-                f"Pool '{self.active_pool_name}' uses deprecated 'profile' key. "
+                f"Pool '{self.active_pool_name}' uses unsupported 'profile' key. "
                 f"Rename 'profile' to 'worker' and move type/scheduler_type/"
                 f"max_jobs/resources from 'pool' to 'worker'. "
                 f"See config/qdyn.yaml.example for the expected structure."
             )
         self.pool_profile_cfg: dict = pool_def.get('worker', {})
         self.pool_config: dict = pool_def.get('pool', {})
-        # Convenience aliases used throughout the codebase.
-        self.worker_name: str = self.active_pool_name
-        self.worker_cfg: dict = self.pool_profile_cfg
 
     def __del__(self):
         jc = getattr(self, "jc", None)
@@ -645,15 +642,15 @@ class MainWorkflow:
             selected at dispatch time.  Used for ``_get_worker_resources()``
             lookups so that resources come from the runtime worker's jf
             config rather than the pool-level fallback.  If None, falls
-            back to *worker_name* (backward compat).
+            back to *worker_name*.
         '''
 
         # basic keys
         jobs: Dict[str, List[Job | Flow]] = {}
         software = input.basic_input.software
         flag = ''
-        effective_worker_name = worker_name or self.worker_name
-        effective_worker_cfg = worker_cfg or self.worker_cfg
+        effective_worker_name = worker_name or self.active_pool_name
+        effective_worker_cfg = worker_cfg or self.pool_profile_cfg
         # For resource lookups, prefer the runtime worker (has exact jf config)
         resource_worker = runtime_worker or effective_worker_name
 
@@ -1116,7 +1113,7 @@ class MainWorkflow:
             Pre-generated task ID (``suid()``).  When provided, the Flow
             is created with ``Flow(uuid=task_id)`` so the ID is stable
             across queue → dispatch transitions.  If None, the Flow
-            auto-generates its own UUID (backward compat).
+            auto-generates its own UUID.
         username : str, optional
             Authenticated user who submitted the task.  Written into
             Flow/Job metadata as ``qdyn_user``.

@@ -144,8 +144,8 @@ const eligibleTasks = computed(() => {
   const base = props.tasks.filter(t => t.resume_eligible)
   if (!props.selectedPool) return base
   // Filter by pool_name (same pool, any runtime worker).
-  // Fall back to worker match for backward compatibility with tasks
-  // that don't yet have pool_name populated.
+  // Fall back to worker match for tasks that don't yet have
+  // pool_name populated (pre-migration rows).
   return base.filter(t =>
     (t.pool_name && t.pool_name === props.selectedPool) ||
     (!t.pool_name && t.worker === props.selectedPool)

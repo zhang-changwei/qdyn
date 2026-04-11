@@ -37,8 +37,6 @@ def _make_manager() -> MainWorkflow:
     pool_def = manager.config["worker_pools"]["local_slurm"]
     manager.pool_profile_cfg = pool_def.get("worker", {})
     manager.pool_config = pool_def.get("pool", {})
-    manager.worker_name = "local_slurm"
-    manager.worker_cfg = manager.pool_profile_cfg
     manager.task_ids = []
     manager.job_ids = {}
     manager.jc = None
