@@ -236,16 +236,19 @@ class NVTInputT(BaseModel):
     constraint_layers: Optional[str] = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
+        json_schema_extra=ADVANCED_GROUP,
     )
     layer_direction: Optional[
         Literal['000', '001', '010', '011', '100', '101', '110', '111']
     ] = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
+        json_schema_extra=ADVANCED_GROUP,
     )
     total_layers: Optional[int] = Field(
         default=None,
         description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
+        json_schema_extra=ADVANCED_GROUP,
     )
 
     parameters: str = Field(
@@ -306,16 +309,19 @@ class NVEInputT(BaseModel):
     constraint_layers: Optional[str] = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
+        json_schema_extra=ADVANCED_GROUP,
     )
     layer_direction: Optional[
         Literal['000', '001', '010', '011', '100', '101', '110', '111']
     ] = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
+        json_schema_extra=ADVANCED_GROUP,
     )
     total_layers: Optional[int] = Field(
         default=None,
         description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
+        json_schema_extra=ADVANCED_GROUP,
     )
 
     parameters: str = Field(
