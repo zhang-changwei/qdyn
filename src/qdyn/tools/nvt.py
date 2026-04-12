@@ -2,7 +2,7 @@ import os
 import shutil
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Tuple
+from typing import Dict, Literal, Tuple, NamedTuple
 from copy import deepcopy
 
 import ase.io
@@ -25,6 +25,15 @@ from .run_software import run_software
 
 
 MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergence
+
+
+class NVTOutputT(NamedTuple):
+    current_structure: Atoms
+    scf_converged: bool
+    temp_converged: bool
+    max_deviation: float
+    md_file: str
+    image: str
 
 
 @job
@@ -265,7 +274,7 @@ def _process_nvt_output(
     attempt: int = 1,
     check_nsw: int | None = None,
     max_unconverged_ratio: float = 0.01,
-) -> Tuple[Atoms, bool, bool, float, str, str]:
+) -> NVTOutputT:
     """Process NVT output files and check convergence (universal for all software).
 
     This function extracts MD data using software-specific functions,
@@ -283,13 +292,13 @@ def _process_nvt_output(
             (default: 0.1 = 10%).
 
     Returns:
-        (scf_converged, temp_converged, avg_temp, max_deviation, image, md_file)
+        (current_structure, scf_converged, temp_converged, max_deviation, image, md_file)
+        - current_structure: The updated atomic structure
         - scf_converged: True if SCF converged properly
         - temp_converged: True if temperature converged to target
-        - avg_temp: Average temperature of last 1000 steps
         - max_deviation: Maximum temperature deviation from target
-        - image: Path to generated plot file
         - md_file: Path to saved MD data file
+        - image: Path to generated plot file
     """
 
     # Extract MD data using software-specific function
@@ -333,7 +342,7 @@ def _process_nvt_output(
         plot_filename = f'nvt_results_attempt_{attempt}.png'
         image = plot_md_results(md_data, plot_filename, target_temp)
 
-    return (
+    return NVTOutputT(
         current_structure,  # type: ignore
         scf_converged,
         temp_converged,
