@@ -44,6 +44,7 @@
           :task="task"
           @task-deleted="onTaskDeleted"
           @task-stopped="onTaskStopped"
+          @task-queue-cancelled="onTaskQueueCancelled"
         />
       </div>
 
@@ -132,6 +133,11 @@ function onTaskDeleted(_taskId: string): void {
 
 // Handle task stopped from TaskCard
 function onTaskStopped(_taskId: string): void {
+  refreshTaskList()
+}
+
+// Handle queued task cancelled from TaskCard
+function onTaskQueueCancelled(_taskId: string): void {
   refreshTaskList()
 }
 </script>

@@ -17,6 +17,16 @@
         <div class="task-header-right">
           <div class="card-actions" @click.stop>
             <el-button
+              v-if="isQueued"
+              type="warning"
+              plain
+              size="small"
+              :loading="cancellingQueue"
+              @click="handleCancelQueue"
+            >
+              Cancel Queue
+            </el-button>
+            <el-button
               v-if="isRunning"
               type="warning"
               plain
@@ -27,6 +37,7 @@
               Stop
             </el-button>
             <el-button
+              v-if="!isQueued"
               type="danger"
               plain
               size="small"
@@ -40,29 +51,42 @@
         </div>
       </div>
 
-      <!-- Row 2: UUID (truncated) + created time + worker -->
+      <!-- Row 2: UUID (truncated) + created time + pool/worker -->
       <div class="task-meta-line">
         <span class="meta-uuid" :title="task.task_id">
           {{ truncatedTaskId }}
         </span>
         <span class="meta-sep">&middot;</span>
         <span class="meta-time">{{ formattedTime }}</span>
-        <template v-if="task.worker">
+        <template v-if="displayPoolOrWorker">
           <span class="meta-sep">&middot;</span>
           <el-tag
             :type="workerTagType"
             size="small"
             class="worker-tag"
+            :title="workerTooltip"
             @click.stop
           >
             <el-icon class="worker-icon"><Monitor v-if="!isRemoteWorker" /><Link v-else /></el-icon>
-            {{ task.worker }}
+            {{ displayPoolOrWorker }}
+          </el-tag>
+        </template>
+        <template v-if="task.queue_status === 'QUEUED' && task.queue_position != null">
+          <span class="meta-sep">&middot;</span>
+          <el-tag type="info" size="small" effect="plain">
+            Queue #{{ task.queue_position }}
+          </el-tag>
+        </template>
+        <template v-else-if="task.queue_status === 'DISPATCHING'">
+          <span class="meta-sep">&middot;</span>
+          <el-tag type="warning" size="small" effect="plain">
+            Dispatching...
           </el-tag>
         </template>
       </div>
 
       <!-- Row 3: Step tags + total jobs count -->
-      <div class="step-tags-row">
+      <div v-if="task.steps.length > 0 || !isQueued" class="step-tags-row">
         <div class="step-tags">
           <el-tag
             v-for="step in task.steps"
@@ -76,6 +100,12 @@
           </el-tag>
         </div>
         <span class="total-jobs">{{ task.total_jobs }} jobs</span>
+      </div>
+      <!-- Queued tasks with no steps yet: show a waiting indicator -->
+      <div v-else class="step-tags-row">
+        <el-text type="info" size="small">
+          Waiting for dispatch...
+        </el-text>
       </div>
 
       <!-- Row 4 (conditional): Resumed from -->
@@ -102,7 +132,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { WarningFilled, Connection, Monitor, Link } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { stopTask, deleteTask } from '@/api/tasks'
+import { stopTask, deleteTask, cancelQueuedTask } from '@/api/tasks'
 import { useTasksStore } from '@/stores/tasks'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
@@ -114,6 +144,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'task-deleted', taskId: string): void
   (e: 'task-stopped', taskId: string): void
+  (e: 'task-queue-cancelled', taskId: string): void
 }>()
 
 const router = useRouter()
@@ -121,6 +152,7 @@ const tasksStore = useTasksStore()
 
 const stopping = ref(false)
 const deleting = ref(false)
+const cancellingQueue = ref(false)
 
 // ============================================
 // Display name mappings
@@ -162,9 +194,27 @@ const formattedTime = computed((): string => {
   })
 })
 
+/** Whether this task is in the queue (QUEUED or DISPATCHING) */
+const isQueued = computed((): boolean => {
+  return props.task.queue_status === 'QUEUED' || props.task.queue_status === 'DISPATCHING'
+})
+
+/** Display pool_name as primary label, falling back to worker */
+const displayPoolOrWorker = computed((): string | null => {
+  return props.task.pool_name || props.task.worker || null
+})
+
+/** Tooltip showing the runtime worker when pool_name is displayed */
+const workerTooltip = computed((): string => {
+  if (props.task.pool_name && props.task.runtime_worker) {
+    return `Worker: ${props.task.runtime_worker}`
+  }
+  return ''
+})
+
 /** Whether this task's worker is a remote one */
 const isRemoteWorker = computed((): boolean => {
-  const w = props.task.worker
+  const w = props.task.pool_name || props.task.worker
   return !!w && (w.includes('remote') || w.includes('djs'))
 })
 
@@ -280,6 +330,8 @@ function truncateId(id: string): string {
 // ============================================
 
 function handleClick(): void {
+  // Don't navigate to detail page for queued tasks — there's nothing to show yet
+  if (isQueued.value) return
   router.push({ name: 'task-detail', params: { taskId: props.task.task_id } })
 }
 
@@ -341,6 +393,34 @@ async function handleDelete(): Promise<void> {
     ElMessage.error(message)
   } finally {
     deleting.value = false
+  }
+}
+
+async function handleCancelQueue(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      'The task will be removed from the waiting queue.',
+      'Cancel Queued Task',
+      {
+        confirmButtonText: 'Yes, cancel',
+        cancelButtonText: 'Keep',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return // User cancelled dialog
+  }
+
+  cancellingQueue.value = true
+  try {
+    await cancelQueuedTask(props.task.task_id)
+    ElMessage.success('Task removed from queue')
+    emit('task-queue-cancelled', props.task.task_id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to cancel queued task'
+    ElMessage.error(message)
+  } finally {
+    cancellingQueue.value = false
   }
 }
 </script>

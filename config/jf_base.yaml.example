@@ -1,0 +1,34 @@
+# jf_base.yaml.example — jobflow-remote infrastructure config template
+# Copy to config/jf_base.yaml and modify as needed.
+#
+# This file defines the non-worker parts of the jf project config:
+# project name, MongoDB connection, jobstore, and runner settings.
+# Do NOT add a 'workers:' section here — workers are generated
+# automatically by scripts/generate_jf_config.py from qdyn.yaml pools.
+
+name: jf_qdyn
+
+queue:
+  store:
+    type: MongoStore
+    host: 127.0.0.1
+    port: 27017
+    database: jf_qdyn
+    collection_name: jobs
+  flows_collection: flows
+  auxiliary_collection: jf_auxiliary
+  batches_collection: batches
+
+jobstore:
+  docs_store:
+    type: MongoStore
+    host: 127.0.0.1
+    port: 27017
+    database: jf_qdyn_store
+    collection_name: outputs
+
+runner:
+  delay_checkout: 5
+  delay_check_run_status: 5
+  delay_advance_status: 5
+  delay_update_batch: 5

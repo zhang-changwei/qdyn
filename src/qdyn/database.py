@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 import threading
-from typing import Optional
+from typing import Optional, List
 
 
 class QdynDB:
@@ -38,6 +38,17 @@ class QdynDB:
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     FOREIGN KEY (username) REFERENCES users(username)
                 );
+                CREATE TABLE IF NOT EXISTS queued_submissions (
+                    task_id       TEXT PRIMARY KEY,
+                    username      TEXT NOT NULL,
+                    pool_name     TEXT NOT NULL,
+                    payload_json  TEXT NOT NULL,
+                    status        TEXT NOT NULL DEFAULT 'QUEUED',
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                    claimed_at    TEXT DEFAULT NULL,
+                    submitted_at  TEXT DEFAULT NULL,
+                    last_error    TEXT DEFAULT NULL
+                );
             """)
             self._conn.commit()
 
@@ -46,7 +57,9 @@ class QdynDB:
 
 
     def _migrate_task_metadata(self) -> None:
-        """Add formula, num_atoms, prev_task_id, and worker columns if missing."""
+        """Add formula, num_atoms, prev_task_id, worker, and pool_name columns
+        to task_owners if missing.  Also backfills pool_name for historical
+        rows that have worker='local_slurm'."""
         assert self._conn is not None
         cursor = self._conn.execute("PRAGMA table_info(task_owners)")
         existing = {row["name"] for row in cursor.fetchall()}
@@ -55,10 +68,21 @@ class QdynDB:
             "num_atoms": "ALTER TABLE task_owners ADD COLUMN num_atoms INTEGER DEFAULT NULL",
             "prev_task_id": "ALTER TABLE task_owners ADD COLUMN prev_task_id TEXT DEFAULT NULL",
             "worker": "ALTER TABLE task_owners ADD COLUMN worker TEXT DEFAULT NULL",
+            "pool_name": "ALTER TABLE task_owners ADD COLUMN pool_name TEXT DEFAULT NULL",
         }
+        added_pool_name = False
         for col, ddl in migrations.items():
             if col not in existing:
                 self._conn.execute(ddl)
+                if col == "pool_name":
+                    added_pool_name = True
+
+        # Backfill pool_name for pre-pool rows: worker='local_slurm' -> pool_name='local_slurm'
+        if added_pool_name:
+            self._conn.execute(
+                "UPDATE task_owners SET pool_name = 'local_slurm' "
+                "WHERE worker = 'local_slurm' AND pool_name IS NULL"
+            )
         self._conn.commit()
 
     def get_db(self) -> sqlite3.Connection:
@@ -94,12 +118,19 @@ class QdynDB:
         return dict(row) if row else None
 
 
-    def assign_task(self, task_id: str, username: str, job_ids: dict) -> None:
+    def assign_task(
+        self,
+        task_id: str,
+        username: str,
+        job_ids: dict,
+        pool_name: Optional[str] = None,
+    ) -> None:
         conn = self.get_db()
         with self._lock:
             conn.execute(
-                "INSERT INTO task_owners (task_id, username, job_ids) VALUES (?, ?, ?)",
-                (task_id, username, json.dumps(job_ids)),
+                "INSERT INTO task_owners (task_id, username, job_ids, pool_name) "
+                "VALUES (?, ?, ?, ?)",
+                (task_id, username, json.dumps(job_ids), pool_name),
             )
             conn.commit()
 
@@ -147,24 +178,269 @@ class QdynDB:
         num_atoms: Optional[int] = None,
         prev_task_id: Optional[str] = None,
         worker: Optional[str] = None,
+        pool_name: Optional[str] = None,
     ) -> None:
-        """Persist structure metadata, resume lineage, and worker for a task."""
+        """Persist structure metadata, resume lineage, worker, and pool for a task."""
         conn = self.get_db()
         with self._lock:
             conn.execute(
-                "UPDATE task_owners SET formula = ?, num_atoms = ?, prev_task_id = ?, worker = ? WHERE task_id = ?",
-                (formula, num_atoms, prev_task_id, worker, task_id),
+                "UPDATE task_owners SET formula = ?, num_atoms = ?, "
+                "prev_task_id = ?, worker = ?, pool_name = ? WHERE task_id = ?",
+                (formula, num_atoms, prev_task_id, worker, pool_name, task_id),
             )
             conn.commit()
 
     def get_task_metadata(self, task_id: str) -> Optional[dict]:
-        """Return formula, num_atoms, prev_task_id, and worker for a task (or None)."""
+        """Return formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
         conn = self.get_db()
         with self._lock:
             row = conn.execute(
-                "SELECT formula, num_atoms, prev_task_id, worker FROM task_owners WHERE task_id = ?",
+                "SELECT formula, num_atoms, prev_task_id, worker, pool_name "
+                "FROM task_owners WHERE task_id = ?",
                 (task_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Queued submissions helpers
+    # ------------------------------------------------------------------
+
+    def enqueue_submission(
+        self,
+        task_id: str,
+        username: str,
+        pool_name: str,
+        payload_json: str,
+    ) -> None:
+        """Insert a new QUEUED submission into the waiting queue."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO queued_submissions "
+                "(task_id, username, pool_name, payload_json, status) "
+                "VALUES (?, ?, ?, ?, 'QUEUED')",
+                (task_id, username, pool_name, payload_json),
+            )
+            conn.commit()
+
+    def claim_queued(self, task_id: str) -> bool:
+        """Atomically transition a task from QUEUED to DISPATCHING.
+
+        Uses BEGIN IMMEDIATE for write-lock acquisition.
+        Returns True if the claim succeeded, False otherwise (e.g. already
+        claimed or cancelled).
+        """
+        conn = self.get_db()
+        with self._lock:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT status FROM queued_submissions WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if row is None or row["status"] != "QUEUED":
+                    conn.execute("COMMIT")
+                    return False
+                conn.execute(
+                    "UPDATE queued_submissions "
+                    "SET status = 'DISPATCHING', claimed_at = datetime('now') "
+                    "WHERE task_id = ?",
+                    (task_id,),
+                )
+                conn.execute("COMMIT")
+                return True
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def mark_submitted(
+        self, task_id: str, job_ids: dict, worker: str
+    ) -> None:
+        """Mark a queued task as SUBMITTED after successful dispatch.
+
+        Also records the runtime worker name for traceability.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE queued_submissions "
+                "SET status = 'SUBMITTED', submitted_at = datetime('now') "
+                "WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+
+    def mark_queue_failed(self, task_id: str, error: str) -> None:
+        """Mark a queued task as FAILED, recording the error message.
+
+        If the task was DISPATCHING, it transitions to FAILED.
+        The last_error field is always updated for diagnostic purposes.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE queued_submissions "
+                "SET status = 'FAILED', last_error = ? "
+                "WHERE task_id = ? AND status IN ('QUEUED', 'DISPATCHING')",
+                (error, task_id),
+            )
+            conn.commit()
+
+    def cancel_queued(self, task_id: str, username: str) -> bool:
+        """Cancel a queued task.  Only QUEUED tasks can be cancelled.
+
+        Validates that the requesting user owns the task.
+        Returns True if cancellation succeeded, False if the task was not
+        found, not owned by the user, or not in QUEUED status.
+        """
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT username, status FROM queued_submissions WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["username"] != username:
+                return False
+            if row["status"] != "QUEUED":
+                return False
+            conn.execute(
+                "UPDATE queued_submissions SET status = 'CANCELLED' WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+            return True
+
+    def get_queued_status(self, task_id: str) -> Optional[dict]:
+        """Return queue entry for a single task, or None if not in queue.
+
+        Used by get_task_detail() to detect QUEUED/DISPATCHING/FAILED/CANCELLED
+        tasks that have not (or only partially) been submitted.
+        """
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT task_id, pool_name, status, created_at, last_error "
+                "FROM queued_submissions "
+                "WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_queued_for_user(self, username: str) -> List[dict]:
+        """Return all queued submissions for a user, ordered by creation time."""
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT task_id, pool_name, status, created_at, last_error "
+                "FROM queued_submissions "
+                "WHERE username = ? "
+                "ORDER BY created_at ASC",
+                (username,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_all_queued(self) -> List[dict]:
+        """Return all tasks in QUEUED status, ordered by creation time (FIFO).
+
+        This is the primary query used by the poller to find work.
+        """
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT task_id, username, pool_name, payload_json "
+                "FROM queued_submissions "
+                "WHERE status = 'QUEUED' "
+                "ORDER BY created_at ASC",
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recover_stale_dispatching(self, timeout_seconds: int = 60) -> int:
+        """Recover tasks stuck in DISPATCHING state beyond the timeout.
+
+        For each stale DISPATCHING task, checks whether it was actually
+        submitted (task_owners.job_ids is non-empty).  If so, marks it
+        SUBMITTED instead of re-queuing, to avoid duplicate dispatch.
+        Returns the number of recovered rows.
+        """
+        conn = self.get_db()
+        with self._lock:
+            # Find stale DISPATCHING tasks
+            rows = conn.execute(
+                "SELECT q.task_id, t.job_ids "
+                "FROM queued_submissions q "
+                "LEFT JOIN task_owners t ON q.task_id = t.task_id "
+                "WHERE q.status = 'DISPATCHING' "
+                "  AND q.claimed_at < datetime('now', ? || ' seconds')",
+                (str(-timeout_seconds),),
+            ).fetchall()
+
+            count = 0
+            for row in rows:
+                task_id = row["task_id"]
+                job_ids = row["job_ids"]
+                # Check if job_ids is non-empty (actually submitted).
+                # This covers the crash window between submit_flow()
+                # and mark_submitted(): if job_ids were filled in by
+                # update_task_dispatch_info(), the flow is real.
+                actually_submitted = bool(
+                    job_ids and job_ids != '{}' and job_ids != '[]'
+                )
+                if actually_submitted:
+                    # Flow was submitted — mark as SUBMITTED, not re-queued
+                    conn.execute(
+                        "UPDATE queued_submissions "
+                        "SET status = 'SUBMITTED', "
+                        "    submitted_at = datetime('now') "
+                        "WHERE task_id = ?",
+                        (task_id,),
+                    )
+                else:
+                    # Flow was not submitted — safe to re-queue
+                    conn.execute(
+                        "UPDATE queued_submissions "
+                        "SET status = 'QUEUED', claimed_at = NULL "
+                        "WHERE task_id = ?",
+                        (task_id,),
+                    )
+                count += 1
+            conn.commit()
+            return count
+
+    def release_claim(self, task_id: str) -> None:
+        """Transition a DISPATCHING task back to QUEUED.
+
+        Used by the poller when worker selection succeeds during the
+        pre-check but fails under the dispatch lock (TOCTOU race).
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE queued_submissions "
+                "SET status = 'QUEUED', claimed_at = NULL "
+                "WHERE task_id = ? AND status = 'DISPATCHING'",
+                (task_id,),
+            )
+            conn.commit()
+
+    def update_task_dispatch_info(
+        self, task_id: str, job_ids: dict, worker: str
+    ) -> None:
+        """Update job_ids and worker for an existing task_owners row.
+
+        Called by the poller after a queued task is successfully
+        dispatched.  The row was created with empty ``job_ids`` when
+        the task was enqueued, so this fills in the actual values.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE task_owners SET job_ids = ?, worker = ? "
+                "WHERE task_id = ?",
+                (json.dumps(job_ids), worker, task_id),
+            )
+            conn.commit()
+
 
 qdyndb = QdynDB()

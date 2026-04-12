@@ -211,6 +211,7 @@ test.ipynb
 
 # QDYN specific
 config/qdyn.yaml
+config/jf_base.yaml
 data/
 *.db
 *.db-journal

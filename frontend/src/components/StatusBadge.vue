@@ -25,7 +25,10 @@ const STATUS_CONFIG: Record<DerivedState, StatusConfig> = {
   PENDING: { type: 'info', effect: 'light', text: 'Pending' },
   PAUSED: { type: 'warning', effect: 'light', text: 'Paused' },
   STOPPED: { type: 'danger', effect: 'plain', text: 'Stopped' },
-  ERROR: { type: 'danger', effect: 'dark', text: 'Error' }
+  ERROR: { type: 'danger', effect: 'dark', text: 'Error' },
+  QUEUED: { type: 'info', effect: 'light', text: 'Queued' },
+  DISPATCHING: { type: 'warning', effect: 'plain', text: 'Dispatching' },
+  CANCELLED: { type: 'info', effect: 'plain', text: 'Cancelled' }
 }
 
 const DEFAULT_CONFIG: StatusConfig = {

@@ -17,21 +17,56 @@
       </el-radio-group>
     </el-card>
 
-    <!-- Worker selector (shown when multiple workers available) -->
-    <el-card v-if="availableWorkers.length > 1" class="form-section">
+    <!-- Pool status display (pool-based mode) -->
+    <el-card v-if="poolStatus" class="form-section pool-status-card">
       <template #header>
-        <span class="section-title">Compute Worker</span>
+        <span class="section-title">Compute Pool</span>
       </template>
-      <el-form-item label="Submit to">
-        <el-select v-model="selectedWorker" style="width: 100%;">
-          <el-option
-            v-for="w in availableWorkers"
-            :key="w"
-            :label="w"
-            :value="w"
-          />
-        </el-select>
-      </el-form-item>
+      <ul class="pool-description">
+        <li>Each user can occupy up to <b>1</b> worker at a time.</li>
+        <li>When the pool has free workers: your task goes to your active worker if you have one, or a free worker is assigned to you.</li>
+        <li>When all workers are busy: your task enters a shared queue.
+          When a worker frees up, users without a worker are served first;
+          remaining queued tasks are then sent to their owners' active workers.</li>
+      </ul>
+      <div class="pool-status-info">
+        <div class="pool-status-row">
+          <span class="pool-label">Pool</span>
+          <el-tag type="primary" size="small">{{ poolStatus.pool_name }}</el-tag>
+        </div>
+        <div class="pool-status-row">
+          <span class="pool-label">Available Workers</span>
+          <span class="pool-value">
+            <span :class="{ 'pool-idle-zero': poolStatus.idle_workers === 0 }">
+              {{ poolStatus.idle_workers }}
+            </span>
+            / {{ poolStatus.total_workers }}
+          </span>
+        </div>
+        <div class="pool-status-row">
+          <span class="pool-label">Your Workers</span>
+          <el-tooltip
+            :content="poolStatus.user_occupied_workers > 0
+              ? (poolStatus.idle_workers > 0
+                ? 'You have an active worker. New tasks will be submitted to it directly.'
+                : 'You have an active worker, but all workers are busy. Your task will be queued and dispatched automatically.')
+              : (poolStatus.idle_workers > 0
+                ? 'No active worker. A free worker will be assigned when you submit.'
+                : 'All workers are busy. Your task will be queued and dispatched automatically.')"
+            placement="top"
+          >
+            <span class="pool-value pool-value-help">{{ poolStatus.user_occupied_workers }} / 1</span>
+          </el-tooltip>
+        </div>
+        <el-alert
+          v-if="poolStatus.idle_workers === 0"
+          title="All workers are busy. Your task will be queued and dispatched automatically when a worker becomes available."
+          type="info"
+          :closable="false"
+          show-icon
+          class="pool-queue-hint"
+        />
+      </div>
     </el-card>
 
     <el-form
@@ -47,7 +82,7 @@
           <span class="section-title">1. Select Previous Task</span>
         </template>
         <el-alert
-          title="Structure will be inherited from the selected task. Only tasks from the same worker are shown — cross-worker resume is not currently supported as some steps rely on run directory paths that are not accessible across workers."
+          title="Structure will be inherited from the selected task. Only tasks from the same compute pool are shown — cross-pool resume is not supported as run directory paths differ between pools."
           type="info"
           show-icon
           :closable="false"
@@ -57,7 +92,7 @@
           v-model="selectedResumeTaskId"
           :tasks="resumeTasks"
           :loading="resumeTasksLoading"
-          :selected-worker="selectedWorker"
+          :selected-pool="selectedPool"
           @task-selected="handleResumeTaskSelected"
         />
       </el-card>
@@ -312,10 +347,10 @@ import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import { validatePoscar } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
-import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash } from '@/api/tasks'
+import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
-import type { ValidatePoscarResponse, TaskSummary, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
+import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
 // Step configuration: maps step name to formData key and schema key
 const STEP_CONFIG: Record<string, {
@@ -339,9 +374,9 @@ const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
 const schemas = ref<StepInputSchemas | null>(null)
 
-// Worker selection state
-const availableWorkers = ref<string[]>([])
-const selectedWorker = ref<string>('')
+// Pool status
+const poolStatus = ref<PoolStatusResponse | null>(null)
+const selectedPool = ref<string>('')
 
 // Resume mode state
 const submitMode = ref<'new' | 'resume'>('new')
@@ -387,15 +422,22 @@ const isSubmitDisabled = computed(() => {
 })
 
 onMounted(async () => {
-  // Fetch available workers
+  // Fetch pool info
   try {
     const resp = await http.get<{ workers: string[]; default: string }>('/workers')
-    availableWorkers.value = resp.data.workers
-    selectedWorker.value = resp.data.default
+    selectedPool.value = resp.data.default
   } catch {
-    // Fallback: single default worker, selector stays hidden
-    availableWorkers.value = []
-    selectedWorker.value = ''
+    // Fallback: selector stays hidden
+  }
+
+  // Fetch pool status
+  try {
+    poolStatus.value = await getPoolStatus()
+    if (poolStatus.value) {
+      selectedPool.value = poolStatus.value.pool_name
+    }
+  } catch {
+    poolStatus.value = null
   }
 
   try {
@@ -483,8 +525,8 @@ watch(
   { deep: true }
 )
 
-watch(selectedWorker, (newWorker, oldWorker) => {
-  if (!oldWorker || newWorker === oldWorker) {
+watch(selectedPool, (newPool, oldPool) => {
+  if (!oldPool || newPool === oldPool) {
     return
   }
   selectedResumeTaskId.value = null
@@ -785,21 +827,26 @@ async function handleSubmit(): Promise<void> {
     ...(formData.steps.includes('namd') && { namd_input: formData.namd_input })
   }
 
-  // Build URL with optional resume and worker parameters
+  // Build URL with optional resume parameters
   let submitUrl = `/submit?method=${formData.method}`
   if (isResume) {
     submitUrl += `&resume=true&prev_task_id=${selectedResumeTaskId.value}`
   }
-  if (selectedWorker.value) {
-    submitUrl += `&worker=${encodeURIComponent(selectedWorker.value)}`
-  }
 
   submitting.value = true
   try {
-    const response = await http.post<string>(submitUrl, payload)
-    const taskId = response.data
-    ElMessage.success(isResume ? `Task resumed: ${taskId}` : `Task submitted: ${taskId}`)
-    router.push({ name: 'task-detail', params: { taskId } })
+    const response = await http.post<SubmitResponse>(submitUrl, payload)
+    const result = response.data
+
+    if (result.status === 'QUEUED') {
+      const posMsg = result.queue_position ? ` (position #${result.queue_position})` : ''
+      ElMessage.info(`Task queued${posMsg}. It will be dispatched when a worker becomes available.`)
+      router.push({ name: 'task-list' })
+    } else {
+      const label = isResume ? 'Task resumed' : 'Task submitted'
+      ElMessage.success(`${label}: ${result.task_id}`)
+      router.push({ name: 'task-detail', params: { taskId: result.task_id } })
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Submit failed'
     ElMessage.error(message)
@@ -993,5 +1040,54 @@ async function handleSubmit(): Promise<void> {
   background: var(--el-fill-color-light);
   padding: 1px 4px;
   border-radius: 3px;
+}
+
+/* Pool status card */
+.pool-description {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+  margin: 0 0 12px 0;
+  padding-left: 20px;
+}
+.pool-description li {
+  margin-bottom: 2px;
+}
+
+.pool-value-help {
+  cursor: help;
+  border-bottom: 1px dashed var(--el-text-color-secondary);
+}
+
+.pool-status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pool-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.pool-label {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+}
+
+.pool-value {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pool-idle-zero {
+  color: var(--el-color-warning);
+  font-weight: 600;
+}
+
+.pool-queue-hint {
+  margin-top: 8px;
 }
 </style>

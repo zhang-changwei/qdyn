@@ -1,12 +1,11 @@
 # qdyn.yaml.example — QDYN configuration template
 # Copy to config/qdyn.yaml and modify as needed.
 #
-# Config format: "worker first-class citizen" — each worker block contains
-# ALL execution configs (modules, exports, pre_run, pp_path, resource
-# allocations).  No inheritance / override between workers.
-#
-# Legacy format (top-level modules/export/etc. without 'workers' key) is
-# still supported for backward compatibility.
+# Config format: "worker pool" — each pool has two sub-sections:
+#   'pool'   — pool-level parameters (size, polling, work directory)
+#   'worker' — per-worker execution environment and jf-remote settings
+# Workers are auto-generated as {pool_name}_{NNN} in the jf config.
+# Use scripts/generate_jf_config.py to produce the jf project YAML.
 
 basic:
   jf_project_path: "config/jf_qdyn.yaml"
@@ -16,40 +15,55 @@ basic:
   mongo_dir: "mongo/"
   port: 8000
 
-# Active worker (must match a key in 'workers' below AND in jf project config)
-active_worker: local_slurm
+# Active pool (must match a key in 'worker_pools' below)
+active_pool: local_slurm
 
-# Each worker contains ALL execution configs.
-workers:
+# Worker pool definitions.
+# Each pool generates N workers named {pool_name}_{NNN} in the jf config.
+# 'pool' contains pool-level parameters (size, polling interval, work dir).
+# 'worker' contains per-worker settings: jf-remote fields (type, scheduler_type,
+# resources, max_jobs) plus QDYN execution environment (partition, modules, etc.).
+worker_pools:
   local_slurm:
-    partition: chu
-    cpus_per_node: 96
-    modules:
-      vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
-      python: []
-      namd: ['compiler/oneAPI/2023.2.0']
-    export:
-      vasp:
-        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-      python:
-        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-      namd:
-        PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
-        PATH: '/absolute/path/to/Hefei-NAMD-DEV-2025.01:$PATH'
-    pre_run:
-      vasp: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-      python: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-      namd: 'source /absolute/path/to/qdyn/.venv/bin/activate'
-    pp_path:
-      vasp: '/absolute/path/to/vasp-pp'
-    orb_path:
-      vasp: ''
-    nvt:
-      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
-    nve:
-      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
-    scf:
-      vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+    pool:
+      size: 30
+      queue_poll_interval: 60    # seconds between queue polling rounds
+      work_dir_base: /absolute/path/to/runs
+    worker:
+      type: local                # jf-remote worker type
+      scheduler_type: slurm      # jf-remote scheduler type
+      max_jobs: 20
+      resources:
+        partition: chu
+        time: "48:00:00"
+      partition: chu
+      cpus_per_node: 96
+      modules:
+        vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
+        python: []
+        namd: ['compiler/oneAPI/2023.2.0']
+      export:
+        vasp:
+          PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+        python:
+          PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+        namd:
+          PYTHONPATH: '/absolute/path/to/qdyn/src:$PYTHONPATH'
+          PATH: '/absolute/path/to/Hefei-NAMD-DEV-2025.01:$PATH'
+      pre_run:
+        vasp: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+        python: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+        namd: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+      pp_path:
+        vasp: '/absolute/path/to/vasp-pp'
+      orb_path:
+        vasp: ''
+      nvt:
+        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+      nve:
+        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+      scf:
+        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
 
 auth:
   secret_key: ""  # leave empty to auto-generate on first start

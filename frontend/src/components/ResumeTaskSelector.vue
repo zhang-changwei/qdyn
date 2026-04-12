@@ -22,14 +22,14 @@
             <span class="task-id">{{ truncateId(task.task_id) }}</span>
             <div class="task-option-tags">
               <el-tag
-                v-if="task.worker"
-                :type="workerTagType(task.worker)"
+                v-if="task.pool_name || task.worker"
+                :type="workerTagType(task.pool_name || task.worker || '')"
                 size="small"
                 effect="plain"
                 class="worker-tag"
               >
                 <el-icon><Monitor /></el-icon>
-                {{ task.worker }}
+                {{ task.pool_name || task.worker }}
               </el-tag>
               <el-tag
                 :type="statusTagType(task.derived_status)"
@@ -81,14 +81,14 @@
         </el-tag>
       </div>
       <div class="summary-row">
-        <span class="summary-label">Worker</span>
+        <span class="summary-label">Pool</span>
         <el-tag
-          v-if="selectedTask.worker"
-          :type="workerTagType(selectedTask.worker)"
+          v-if="selectedTask.pool_name || selectedTask.worker"
+          :type="workerTagType(selectedTask.pool_name || selectedTask.worker || '')"
           size="small"
         >
           <el-icon><Monitor /></el-icon>
-          {{ selectedTask.worker }}
+          {{ selectedTask.pool_name || selectedTask.worker }}
         </el-tag>
         <span v-else class="summary-value unknown">Unknown</span>
       </div>
@@ -128,10 +128,11 @@ const props = withDefaults(defineProps<{
   modelValue: string | null
   tasks: TaskSummary[]
   loading?: boolean
-  selectedWorker?: string
+  /** Logical pool name for filtering resume candidates */
+  selectedPool?: string
 }>(), {
   loading: false,
-  selectedWorker: ''
+  selectedPool: ''
 })
 
 const emit = defineEmits<{
@@ -141,13 +142,19 @@ const emit = defineEmits<{
 
 const eligibleTasks = computed(() => {
   const base = props.tasks.filter(t => t.resume_eligible)
-  if (!props.selectedWorker) return base
-  return base.filter(t => t.worker === props.selectedWorker)
+  if (!props.selectedPool) return base
+  // Filter by pool_name (same pool, any runtime worker).
+  // Fall back to worker match for tasks that don't yet have
+  // pool_name populated (pre-migration rows).
+  return base.filter(t =>
+    (t.pool_name && t.pool_name === props.selectedPool) ||
+    (!t.pool_name && t.worker === props.selectedPool)
+  )
 })
 
 const emptyDescription = computed(() =>
-  props.selectedWorker
-    ? `No previous tasks found for worker "${props.selectedWorker}"`
+  props.selectedPool
+    ? `No previous tasks found for pool "${props.selectedPool}"`
     : 'No tasks available for resume'
 )
 
