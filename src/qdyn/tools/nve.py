@@ -8,6 +8,8 @@ from ase import Atoms
 from jobflow import job
 import numpy as np
 
+from qdyn.tools.nvt import add_constraints
+
 from ..input import NVEInputT
 from ..params import params_default, md_tracks, md_ase_formats
 from ..input_prepare import prepare_vasp_inputs
@@ -65,12 +67,21 @@ def qdyn_nve(
 
     software_lower = software.lower()
     nprocs = nodes * ntasks_per_node
+
     structure['momenta'] = np.array(structure['momenta'])
+    cstru = Atoms.fromdict(structure)
+    if parameters.constraint_layers is not None and cstru.constraints is None:
+        cstru = add_constraints(
+            cstru,
+            parameters.constraint_layers,
+            parameters.layer_direction,  # type: ignore
+            parameters.total_layers,  # type: ignore
+        )
 
     # Prepare input files
     _prepare_nve_input(
         software=software_lower,
-        structure=Atoms.fromdict(structure),
+        structure=cstru,
         parameters=parameters,
         pp_path=pp_path,
         orb_path=orb_path,
@@ -104,19 +115,21 @@ def qdyn_nve(
     track_name = md_tracks.get(software_lower)
     if track_name is None:
         raise ValueError(f"Unsupported software: {software_lower}")
-    if os.path.isfile(track_name):
-        strus = read_strus(software_lower)
-        strus_list = [strus[i].todict() for i in range(len(strus))]
-    else:
-        raise FileNotFoundError(f"MD track file not found for {software_lower}.")
+    # if os.path.isfile(track_name):
+    #     strus = read_strus(software_lower)
+    #     strus_list = [strus[i].todict() for i in range(len(strus))]
+    # else:
+    #     raise FileNotFoundError(f"MD track file not found for {software_lower}.")
 
     return {
         'run_dir': str(Path.cwd()),
         'software': software,
         'md_files': md_file,
         'images': images,
-        'strus': strus_list,
-        'traj_file_path': str(Path.cwd() / md_tracks[software_lower]),
+        # 'strus': strus_list,
+        'traj_file_path': str(
+            Path.cwd() / md_tracks[software_lower]
+        ),  # constraints information may also remain in some software's trajectory files, may raise error when changing to dict.
     }
 
 
