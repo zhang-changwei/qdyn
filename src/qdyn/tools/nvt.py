@@ -9,7 +9,7 @@ import ase.io
 import numpy as np
 
 
-from ase import Atoms
+from ase import Atoms, geometry
 from jobflow import job  # type: ignore
 
 from ..input import NVTInputT
@@ -92,6 +92,17 @@ def qdyn_nvt(
 
     structure.pop('momenta', None)
     current_structure = Atoms.fromdict(structure)
+    if (
+        parameters.constraint_layers is not None
+        and current_structure.constraints is None
+    ):
+        current_structure = add_constraints(
+            current_structure,
+            parameters.constraint_layers,
+            parameters.layer_direction,  # type: ignore
+            parameters.total_layers,  # type: ignore
+        )
+
     nprocs = nodes * ntasks_per_node
     images = []
     md_files = []
@@ -195,12 +206,16 @@ def qdyn_nvt(
                     f'File {image_filename} not found, backup files may be uncomplete.'
                 )
 
+    stru_dict = current_structure.todict()
+    if stru_dict.get('constraints') is not None:
+        stru_dict['constraints'] = [i.todict() for i in stru_dict['constraints']]  # type: ignore
+
     return {
         'run_dir': str(Path.cwd()),
         'software': software,
         'md_files': md_files,
         'images': images,
-        'stru': current_structure.todict(),
+        'stru': stru_dict,
     }
 
 
@@ -354,6 +369,73 @@ def _process_nvt_output(
         md_file,
         image,
     )
+
+
+def add_constraints(
+    structure: Atoms,
+    constraint_layers: str,
+    layer_direction: Literal['000', '001', '010', '011', '100', '101', '110', '111'],
+    total_layers: int,
+) -> Atoms:
+    """Add layer-based constraints to the structure.
+
+    Parameters
+    ----------
+    structure : Atoms
+        ASE Atoms object representing the structure.
+    constraint_layers : int
+        Number of layers to constrain (starting from the bottom).
+    layer_direction : str
+        Miller indices of the crystal surface.
+    total_layers : int
+        Total number of layers in the structure.
+    """
+    from ase.constraints import FixAtoms
+
+    # Get layer indices based on geometry
+    miller = np.array(list(layer_direction), dtype=int)
+
+    _, layers = auto_tolerance(structure, miller, total_layers)
+
+    clayers = []
+    for part in constraint_layers.split():
+        if '-' in part:
+            start, end = map(int, part.split('-'))
+            clayers.extend(range(start - 1, end))
+        else:
+            clayers.append(int(part) - 1)
+
+    mask = np.isin(layers[0], clayers)
+    c = FixAtoms(mask=mask)
+    structure.set_constraint(c)  # type: ignore
+    return structure
+
+
+def auto_tolerance(
+    structure: Atoms,
+    miller: np.ndarray,
+    target: int,
+    low: float = 0.01,
+    high: float = 10,
+    max_iter: int = 30,
+) -> Tuple[float, tuple]:
+
+    for _ in range(max_iter):
+        mid = (low + high) / 2
+        layers = geometry.get_layers(structure, miller, tolerance=mid)
+        n = len(layers[1])
+        if n == target:
+            return mid, layers
+        elif n > target:
+            low = mid
+        else:
+            high = mid
+
+    logging.warning(
+        f"Can't split the structure into {target} layers within {max_iter} iterations. "
+        f"Final layer distances: {mid:.4f}, layers found: {n}."
+    )
+    return low, geometry.get_layers(structure, miller, tolerance=low)
 
 
 def check_temperature_convergence(

@@ -48,16 +48,24 @@ class NAMDInputT(BaseModel):
 
     md_dt: float = Field(
         1.0,
-        ge=1e-6, le=1000,
+        ge=1e-6,
+        le=1000,
         description="MD time step in fs",
         json_schema_extra={"step": 0.01, "precision": 4},
     )
-    adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
-    surface_hopping: Literal['FSSH', 'DISH'] = Field(
-        'DISH', description="Surface hopping method",
+    adiabatic_rep: bool = Field(
+        True, description="Whether to use adiabatic representation"
     )
-    nsample: int = Field(200, ge=1, le=10000, description="Number of sampled initial conditions")
-    ntraj: int = Field(200, ge=1, le=10000, description="Number of trajectories to propagate")
+    surface_hopping: Literal['FSSH', 'DISH'] = Field(
+        'DISH',
+        description="Surface hopping method",
+    )
+    nsample: int = Field(
+        200, ge=1, le=10000, description="Number of sampled initial conditions"
+    )
+    ntraj: int = Field(
+        200, ge=1, le=10000, description="Number of trajectories to propagate"
+    )
     nelm: int = Field(10, ge=1, le=1000, description="Number of electronic substeps")
     namdtime: int = Field(
         1_000_000,
@@ -82,11 +90,22 @@ class NAMDInputT(BaseModel):
 
 
 class _PreNAMDInputAdvT(BaseModel):
-    reorder: bool = Field(False, description="Whether to reorder bands before post-processing")
-    alle: bool = Field(False, description="Whether to use all-electron data in pre-processing")
-    ikpt: int = Field(1, ge=1, description="K-point index starting from 1", json_schema_extra={"step": 1})
+    reorder: bool = Field(
+        False, description="Whether to reorder bands before post-processing"
+    )
+    alle: bool = Field(
+        False, description="Whether to use all-electron data in pre-processing"
+    )
+    ikpt: int = Field(
+        1,
+        ge=1,
+        description="K-point index starting from 1",
+        json_schema_extra={"step": 1},
+    )
     ispin: int = Field(
-        1, ge=1, le=2,
+        1,
+        ge=1,
+        le=2,
         description="Spin channel index starting from 1",
         json_schema_extra={"step": 1},
     )
@@ -94,12 +113,18 @@ class _PreNAMDInputAdvT(BaseModel):
     which_atoms: Optional[List[int]] = Field(
         default=None,
         description="Optional atom indices to project, comma-separated in UI",
-        json_schema_extra={"widget": "comma-separated-integers", "placeholder": "e.g. 1,2,5"},
+        json_schema_extra={
+            "widget": "comma-separated-integers",
+            "placeholder": "e.g. 1,2,5",
+        },
     )
     cbar_labels: Optional[List[str]] = Field(
         default=None,
         description="Optional colorbar labels, comma-separated in UI",
-        json_schema_extra={"widget": "comma-separated-strings", "placeholder": "e.g. CBM,VBM,DEFECT"},
+        json_schema_extra={
+            "widget": "comma-separated-strings",
+            "placeholder": "e.g. CBM,VBM,DEFECT",
+        },
     )
 
     @field_validator('which_atoms', mode='before')
@@ -116,22 +141,32 @@ class PreNAMDInputT(BaseModel):
     bmin: int | str = Field(
         'VBM',
         description="Lower band index, accepts integer or expressions like VBM-2",
-        json_schema_extra={"widget": "band-input", "placeholder": "e.g. VBM, VBM-2, 10"},
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. VBM, VBM-2, 10",
+        },
     )
     bmax: int | str = Field(
         'CBM',
         description="Upper band index, accepts integer or expressions like CBM+4",
-        json_schema_extra={"widget": "band-input", "placeholder": "e.g. CBM, CBM+4, 20"},
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. CBM, CBM+4, 20",
+        },
     )
     md_dt: float = Field(
         1.0,
-        ge=1e-6, le=1000,
+        ge=1e-6,
+        le=1000,
         description="MD time step in fs",
         json_schema_extra={"step": 0.01, "precision": 4},
     )
-    adiabatic_rep: bool = Field(True, description="Whether to use adiabatic representation")
+    adiabatic_rep: bool = Field(
+        True, description="Whether to use adiabatic representation"
+    )
     surface_hopping: Literal['FSSH', 'DISH'] = Field(
-        'DISH', description="Surface hopping method",
+        'DISH',
+        description="Surface hopping method",
     )
 
     adv: _PreNAMDInputAdvT = Field(
@@ -155,22 +190,26 @@ class NVTInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=1e-4, le=10.0,
+        ge=1e-4,
+        le=10.0,
         description="K-point spacing in 2π × 1/Å",
         json_schema_extra={"step": 0.001, "precision": 4},
     )
     md_thermostat: Literal['nhc', 'rescale_v'] = Field(
-        'rescale_v', description="MD thermostat method",
+        'rescale_v',
+        description="MD thermostat method",
     )
     md_dt: float = Field(
         1.0,
-        ge=1e-6, le=1000,
+        ge=1e-6,
+        le=1000,
         description="MD time step in fs",
         json_schema_extra={"step": 0.01, "precision": 4},
     )
     md_step: int = Field(
         1000,
-        ge=1, le=10000000,
+        ge=1,
+        le=10000000,
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
@@ -188,15 +227,35 @@ class NVTInputT(BaseModel):
     )
     scf_thr: float = Field(
         1e-6,
-        ge=1e-12, le=1.0,
+        ge=1e-12,
+        le=1.0,
         description="Electronic convergence criterion (eV)",
         json_schema_extra={"widget": "log-step"},
+    )
+
+    constraint_layers: Optional[str] = Field(
+        default=None,
+        description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
+    )
+    layer_direction: Optional[
+        Literal['000', '001', '010', '011', '100', '101', '110', '111']
+    ] = Field(
+        default=None,
+        description="Miller indices of the crystal surface. Required if constraint_layers is set.",
+    )
+    total_layers: Optional[int] = Field(
+        default=None,
+        description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
     )
 
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
+        json_schema_extra={
+            **ADVANCED_GROUP,
+            "widget": "textarea",
+            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
+        },
     )
 
 
@@ -215,7 +274,8 @@ class NVEInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=1e-4, le=10.0,
+        ge=1e-4,
+        le=10.0,
         description="K-point spacing in 2π × 1/Å",
         json_schema_extra={"step": 0.001, "precision": 4},
     )
@@ -223,27 +283,49 @@ class NVEInputT(BaseModel):
     # MD parameters
     md_dt: float = Field(
         1.0,
-        ge=1e-6, le=1000,
+        ge=1e-6,
+        le=1000,
         description="MD time step in fs",
         json_schema_extra={"step": 0.01, "precision": 4},
     )
     md_step: int = Field(
         1000,
-        ge=1, le=10000000,
+        ge=1,
+        le=10000000,
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
     scf_thr: float = Field(
         1e-6,
-        ge=1e-12, le=1.0,
+        ge=1e-12,
+        le=1.0,
         description="Electronic convergence criterion (eV)",
         json_schema_extra={"widget": "log-step"},
+    )
+
+    constraint_layers: Optional[str] = Field(
+        default=None,
+        description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
+    )
+    layer_direction: Optional[
+        Literal['000', '001', '010', '011', '100', '101', '110', '111']
+    ] = Field(
+        default=None,
+        description="Miller indices of the crystal surface. Required if constraint_layers is set.",
+    )
+    total_layers: Optional[int] = Field(
+        default=None,
+        description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
     )
 
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
+        json_schema_extra={
+            **ADVANCED_GROUP,
+            "widget": "textarea",
+            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
+        },
     )
 
 
@@ -262,7 +344,8 @@ class SCFInputT(BaseModel):
 
     kspacing: float = Field(
         0.04,
-        ge=1e-4, le=10.0,
+        ge=1e-4,
+        le=10.0,
         description="K-point spacing in 2π × 1/Å",
         json_schema_extra={"step": 0.001, "precision": 4},
     )
@@ -270,7 +353,8 @@ class SCFInputT(BaseModel):
     # SCF-specific
     scf_thr: float = Field(
         1e-6,
-        ge=1e-12, le=1.0,
+        ge=1e-12,
+        le=1.0,
         description="Electronic convergence criterion (eV)",
         json_schema_extra={"widget": "log-step"},
     )
@@ -278,14 +362,16 @@ class SCFInputT(BaseModel):
     # job control
     scf_step: int = Field(
         1000,
-        ge=1, le=10000000,
+        ge=1,
+        le=10000000,
         description="Number of SCF frames to calculate",
         json_schema_extra={"step": 100},
     )
 
     batch_size: int = Field(
         100,
-        ge=1, le=10000,
+        ge=1,
+        le=10000,
         description="Number of frames per batch task. Smaller batches mean more parallel tasks.",
         json_schema_extra={"step": 10},
     )
@@ -294,7 +380,11 @@ class SCFInputT(BaseModel):
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
-        json_schema_extra={**ADVANCED_GROUP, "widget": "textarea", "placeholder": "e.g. ENCUT = 520\nISYM = 0"},
+        json_schema_extra={
+            **ADVANCED_GROUP,
+            "widget": "textarea",
+            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
+        },
     )
 
 
@@ -319,6 +409,7 @@ class InputT(BaseModel):
     def validate_stru_hash(cls, v: str) -> str:
         """Ensure stru_hash is either empty or a valid 32-char hex string (MD5)."""
         from .params import HASH_PATTERN
+
         if v and not HASH_PATTERN.match(v):
             raise ValueError(
                 'stru_hash must be a 32-character lowercase hex string (MD5 digest)'

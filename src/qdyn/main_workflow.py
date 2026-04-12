@@ -190,12 +190,12 @@ class MainWorkflow:
         Results are sorted lexicographically.
         """
         import re
+
         name = pool_name or self.active_pool_name
         prefix = f"{name}_"
         pattern = re.compile(rf"^{re.escape(name)}_\d{{3,}}$")
         workers = sorted(
-            w for w in self.jf_config.get('workers', {})
-            if pattern.match(w)
+            w for w in self.jf_config.get('workers', {}) if pattern.match(w)
         )
         return workers
 
@@ -208,7 +208,11 @@ class MainWorkflow:
     # USER_STOPPED but NOT CANCELLED as a job state.  CANCELLED only exists
     # at the QDYN queue level (queued_submissions table), not in MongoDB.
     _TERMINAL_STATES = [
-        "COMPLETED", "FAILED", "REMOTE_ERROR", "STOPPED", "USER_STOPPED",
+        "COMPLETED",
+        "FAILED",
+        "REMOTE_ERROR",
+        "STOPPED",
+        "USER_STOPPED",
     ]
 
     def _get_pool_occupancy(self, pool_name: Optional[str] = None) -> Dict[str, int]:
@@ -265,9 +269,7 @@ class MainWorkflow:
                     "state": {"$nin": self._TERMINAL_STATES},
                 }
             },
-            {
-                "$group": {"_id": "$worker"}
-            },
+            {"$group": {"_id": "$worker"}},
         ]
         return [doc["_id"] for doc in jc.jobs.aggregate(pipeline)]
 
@@ -381,9 +383,7 @@ class MainWorkflow:
         for i, key in enumerate(keys):
             if not isinstance(node, dict) or key not in node:
                 path = '.'.join(keys[: i + 1])
-                raise ConfigError(
-                    f"Missing '{path}' in worker '{worker_name}' config"
-                )
+                raise ConfigError(f"Missing '{path}' in worker '{worker_name}' config")
             node = node[key]
         return node
 
@@ -571,10 +571,12 @@ class MainWorkflow:
                     f"Provided structure string could not be parsed "
                     f"by ASE with format '{stru_format}'."
                 ) from exc
-            
+
         if stru_hash:
             # Hash format already validated by InputT.validate_stru_hash (pydantic)
-            data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
+            data_dir = Path(
+                self.config['basic'].get('user_data', 'data/user_data')
+            ).resolve()
             stru_path = data_dir / "trajs" / f"{stru_hash}"
             if not stru_path.is_file():
                 raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
@@ -591,7 +593,6 @@ class MainWorkflow:
                     f"Structure with hash '{stru_hash}' could not be parsed "
                     f"by ASE with format '{ase_format}'."
                 ) from exc
-
 
     # ------------------------------------------------------------------
     # Core logic
@@ -634,7 +635,9 @@ class MainWorkflow:
         resource_worker = runtime_worker or effective_worker_name
 
         # pre-flight validation
-        self._validate_input(input, method, stru, stru_format, stru_hash, resume, prev_task_id)
+        self._validate_input(
+            input, method, stru, stru_format, stru_hash, resume, prev_task_id
+        )
 
         if method == 'namd':
             key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
@@ -646,7 +649,9 @@ class MainWorkflow:
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
         # step 1: NVT
-        if ('nvt' in input.steps or flag == 'gen_input_nvt') and input.nvt_input is not None:
+        if (
+            'nvt' in input.steps or flag == 'gen_input_nvt'
+        ) and input.nvt_input is not None:
             prev_step = ''
             next_step = 'nve'
             if prev_step in input.steps:
@@ -661,7 +666,9 @@ class MainWorkflow:
                         f"Cannot resume nvt."
                     ) from exc
             elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
+                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore
+                if structure.get('constraints') is not None:
+                    structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore
             else:
                 raise ValidationError(
                     "No structure provided for the nvt step. \n"
@@ -673,14 +680,22 @@ class MainWorkflow:
                 if input.nvt_input.nodes is not None
                 else effective_worker_cfg['nvt'][software]['nodes']
             )
-            assert nodes > 0, "[NVT] nodes must be a positive integer or omitted to use the default."
+            assert (
+                nodes > 0
+            ), "[NVT] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
             cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
             pp_path_raw = self._get_exec_config(
                 effective_worker_name, effective_worker_cfg, software, 'pp_path'
             )
-            pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-            orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
+            pp_path = (
+                str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+            )
+            orb_path = str(
+                Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                .expanduser()
+                .resolve()
+            )
 
             job_nvt = qdyn_nvt(
                 software=software,
@@ -697,14 +712,22 @@ class MainWorkflow:
             job_nvt = set_run_config(
                 job_nvt,
                 exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
-                    export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
-                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
+                    modules=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'modules'
+                    ),
+                    export=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'export'
+                    ),
+                    pre_run=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'pre_run'
+                    ),
                     post_run=None,
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                    'partition': self._get_machine_config(
+                        effective_worker_name, effective_worker_cfg
+                    )['partition'],
                     **effective_worker_cfg['nvt'][software],
                     'nodes': nodes,
                 },
@@ -712,13 +735,16 @@ class MainWorkflow:
             jobs['nvt'] = [job_nvt]
 
             # update flag
-            is_last_step = (True if next_step not in input.steps and 'nvt' in input.steps
-                            else False)
+            is_last_step = (
+                True if next_step not in input.steps and 'nvt' in input.steps else False
+            )
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
         # step 2: NVE
-        if ('nve' in input.steps or flag == 'gen_input_nve') and input.nve_input is not None:
+        if (
+            'nve' in input.steps or flag == 'gen_input_nve'
+        ) and input.nve_input is not None:
             prev_step = 'nvt'
             next_step = 'scf'
             if prev_step in input.steps:
@@ -733,7 +759,9 @@ class MainWorkflow:
                         f"Cannot resume nve."
                     ) from exc
             elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict() # type: ignore
+                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore
+                if structure.get('constraints') is not None:
+                    structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore
             else:
                 raise ValidationError(
                     "No structure provided for NVE step. \n"
@@ -745,14 +773,22 @@ class MainWorkflow:
                 if input.nve_input.nodes is not None
                 else effective_worker_cfg['nve'][software]['nodes']
             )
-            assert nodes > 0, "[NVE] nodes must be a positive integer or omitted to use the default."
+            assert (
+                nodes > 0
+            ), "[NVE] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
             cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
             pp_path_raw = self._get_exec_config(
                 effective_worker_name, effective_worker_cfg, software, 'pp_path'
             )
-            pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-            orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
+            pp_path = (
+                str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+            )
+            orb_path = str(
+                Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                .expanduser()
+                .resolve()
+            )
 
             job_nve = qdyn_nve(
                 software=software,
@@ -769,14 +805,22 @@ class MainWorkflow:
             job_nve = set_run_config(
                 job_nve,
                 exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
-                    export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
-                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
+                    modules=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'modules'
+                    ),
+                    export=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'export'
+                    ),
+                    pre_run=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, software, 'pre_run'
+                    ),
                     post_run=None,
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                    'partition': self._get_machine_config(
+                        effective_worker_name, effective_worker_cfg
+                    )['partition'],
                     **effective_worker_cfg['nve'][software],
                     'nodes': nodes,
                 },
@@ -784,13 +828,16 @@ class MainWorkflow:
             jobs['nve'] = [job_nve]
 
             # update flag
-            is_last_step = (True if next_step not in input.steps and 'nve' in input.steps
-                            else False)
+            is_last_step = (
+                True if next_step not in input.steps and 'nve' in input.steps else False
+            )
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
         # step 3: SCF
-        if ('scf' in input.steps or flag == 'gen_input_scf') and input.scf_input is not None:
+        if (
+            'scf' in input.steps or flag == 'gen_input_scf'
+        ) and input.scf_input is not None:
             if software == 'abacus':
                 # no need for scf calc if using abacus
                 pass
@@ -821,20 +868,29 @@ class MainWorkflow:
                             f"Cannot resume scf."
                         ) from exc
                 elif stru_hash:
-                    data_dir = Path(self.config['basic'].get('user_data', 'data/user_data')).resolve()
+                    data_dir = Path(
+                        self.config['basic'].get('user_data', 'data/user_data')
+                    ).resolve()
                     traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
                     traj_format = stru_format
                 elif stru:
                     # User-provided structure text: write to trajectory file
-                    strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+                    strus_ase = ase.io.read(
+                        io.StringIO(stru), format=stru_format, index=':'
+                    )
                     work_dir = self._get_worker_work_dir(effective_worker_name)
 
                     if self._is_remote_worker(effective_worker_name):
                         # Remote worker: write locally then scp to remote host
                         import tempfile
+
                         stru_id = str(uuid.uuid4())
                         stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
-                        remote_host = self.jf_config['workers'].get(effective_worker_name, {}).get('host', '')
+                        remote_host = (
+                            self.jf_config['workers']
+                            .get(effective_worker_name, {})
+                            .get('host', '')
+                        )
 
                         try:
                             with tempfile.TemporaryDirectory() as tmpdir:
@@ -843,14 +899,26 @@ class MainWorkflow:
                                 traj_file_path = f"{stru_dir_remote}/{track_filename}"
 
                                 subprocess.run(
-                                    self._get_ssh_cmd(effective_worker_name, f'mkdir -p {stru_dir_remote}'),
-                                    check=True, timeout=30,
+                                    self._get_ssh_cmd(
+                                        effective_worker_name,
+                                        f'mkdir -p {stru_dir_remote}',
+                                    ),
+                                    check=True,
+                                    timeout=30,
                                 )
                                 subprocess.run(
-                                    self._get_scp_cmd(effective_worker_name, local_file, traj_file_path),
-                                    check=True, timeout=60,
+                                    self._get_scp_cmd(
+                                        effective_worker_name,
+                                        local_file,
+                                        traj_file_path,
+                                    ),
+                                    check=True,
+                                    timeout=60,
                                 )
-                        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                        except (
+                            subprocess.CalledProcessError,
+                            subprocess.TimeoutExpired,
+                        ) as exc:
                             raise ConfigError(
                                 f"Failed to upload trajectory to remote worker "
                                 f"'{effective_worker_name}' (host={remote_host}). "
@@ -859,7 +927,9 @@ class MainWorkflow:
                             ) from exc
                     else:
                         # Local worker: write directly to work_dir
-                        stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
+                        stru_dir = (
+                            Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
+                        )
                         stru_dir.mkdir(parents=True, exist_ok=True)
                         traj_file_path = write_strus(software, strus_ase, str(stru_dir))
 
@@ -875,14 +945,24 @@ class MainWorkflow:
                     if input.scf_input.nodes is not None
                     else effective_worker_cfg['scf'][software]['nodes']
                 )
-                assert nodes > 0, "[SCF] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
+                assert (
+                    nodes > 0
+                ), "[SCF] nodes must be a positive integer or omitted to use the default."
+                ntasks_per_node = effective_worker_cfg['scf'][software][
+                    'ntasks_per_node'
+                ]
                 cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
                 pp_path_raw = self._get_exec_config(
                     effective_worker_name, effective_worker_cfg, software, 'pp_path'
                 )
-                pp_path = str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-                orb_path = str(Path(effective_worker_cfg.get('orb_path', {}).get(software, '')).expanduser().resolve())
+                pp_path = (
+                    str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
+                )
+                orb_path = str(
+                    Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                    .expanduser()
+                    .resolve()
+                )
 
                 jobs_scf = qdyn_scf(
                     software=software,
@@ -901,14 +981,31 @@ class MainWorkflow:
                     jobs_scf[i] = set_run_config(
                         jobs_scf[i],
                         exec_config=ExecutionConfig(
-                            modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'modules'),
-                            export=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'export'),
-                            pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, software, 'pre_run'),
+                            modules=self._get_exec_config(
+                                effective_worker_name,
+                                effective_worker_cfg,
+                                software,
+                                'modules',
+                            ),
+                            export=self._get_exec_config(
+                                effective_worker_name,
+                                effective_worker_cfg,
+                                software,
+                                'export',
+                            ),
+                            pre_run=self._get_exec_config(
+                                effective_worker_name,
+                                effective_worker_cfg,
+                                software,
+                                'pre_run',
+                            ),
                             post_run=None,
                         ),
                         resources={
                             **self._get_worker_resources(resource_worker),
-                            'partition': self._get_machine_config(effective_worker_name, effective_worker_cfg)['partition'],
+                            'partition': self._get_machine_config(
+                                effective_worker_name, effective_worker_cfg
+                            )['partition'],
                             **effective_worker_cfg['scf'][software],
                             'nodes': nodes,
                         },
@@ -916,13 +1013,18 @@ class MainWorkflow:
                 jobs['scf'] = jobs_scf
 
                 # update flag
-                is_last_step = (True if next_step not in input.steps and 'scf' in input.steps
-                                else False)
+                is_last_step = (
+                    True
+                    if next_step not in input.steps and 'scf' in input.steps
+                    else False
+                )
                 if is_last_step:
                     flag = f'gen_input_{next_step}'
 
         # step 4: PRE_NAMD
-        if ('pre_namd' in input.steps or flag == 'gen_input_pre_namd') and input.prenamd_input is not None:
+        if (
+            'pre_namd' in input.steps or flag == 'gen_input_pre_namd'
+        ) and input.prenamd_input is not None:
             prev_step = 'scf' if software != 'abacus' else 'nve'
             next_step = 'namd'
             if prev_step in input.steps:
@@ -948,7 +1050,9 @@ class MainWorkflow:
                     f"'{prev_step}' results."
                 )
 
-            machine_cfg = self._get_machine_config(effective_worker_name, effective_worker_cfg)
+            machine_cfg = self._get_machine_config(
+                effective_worker_name, effective_worker_cfg
+            )
             ncpus = machine_cfg['cpus_per_node']
             job_pre_namd = qdyn_pre_namd(
                 software=software,
@@ -961,12 +1065,21 @@ class MainWorkflow:
             job_pre_namd = set_run_config(
                 job_pre_namd,
                 exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'modules'),
+                    modules=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, 'python', 'modules'
+                    ),
                     export={
-                        **self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'export'),
-                        'OMP_NUM_THREADS': '4'
+                        **self._get_exec_config(
+                            effective_worker_name,
+                            effective_worker_cfg,
+                            'python',
+                            'export',
+                        ),
+                        'OMP_NUM_THREADS': '4',
                     },
-                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'python', 'pre_run'),
+                    pre_run=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, 'python', 'pre_run'
+                    ),
                     post_run=None,
                 ),
                 resources={
@@ -980,13 +1093,18 @@ class MainWorkflow:
             jobs['pre_namd'] = [job_pre_namd]
 
             # update flag
-            is_last_step = (True if next_step not in input.steps and 'pre_namd' in input.steps
-                            else False)
+            is_last_step = (
+                True
+                if next_step not in input.steps and 'pre_namd' in input.steps
+                else False
+            )
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
         # step 4: NAMD
-        if ('namd' in input.steps or flag == 'gen_input_namd') and input.namd_input is not None:
+        if (
+            'namd' in input.steps or flag == 'gen_input_namd'
+        ) and input.namd_input is not None:
             prev_step = 'pre_namd'
             next_step = ''
             if prev_step in input.steps:
@@ -1009,7 +1127,9 @@ class MainWorkflow:
             natxt = prev_output['NATXT']
             dephtime = prev_output['DEPHTIME']
 
-            machine_cfg = self._get_machine_config(effective_worker_name, effective_worker_cfg)
+            machine_cfg = self._get_machine_config(
+                effective_worker_name, effective_worker_cfg
+            )
             if input.namd_input.surface_hopping == 'FSSH':
                 nodes = 1
                 ntasks_per_node = 1
@@ -1018,7 +1138,9 @@ class MainWorkflow:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
                 )
-                assert nodes > 0, "[NAMD] nodes must be a positive integer or omitted to use the default."
+                assert (
+                    nodes > 0
+                ), "[NAMD] nodes must be a positive integer or omitted to use the default."
                 ntasks_per_node = machine_cfg['cpus_per_node']
                 cpus_per_task = 1
 
@@ -1036,12 +1158,21 @@ class MainWorkflow:
             job_namd = set_run_config(
                 job_namd,
                 exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'modules'),
+                    modules=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, 'namd', 'modules'
+                    ),
                     export={
-                        **self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'export'),
+                        **self._get_exec_config(
+                            effective_worker_name,
+                            effective_worker_cfg,
+                            'namd',
+                            'export',
+                        ),
                         'OMP_NUM_THREADS': str(cpus_per_task),
                     },
-                    pre_run=self._get_exec_config(effective_worker_name, effective_worker_cfg, 'namd', 'pre_run'),
+                    pre_run=self._get_exec_config(
+                        effective_worker_name, effective_worker_cfg, 'namd', 'pre_run'
+                    ),
                     post_run=None,
                 ),
                 resources={
@@ -1055,8 +1186,11 @@ class MainWorkflow:
             jobs['namd'] = [job_namd]
 
             # update flag
-            is_last_step = (True if next_step not in input.steps and 'namd' in input.steps
-                            else False)
+            is_last_step = (
+                True
+                if next_step not in input.steps and 'namd' in input.steps
+                else False
+            )
             if is_last_step:
                 flag = f'gen_input_{next_step}'
 
@@ -1066,7 +1200,6 @@ class MainWorkflow:
             )
 
         return jobs
-
 
     def submit(
         self,
@@ -1165,18 +1298,15 @@ class MainWorkflow:
 
         return final_task_id, job_ids, submit_worker
 
-
     def list_tasks(self) -> List[str]:
         """Return all task IDs known to this instance (local-memory view)."""
         return list(self.task_ids)
-
 
     def list_task_jobs(self, task_id: str) -> Dict[str, List[str]]:
         """Return job UUIDs grouped by step for a given task."""
         if task_id not in self.task_ids:
             raise ValidationError(f"Task '{task_id}' not found.")
         return self.job_ids[task_id]
-
 
     def get_job_status(self, job_uuid: str) -> str:
         """Query job status."""
@@ -1192,7 +1322,6 @@ class MainWorkflow:
             raise QueryError(f"Job '{job_uuid}' not found.")
         return job_info
 
-
     def get_job_output(self, job_uuid: str):
         """Retrieve a completed job's output from the jobstore."""
         jc = self._ensure_job_controller()
@@ -1205,7 +1334,6 @@ class MainWorkflow:
         out = jc.get_job_output(job_id=job_uuid)
         return out
 
-
     def restore_from_db(self, conn: sqlite3.Connection) -> int:
         """Restore task_ids and job_ids from the SQLite database.
         Returns the number of tasks restored."""
@@ -1216,7 +1344,9 @@ class MainWorkflow:
             self.job_ids[tid] = json.loads(row["job_ids"])
         return len(rows)
 
-    def stop_task_jobs(self, task_id: str) -> Dict[str, List[str] | List[Dict[str, str]]]:
+    def stop_task_jobs(
+        self, task_id: str
+    ) -> Dict[str, List[str] | List[Dict[str, str]]]:
         """
         Stop all stoppable jobs for a task with detailed per-job results.
 
@@ -1263,13 +1393,11 @@ class MainWorkflow:
             except Exception as exc:
                 failed.append({"uuid": job_uuid, "error": str(exc)})
 
-        return {
-            "stopped": stopped,
-            "skipped": skipped,
-            "failed": failed
-        }
+        return {"stopped": stopped, "skipped": skipped, "failed": failed}
 
-    def continue_task_jobs(self, task_id: str) -> Dict[str, List[str] | List[Dict[str, str]]]:
+    def continue_task_jobs(
+        self, task_id: str
+    ) -> Dict[str, List[str] | List[Dict[str, str]]]:
         """
         Resume all paused/stopped jobs for a task via flow-level resume.
 
@@ -1327,15 +1455,24 @@ class MainWorkflow:
             try:
                 job_info = jc.get_job_info(job_id=job_uuid)
                 if job_info is None:
-                    failed.append({"uuid": job_uuid, "error": "Job not found after resume"})
+                    failed.append(
+                        {"uuid": job_uuid, "error": "Job not found after resume"}
+                    )
                     continue
                 new_state = job_info.state.value
                 if new_state in _RESUMABLE_STATES:
-                    failed.append({"uuid": job_uuid, "error": f"Still in {new_state} after resume"})
+                    failed.append(
+                        {
+                            "uuid": job_uuid,
+                            "error": f"Still in {new_state} after resume",
+                        }
+                    )
                 else:
                     continued.append(job_uuid)
             except Exception as exc:
-                failed.append({"uuid": job_uuid, "error": f"Post-resume query failed: {exc}"})
+                failed.append(
+                    {"uuid": job_uuid, "error": f"Post-resume query failed: {exc}"}
+                )
 
         return {"continued": continued, "skipped": skipped, "failed": failed}
 
@@ -1360,6 +1497,7 @@ class MainWorkflow:
 
         # Delete local database records
         from .database import qdyndb
+
         qdyndb.delete_task_record(task_id)
 
         # Remove from in-memory tracking
