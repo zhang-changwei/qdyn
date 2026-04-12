@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import uuid
 import yaml
-from typing import Any, Optional, Tuple, Dict, List, Literal
+from typing import Any, Tuple, Dict, List, Literal
 
 from ase import Atoms
 import ase.io
@@ -76,12 +76,12 @@ _REMOTE_WORKER_TYPES = {"remote", "separated_transfer"}
 
 class MainWorkflow:
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         self.config, self.jf_config = self._load_config(config_path)
         self.task_ids: List[str] = []
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
-        self.jc: Optional[JobController] = None
+        self.jc: JobController | None = None
 
         # Resolve active pool / worker configuration.
         if 'worker_pools' not in self.config:
@@ -113,7 +113,7 @@ class MainWorkflow:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_config(config_path: Optional[str]) -> Tuple[Dict, Dict]:
+    def _load_config(config_path: str | None) -> Tuple[Dict, Dict]:
 
         path = config_path or os.environ.get('QDYN_CONFIG') or 'config/qdyn.yaml'
         path = os.path.abspath(path)
@@ -147,7 +147,7 @@ class MainWorkflow:
         return cfg, jf_cfg
 
     def _resolve_worker_context(
-        self, pool_name_override: Optional[str] = None
+        self, pool_name_override: str | None = None
     ) -> Tuple[str, Dict[str, Any]]:
         """Resolve the effective pool name and worker config.
 
@@ -167,7 +167,7 @@ class MainWorkflow:
     # ------------------------------------------------------------------
 
     def _resolve_pool_context(
-        self, pool_name: Optional[str] = None
+        self, pool_name: str | None = None
     ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
         """Resolve pool name, worker config, and pool parameters.
 
@@ -182,7 +182,7 @@ class MainWorkflow:
         pool_def = self.config['worker_pools'][name]
         return name, pool_def.get('worker', {}), pool_def.get('pool', {})
 
-    def _get_pool_workers(self, pool_name: Optional[str] = None) -> List[str]:
+    def _get_pool_workers(self, pool_name: str | None = None) -> List[str]:
         """Return runtime worker names belonging to a pool.
 
         Scans jf_config['workers'] for names matching the pattern
@@ -211,7 +211,7 @@ class MainWorkflow:
         "COMPLETED", "FAILED", "REMOTE_ERROR", "STOPPED", "USER_STOPPED",
     ]
 
-    def _get_pool_occupancy(self, pool_name: Optional[str] = None) -> Dict[str, int]:
+    def _get_pool_occupancy(self, pool_name: str | None = None) -> Dict[str, int]:
         """Query the number of SUBMITTED+RUNNING jobs per pool worker.
 
         Returns a dict mapping each pool worker name to its active slot
@@ -245,7 +245,7 @@ class MainWorkflow:
         return result
 
     def _get_user_occupied_workers(
-        self, username: str, pool_name: Optional[str] = None
+        self, username: str, pool_name: str | None = None
     ) -> List[str]:
         """Return the list of pool workers currently occupied by *username*.
 
@@ -271,7 +271,7 @@ class MainWorkflow:
         ]
         return [doc["_id"] for doc in jc.jobs.aggregate(pipeline)]
 
-    def _get_free_workers(self, pool_name: Optional[str] = None) -> List[str]:
+    def _get_free_workers(self, pool_name: str | None = None) -> List[str]:
         """Return pool workers that have zero non-terminal jobs.
 
         A worker is "free" (idle) when it has no jobs in any non-terminal
@@ -296,8 +296,8 @@ class MainWorkflow:
         return [w for w in pool_workers if w not in busy]
 
     def _select_runtime_worker(
-        self, username: str, pool_name: Optional[str] = None
-    ) -> Tuple[Optional[str], str]:
+        self, username: str, pool_name: str | None = None
+    ) -> Tuple[str | None, str]:
         """Select a runtime worker for a new submission.
 
         Selection logic:
@@ -606,9 +606,9 @@ class MainWorkflow:
         stru_hash: str = '',
         resume: bool = False,
         prev_task_id: str = '',
-        worker_name: Optional[str] = None,
-        worker_cfg: Optional[Dict[str, Any]] = None,
-        runtime_worker: Optional[str] = None,
+        worker_name: str | None = None,
+        worker_cfg: Dict[str, Any] | None = None,
+        runtime_worker: str | None = None,
     ) -> Dict[str, List[Job | Flow]]:
         '''
         Notice: assume the config is valid,
@@ -1078,10 +1078,10 @@ class MainWorkflow:
         resume: bool = False,
         prev_task_id: str = '',
         *,
-        task_id: Optional[str] = None,
-        username: Optional[str] = None,
-        pool_name: Optional[str] = None,
-        runtime_worker: Optional[str] = None,
+        task_id: str | None = None,
+        username: str | None = None,
+        pool_name: str | None = None,
+        runtime_worker: str | None = None,
     ) -> Tuple[str, Dict[str, List[str]], str]:
         """Submit a workflow to jobflow-remote.
 

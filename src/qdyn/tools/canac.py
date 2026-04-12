@@ -5,7 +5,7 @@ import os
 import numpy as np
 import numpy.typing as npt
 
-from typing import Literal, Optional, List, Dict, Sequence, cast
+from typing import Literal, List, Dict, Sequence, cast
 
 from .libcanac import aeolap
 from .libcanac.utils import (load_wfc, close_wfc, 
@@ -33,8 +33,8 @@ def extract_eigvals_and_nacs(
     ispin: int = 1,
     soc: bool = False,
     nproc: int = 1,
-    bmin_stored: Optional[int] = None,
-    bmax_stored: Optional[int] = None,
+    bmin_stored: int | None = None,
+    bmax_stored: int | None = None,
     dirs_sorted: bool = False,
 ):
     # input validation
@@ -189,7 +189,7 @@ def calc_tdolap_wrapper(
     ispin: int,
     soc: bool = False,
     is_alle: bool = False,
-    paw_info: Optional[aeolap.PawProj_info] = None,
+    paw_info: aeolap.PawProj_info | None = None,
     sysname: str = 'qdyn',
 ):
     # file checking and loading
@@ -324,4 +324,3 @@ def check_first_dir_alle(dirs: Sequence[str]):
 
 def plot_tdeigenvalues():
     pass
-

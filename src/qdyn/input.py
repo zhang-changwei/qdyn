@@ -1,7 +1,7 @@
 import re
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal, List, Optional, Any
+from typing import Literal, List, Any
 
 import numpy as np
 
@@ -36,7 +36,7 @@ class SchedulerConfigT(BaseModel):
 
 
 class NAMDInputT(BaseModel):
-    nodes: Optional[int] = Field(
+    nodes: int | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -91,12 +91,12 @@ class _PreNAMDInputAdvT(BaseModel):
         json_schema_extra={"step": 1},
     )
 
-    which_atoms: Optional[List[int]] = Field(
+    which_atoms: List[int] | None = Field(
         default=None,
         description="Optional atom indices to project, comma-separated in UI",
         json_schema_extra={"widget": "comma-separated-integers", "placeholder": "e.g. 1,2,5"},
     )
-    cbar_labels: Optional[List[str]] = Field(
+    cbar_labels: List[str] | None = Field(
         default=None,
         description="Optional colorbar labels, comma-separated in UI",
         json_schema_extra={"widget": "comma-separated-strings", "placeholder": "e.g. CBM,VBM,DEFECT"},
@@ -143,7 +143,7 @@ class PreNAMDInputT(BaseModel):
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
 
-    nodes: Optional[int] = Field(
+    nodes: int | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -203,7 +203,7 @@ class NVTInputT(BaseModel):
 class NVEInputT(BaseModel):
     """Input parameters for NVE molecular dynamics."""
 
-    nodes: Optional[int] = Field(
+    nodes: int | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -250,7 +250,7 @@ class NVEInputT(BaseModel):
 class SCFInputT(BaseModel):
     """Input parameters for static SCF calculation."""
 
-    nodes: Optional[int] = Field(
+    nodes: int | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -303,11 +303,11 @@ class InputT(BaseModel):
 
     basic_input: BasicInputT
     scheduler_config: SchedulerConfigT
-    nvt_input: Optional[NVTInputT] = None
-    nve_input: Optional[NVEInputT] = None
-    scf_input: Optional[SCFInputT] = None
-    prenamd_input: Optional[PreNAMDInputT] = None
-    namd_input: Optional[NAMDInputT] = None
+    nvt_input: NVTInputT | None = None
+    nve_input: NVEInputT | None = None
+    scf_input: SCFInputT | None = None
+    prenamd_input: PreNAMDInputT | None = None
+    namd_input: NAMDInputT | None = None
 
     steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
     stru: str = ''

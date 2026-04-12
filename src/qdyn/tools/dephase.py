@@ -23,23 +23,17 @@ def calculate_dephasing_time(
 ) -> Dict[str, Any]:
     r"""Calculate pairwise dephasing times from KS energy eigenvalue trajectories.
 
-    Parameters
-    ----------
-    working_dir:
-        Directory where output files and optional plots are written.
-    energies_path:
-        Path to the KS energy file in EIGTXT format: a plain-text array of
-        shape ``(nstep, nbasis)`` with energies in eV.
-    md_dt:
-        MD time step in femtoseconds used to set the time axis.  Default 1.0 fs.
-    plot:
-        If ``True``, save a ``dephasing_i_j.png`` plot of ``D(t)`` for every
-        state pair to *working_dir*.
+    Args:
+        working_dir: Directory where output files and optional plots are written.
+        energies_path: Path to the KS energy file in EIGTXT format: a
+            plain-text array of shape ``(nstep, nbasis)`` with energies in eV.
+        md_dt: MD time step in femtoseconds used to set the time axis.
+            Default 1.0 fs.
+        plot: If ``True``, save a ``dephasing_i_j.png`` plot of ``D(t)``
+            for every state pair to *working_dir*.
 
-    Returns
-    -------
-    Output
-        A dict with 'DEPHTIME' and 'images' keys. 
+    Returns:
+        dict: Mapping with ``DEPHTIME`` and generated image paths.
     """
 
     energy = np.loadtxt(energies_path)  # shape (nstep, nbasis)

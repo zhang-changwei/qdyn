@@ -2,7 +2,7 @@ import os
 import re
 import logging
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 
 import matplotlib
 
@@ -16,7 +16,7 @@ import numpy as np
 # ===========================================================================
 def check_scf_convergence(
     converged_list: list[bool],
-    check_nsw: Optional[int] = None,
+    check_nsw: int | None = None,
     max_unconverged_ratio: float = 0.01,
 ) -> bool:
     """Check SCF convergence from MD data (universal for all software).
@@ -119,7 +119,7 @@ def save_md_data(md_data: Dict, md_dt: float, filename: str = 'md.dat') -> str:
 def plot_md_results(
     md_data: Dict,
     filename: str,
-    target_temp: Optional[float] = None,
+    target_temp: float | None = None,
 ) -> str:
     """Plot MD simulation results.
 
@@ -185,9 +185,9 @@ def plot_md_results(
 
 def parallel_wht(
     runDirs: list[str],
-    whichAtoms: Optional[np.ndarray],
+    whichAtoms: np.ndarray | None,
     software: str,
-    nproc: Optional[int] = None,
+    nproc: int | None = None,
 ) -> Tuple:
     """Calculate atom-projected weights in parallel for different software.
 
@@ -217,12 +217,11 @@ def parallel_wht(
     with multiprocessing.Pool(processes=nproc) as pool:
 
         # Select weight extraction function based on software
-        match software:
-            case 'vasp':
-                weight_func = WeightFromPro
-                weight_file = 'PROCAR'
-            case _:
-                raise NotImplementedError
+        if software == 'vasp':
+            weight_func = WeightFromPro
+            weight_file = 'PROCAR'
+        else:
+            raise NotImplementedError
 
         results = []
         for rd in run_dir_paths:
@@ -263,8 +262,8 @@ def extract_wht_with_cache(
     run_dirs: list,
     which_spin: int = 0,
     which_kpoint: int = 0,
-    which_atoms: Optional[np.ndarray] = None,
-    nproc: Optional[int] = None,
+    which_atoms: np.ndarray | None = None,
+    nproc: int | None = None,
     cache_file_wht: str = 'all_wht.npy',
     cache_file_enr: str = 'all_en.npy',
     force_recalculate: bool = False,
@@ -421,11 +420,9 @@ def extract_band_edges(
     Tuple[int, int]
         (vbm, cbm) - VBM and CBM band indices (0-based).
     """
-    match software:
-        case 'vasp':
-            return extract_from_vasp_outcar(dir_path, whichK, whichS)
-        case _:
-            raise NotImplementedError
+    if software == 'vasp':
+        return extract_from_vasp_outcar(dir_path, whichK, whichS)
+    raise NotImplementedError
 
 
 # ===========================================================================
@@ -571,8 +568,8 @@ def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
 
 def WeightFromPro(
     infile: str = 'PROCAR',
-    whichAtom: Optional[np.ndarray] = None,
-    spd: Optional[np.ndarray] = None,
+    whichAtom: np.ndarray | None = None,
+    spd: np.ndarray | None = None,
 ) -> Tuple:
     """
     Contribution of selected atoms to the each KS orbital

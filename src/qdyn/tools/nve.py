@@ -1,7 +1,7 @@
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import ase.io
 from ase import Atoms
@@ -38,43 +38,29 @@ def qdyn_nve(
     Jobflow automatically manages the working directory, so all input files
     are written to the current directory.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', 'cp2k', etc.).
-    parameters : NVEInputT
-        NVE simulation parameters.
-    pp_path : str
-        Path to pseudopotential files.
-    orb_path : str
-        Path to orbital files (for SIESTA/ABACUS/OpenMX).
-    structure : Atoms
-        Atomic structure (typically CONTCAR from NVT).
-    nodes : int
-        Number of nodes for parallel calculation.
-    ntasks_per_node : int
-        Number of MPI tasks per node.
-    cpus_per_task : int
-        Number of CPUs per task.
-    plot : bool
-        Whether to generate plots.
-    prepare_input_only : bool
-        If True, only prepare input files without running the calculation.
+    Args:
+        software: Software name ('vasp', 'cp2k', etc.).
+        parameters: NVE simulation parameters.
+        pp_path: Path to pseudopotential files.
+        orb_path: Path to orbital files (for SIESTA/ABACUS/OpenMX).
+        structure: Atomic structure (typically CONTCAR from NVT).
+        nodes: Number of nodes for parallel calculation.
+        ntasks_per_node: Number of MPI tasks per node.
+        cpus_per_task: Number of CPUs per task.
+        plot: Whether to generate plots.
+        prepare_input_only: If True, only prepare input files without running
+            the calculation.
 
-    Returns
-    -------
-    Dict
-        Dictionary containing:
+    Returns:
+        Dict:
         - run_dir: Current working directory path
         - software: Software name used
         - images: List of paths to generated plot files
         - strus: List of Atoms structures extracted from XDATCAR
         - contcar: Final atomic structure (from CONTCAR)
 
-    Raises
-    ------
-    RuntimeError
-        If SCF convergence fails in the last portion of the trajectory.
+    Raises:
+        RuntimeError: If SCF convergence fails in the last portion of the trajectory.
     """
 
     software_lower = software.lower()
@@ -143,38 +129,31 @@ def _prepare_nve_input(
 ):
     """Prepare input files for NVE molecular dynamics.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', etc.).
-    structure : Atoms
-        Atomic structure.
-    parameters : NVEInputT
-        NVE parameters.
-    pp_path : str
-        Path to pseudopotential directory.
-    orb_path : str
-        Path to orbital files.
+    Args:
+        software: Software name ('vasp', etc.).
+        structure: Atomic structure.
+        parameters: NVE parameters.
+        pp_path: Path to pseudopotential directory.
+        orb_path: Path to orbital files.
     """
 
     input = deepcopy(params_default['nve'][software])
-    match software:
-        case 'vasp':
-            input['POTIM'] = parameters.md_dt
-            input['NSW'] = parameters.md_step
-            input['EDIFF'] = parameters.scf_thr
+    if software == 'vasp':
+        input['POTIM'] = parameters.md_dt
+        input['NSW'] = parameters.md_step
+        input['EDIFF'] = parameters.scf_thr
 
-            prepare_vasp_inputs(
-                structure=structure,
-                pp_path=pp_path,
-                kspacing=parameters.kspacing,
-                incar_dict=input,
-                incar_params=parameters.parameters,
-            )
-        case _:
-            raise NotImplementedError(
-                f"Software {software} is not supported for NVE input preparation yet."
-            )
+        prepare_vasp_inputs(
+            structure=structure,
+            pp_path=pp_path,
+            kspacing=parameters.kspacing,
+            incar_dict=input,
+            incar_params=parameters.parameters,
+        )
+    else:
+        raise NotImplementedError(
+            f"Software {software} is not supported for NVE input preparation yet."
+        )
 
 
 def _process_nve_output(
@@ -190,28 +169,21 @@ def _process_nve_output(
 
     Here we check convergence of the last 10% of steps with a strict threshold.
 
-    Parameters
-    ----------
-    software : str
-        Software name.
-    md_dt : float
-        MD time step in fs (used for saving MD data).
-    plot : bool
-        Whether to generate plots.
+    Args:
+        software: Software name.
+        md_dt: MD time step in fs (used for saving MD data).
+        plot: Whether to generate plots.
 
-    Returns
-    -------
-    Tuple[bool, str, List[str]]
+    Returns:
         (scf_converged, md_file, images)
     """
 
-    match software:
-        case 'vasp':
-            md_data = extract_md_data_from_oszicar()
-        case _:
-            raise NotImplementedError(
-                f"MD data extraction for {software} is not implemented yet."
-            )
+    if software == 'vasp':
+        md_data = extract_md_data_from_oszicar()
+    else:
+        raise NotImplementedError(
+            f"MD data extraction for {software} is not implemented yet."
+        )
 
     if md_data is None or len(md_data['steps']) == 0:
         raise FileNotFoundError(
@@ -243,18 +215,13 @@ def _process_nve_output(
 def write_strus(software: str, structures: List[Atoms], directory: str = '.') -> str:
     """Write structures to a trajectory file in software-native format.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', 'cp2k', etc.).
-    structures : List[Atoms]
-        List of ASE Atoms objects to write.
-    directory : str
-        Directory to write the trajectory file into. Default is current directory.
+    Args:
+        software: Software name ('vasp', 'cp2k', etc.).
+        structures: List of ASE Atoms objects to write.
+        directory: Directory to write the trajectory file into. Default is
+            current directory.
 
-    Returns
-    -------
-    str
+    Returns:
         Path to the written trajectory file.
     """
     track_name = md_tracks.get(software)
@@ -275,18 +242,14 @@ def read_strus(
 ) -> List[Atoms]:
     """Read structures from trajectory file.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', 'cp2k', etc.).
-    directory : str
-        Directory containing the trajectory file (used when traj_file_path is None).
-    traj_file_path : str or None
-        Explicit path to the trajectory file. If given, directory is ignored.
+    Args:
+        software: Software name ('vasp', 'cp2k', etc.).
+        directory: Directory containing the trajectory file (used when
+            traj_file_path is None).
+        traj_file_path: Explicit path to the trajectory file. If given,
+            directory is ignored.
 
-    Returns
-    -------
-    List[Atoms]
+    Returns:
         List of ASE Atoms objects representing the structures.
     """
     if traj_file_path is None:

@@ -6,7 +6,7 @@ implementing a dual-layer status model: raw status passthrough
 plus derived status for UI consumption.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from pydantic import BaseModel, Field
 
@@ -19,13 +19,13 @@ class JobStatusItem(BaseModel):
     # Raw status string from jobflow-remote JobInfo.state
     state: str
     # Derived status for UI display
-    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
-    error: Optional[str] = None
+    derived_state: str | None = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
+    error: str | None = None
     index: int
     # Timestamps from jobflow-remote JobInfo (ISO format strings)
-    created_on: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
+    created_on: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
 
 
 class JobStatusDetailResponse(BaseModel):
@@ -34,9 +34,9 @@ class JobStatusDetailResponse(BaseModel):
     uuid: str
     name: str
     state: str
-    derived_state: Optional[str] = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
-    error: Optional[str] = None
-    log_note: Optional[str] = None
+    derived_state: str | None = None  # "RUNNING" | "COMPLETED" | "FAILED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
+    error: str | None = None
+    log_note: str | None = None
 
 
 class TaskJobsStatusResponse(BaseModel):
@@ -49,7 +49,7 @@ class TaskJobsStatusResponse(BaseModel):
     derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
     jobs: List[JobStatusItem]
     # Resume chain: id of the predecessor task (if this is a resume task)
-    prev_task_id: Optional[str] = None
+    prev_task_id: str | None = None
 
 
 class TaskSummary(BaseModel):
@@ -70,23 +70,23 @@ class TaskSummary(BaseModel):
     # Steps that have fully completed (contiguous prefix only)
     completed_steps: List[str] = Field(default_factory=list)
     # Structure metadata (persisted at submit time)
-    formula: Optional[str] = None
-    num_atoms: Optional[int] = None
+    formula: str | None = None
+    num_atoms: int | None = None
     # Resume chain: id of the predecessor task (if this is a resume task)
-    prev_task_id: Optional[str] = None
+    prev_task_id: str | None = None
     # Worker used for this task (e.g. "local_slurm", "remote_djs")
-    worker: Optional[str] = None
+    worker: str | None = None
     # The next step that can be resumed from
-    resume_next_step: Optional[str] = None
+    resume_next_step: str | None = None
     # Whether this task is eligible to be resumed
     resume_eligible: bool = False
     # Pool-based queue fields (populated for tasks in the waiting queue)
-    queue_status: Optional[str] = None  # "QUEUED" | "DISPATCHING" | None
-    queue_position: Optional[int] = None  # 1-based position in queue
+    queue_status: str | None = None  # "QUEUED" | "DISPATCHING" | None
+    queue_position: int | None = None  # 1-based position in queue
     # Logical pool name (e.g. "local_slurm")
-    pool_name: Optional[str] = None
+    pool_name: str | None = None
     # Runtime worker name (e.g. "local_slurm_007")
-    runtime_worker: Optional[str] = None
+    runtime_worker: str | None = None
 
 
 class TaskSummaryListResponse(BaseModel):
@@ -101,8 +101,8 @@ class JobErrorResponse(BaseModel):
 
     state: str
     available: bool
-    message: Optional[str] = None
-    traceback: Optional[str] = None
+    message: str | None = None
+    traceback: str | None = None
 
 
 class StopFailedItem(BaseModel):
@@ -146,8 +146,8 @@ class StructureValidationResponse(BaseModel):
     """Response payload for POSCAR structure validation."""
 
     valid: bool
-    error: Optional[str] = None
-    structure: Optional[StructureValidationInfo] = None
+    error: str | None = None
+    structure: StructureValidationInfo | None = None
 
 
 # ============================================
@@ -210,25 +210,25 @@ class SCFCurrentFrame(BaseModel):
     name: str = ""
     global_index: int = 0
     status: str = ""  # "RUNNING"
-    electronic_step_current: Optional[int] = None
-    electronic_step_limit: Optional[int] = None
-    scf_algorithm: Optional[str] = None
-    converged: Optional[bool] = None  # None=running, True/False=done
+    electronic_step_current: int | None = None
+    electronic_step_limit: int | None = None
+    scf_algorithm: str | None = None
+    converged: bool | None = None  # None=running, True/False=done
 
 
 class JobProgressResponse(BaseModel):
     """Response describing a job's progress (MD steps or SCF convergence)."""
 
     available: bool
-    step_type: Optional[str] = None  # "nvt" / "nve" / "scf" / "other"
+    step_type: str | None = None  # "nvt" / "nve" / "scf" / "other"
     current_step: int = 0
-    total_steps: Optional[int] = None
-    percent: Optional[float] = None
-    last_temp: Optional[float] = None  # NVT/NVE only
-    last_energy: Optional[float] = None
+    total_steps: int | None = None
+    percent: float | None = None
+    last_temp: float | None = None  # NVT/NVE only
+    last_energy: float | None = None
     # SCF fine-grained fields
-    batch: Optional[SCFBatchInfo] = None
-    current_frame: Optional[SCFCurrentFrame] = None
+    batch: SCFBatchInfo | None = None
+    current_frame: SCFCurrentFrame | None = None
     failed_frames: List[str] = Field(default_factory=list)
 
 
@@ -255,11 +255,11 @@ class JobInputParamsResponse(BaseModel):
     """Response containing input parameters for a job."""
 
     available: bool
-    incar: Optional[Dict[str, str]] = None
-    kpoints_text: Optional[str] = None
-    parameters: Optional[Dict[str, str]] = None
-    parameters_title: Optional[str] = None
-    warning: Optional[str] = None
+    incar: Dict[str, str] | None = None
+    kpoints_text: str | None = None
+    parameters: Dict[str, str] | None = None
+    parameters_title: str | None = None
+    warning: str | None = None
 
 
 class MDAttemptItem(BaseModel):
@@ -286,22 +286,22 @@ class MDSeriesData(BaseModel):
 class MDReferenceLines(BaseModel):
     """Reference lines and annotation values for the chart."""
 
-    potim_fs: Optional[float] = None
-    tebeg: Optional[float] = None
-    teend: Optional[float] = None
-    target_temperature: Optional[float] = None
-    temperature_tolerance_low: Optional[float] = None
-    temperature_tolerance_high: Optional[float] = None
-    mean_total_energy: Optional[float] = None
-    initial_total_energy: Optional[float] = None
-    energy_drift_slope_ev_per_step: Optional[float] = None
+    potim_fs: float | None = None
+    tebeg: float | None = None
+    teend: float | None = None
+    target_temperature: float | None = None
+    temperature_tolerance_low: float | None = None
+    temperature_tolerance_high: float | None = None
+    mean_total_energy: float | None = None
+    initial_total_energy: float | None = None
+    energy_drift_slope_ev_per_step: float | None = None
 
 
 class MDTimeseriesStats(BaseModel):
     """Summary statistics for the returned timeseries data."""
 
     current_step: int
-    total_steps: Optional[int] = None
+    total_steps: int | None = None
     original_points: int
     returned_points: int
     sampled: bool
@@ -311,11 +311,11 @@ class JobMdTimeseriesResponse(BaseModel):
     """Response for the MD timeseries endpoint."""
 
     available: bool
-    step_type: Optional[str] = None
-    state: Optional[str] = None
+    step_type: str | None = None
+    state: str | None = None
     selected_attempt: int = 1
     attempts: List[MDAttemptItem] = Field(default_factory=list)
-    series: Optional[MDSeriesData] = None
-    references: Optional[MDReferenceLines] = None
-    stats: Optional[MDTimeseriesStats] = None
-    warning: Optional[str] = None
+    series: MDSeriesData | None = None
+    references: MDReferenceLines | None = None
+    stats: MDTimeseriesStats | None = None
+    warning: str | None = None

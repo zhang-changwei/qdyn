@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal
 
 import ase
 import ase.io
@@ -37,7 +37,7 @@ MAX_UPLOAD_SIZE = 500 * 1024 * 1024
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-manager: Optional[MainWorkflow] = None
+manager: MainWorkflow | None = None
 
 
 @asynccontextmanager
@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
     _, _, pool_cfg = manager._resolve_pool_context()
     poll_interval = pool_cfg.get("queue_poll_interval", 60)
 
-    poller_task: Optional[asyncio.Task] = asyncio.create_task(
+    poller_task: asyncio.Task | None = asyncio.create_task(
         queue_dispatch_loop(
             workflow=manager,
             db=qdyndb,
@@ -321,8 +321,8 @@ def _sync_dispatch(
     resume: bool,
     prev_task_id: str,
     *,
-    runtime_worker: Optional[str] = None,
-) -> Optional[str]:
+    runtime_worker: str | None = None,
+) -> str | None:
     """Synchronous core of the dispatch: select worker + submit + persist.
 
     Called inside ``asyncio.to_thread()`` while the dispatch lock is held.
@@ -384,7 +384,7 @@ async def _dispatch_task(
     method: str,
     resume: bool,
     prev_task_id: str,
-) -> Optional[str]:
+) -> str | None:
     """Acquire the dispatch lock, select a worker, and submit.
 
     Returns the runtime worker name on success, or None if all workers
@@ -416,8 +416,8 @@ class SubmitResponse(BaseModel):
     """Structured response from the /submit endpoint."""
     task_id: str
     status: Literal["SUBMITTED", "QUEUED"]
-    worker: Optional[str] = None
-    queue_position: Optional[int] = None
+    worker: str | None = None
+    queue_position: int | None = None
 
 
 @app.post("/submit", response_model=SubmitResponse, status_code=201)

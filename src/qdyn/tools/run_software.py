@@ -1,10 +1,8 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
-
-def run_software(software: str, nprocs: int, is_alle: Optional[bool] = False) -> None:
+def run_software(software: str, nprocs: int, is_alle: bool | None = False) -> None:
     """Run the specified software with appropriate settings.
 
     Args:
@@ -13,14 +11,13 @@ def run_software(software: str, nprocs: int, is_alle: Optional[bool] = False) ->
         is_alle: Whether to use all-electron version (if applicable).
     """
 
-    match software:
-        case 'vasp':
-            run_vasp(nprocs=nprocs, is_alle=is_alle)
-        case _:
-            raise NotImplementedError(f"Software '{software}' is not supported yet.")
+    if software == 'vasp':
+        run_vasp(nprocs=nprocs, is_alle=is_alle)
+    else:
+        raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
 
-def run_vasp(nprocs: int, is_alle: Optional[bool] = False) -> None:
+def run_vasp(nprocs: int, is_alle: bool | None = False) -> None:
     """Run VASP calculation using mpirun.
 
     Args:

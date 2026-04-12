@@ -2,13 +2,13 @@ import json
 import os
 import sqlite3
 import threading
-from typing import Optional, List
+from typing import List
 
 
 class QdynDB:
 
     def __init__(self):
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._lock = threading.RLock()
 
     def init_db(self, db_path: str = "data/qdyn_users.db") -> None:
@@ -109,7 +109,7 @@ class QdynDB:
             conn.commit()
 
 
-    def get_user(self, username: str) -> Optional[dict]:
+    def get_user(self, username: str) -> dict | None:
         conn = self.get_db()
         with self._lock:
             row = conn.execute(
@@ -123,7 +123,7 @@ class QdynDB:
         task_id: str,
         username: str,
         job_ids: dict,
-        pool_name: Optional[str] = None,
+        pool_name: str | None = None,
     ) -> None:
         conn = self.get_db()
         with self._lock:
@@ -145,7 +145,7 @@ class QdynDB:
         return [row["task_id"] for row in rows]
 
 
-    def get_task_owner(self, task_id: str) -> Optional[str]:
+    def get_task_owner(self, task_id: str) -> str | None:
         conn = self.get_db()
         with self._lock:
             row = conn.execute(
@@ -174,11 +174,11 @@ class QdynDB:
     def update_task_metadata(
         self,
         task_id: str,
-        formula: Optional[str] = None,
-        num_atoms: Optional[int] = None,
-        prev_task_id: Optional[str] = None,
-        worker: Optional[str] = None,
-        pool_name: Optional[str] = None,
+        formula: str | None = None,
+        num_atoms: int | None = None,
+        prev_task_id: str | None = None,
+        worker: str | None = None,
+        pool_name: str | None = None,
     ) -> None:
         """Persist structure metadata, resume lineage, worker, and pool for a task."""
         conn = self.get_db()
@@ -190,7 +190,7 @@ class QdynDB:
             )
             conn.commit()
 
-    def get_task_metadata(self, task_id: str) -> Optional[dict]:
+    def get_task_metadata(self, task_id: str) -> dict | None:
         """Return formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
         conn = self.get_db()
         with self._lock:
@@ -312,7 +312,7 @@ class QdynDB:
             conn.commit()
             return True
 
-    def get_queued_status(self, task_id: str) -> Optional[dict]:
+    def get_queued_status(self, task_id: str) -> dict | None:
         """Return queue entry for a single task, or None if not in queue.
 
         Used by get_task_detail() to detect QUEUED/DISPATCHING/FAILED/CANCELLED

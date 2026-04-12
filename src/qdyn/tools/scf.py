@@ -14,7 +14,7 @@ import logging
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Tuple, Any, TYPE_CHECKING
 
 import matplotlib
 
@@ -31,6 +31,9 @@ from ..params import params_default, chg_name, ipt_files, stru_files
 from ..input_prepare import prepare_vasp_inputs
 from .nve import read_strus
 from .run_software import run_software
+
+if TYPE_CHECKING:
+    from jobflow import Job # type: ignore
 
 # Status file names
 STATUS_RUNNING = 'RUNNING'
@@ -50,40 +53,27 @@ def qdyn_scf(
     cpus_per_task: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> List:
+) -> List[Job]:
     """Create SCF jobs for frames from the NVE trajectory.
 
     This is a task distribution function (NOT @job decorated) that:
     1. Creates a Job for each batch based on batch_size and md_step
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', etc.).
-    parameters : SCFInputT
-        SCF calculation parameters including scf_step, md_step, batch_size.
-    pp_path : str
-        Path to pseudopotential files.
-    orb_path : str
-        Path to orbital files.
-    traj_file_path : str
-        Path to the trajectory file (e.g. XDATCAR for VASP).
-    traj_format : str
-        Format of the trajectory file.
-    nodes : int
-        Number of nodes.
-    ntasks_per_node : int
-        MPI tasks per node.
-    cpus_per_task : int
-        CPUs per task.
-    plot : bool
-        Whether to generate TDKS plot.
-    prepare_input_only : bool
-        If True, only prepare input files.
+    Args:
+        software: Software name ('vasp', etc.).
+        parameters: SCF calculation parameters including scf_step, md_step,
+            batch_size.
+        pp_path: Path to pseudopotential files.
+        orb_path: Path to orbital files.
+        traj_file_path: Path to the trajectory file (e.g. XDATCAR for VASP).
+        traj_format: Format of the trajectory file.
+        nodes: Number of nodes.
+        ntasks_per_node: MPI tasks per node.
+        cpus_per_task: CPUs per task.
+        plot: Whether to generate TDKS plot.
+        prepare_input_only: If True, only prepare input files.
 
-    Returns
-    -------
-    List[Job]
+    Returns:
         List of SCF Job objects, one per batch.
     """
 
@@ -143,37 +133,22 @@ def qdyn_scf_task(
     4. Runs SCF calculations sequentially with CHGCAR passing
     5. Manages status files for resume capability
 
-    Parameters
-    ----------
-    software : str
-        Software name.
-    parameters : SCFInputT
-        SCF parameters.
-    pp_path : str
-        Pseudopotential path.
-    orb_path : str
-        Orbital file path.
-    traj_file_path : str
-        Path to the trajectory file (e.g. XDATCAR for VASP).
-    traj_format : str
-        Format of the trajectory file (e.g. 'vasp-xdatcar').
-    frame_start : int
-        Global frame index of the first structure (0-based).
-    frame_end : int
-        Global frame index of the last structure (0-based).
-    nodes : int
-        Number of compute nodes.
-    ntasks_per_node : int
-        MPI tasks per node.
-    cpus_per_task : int
-        CPUs per task.
-    prepare_input_only : bool
-        If True, only prepare input files without running.
+    Args:
+        software: Software name.
+        parameters: SCF parameters.
+        pp_path: Pseudopotential path.
+        orb_path: Orbital file path.
+        traj_file_path: Path to the trajectory file (e.g. XDATCAR for VASP).
+        traj_format: Format of the trajectory file (e.g. 'vasp-xdatcar').
+        frame_start: Global frame index of the first structure (0-based).
+        frame_end: Global frame index of the last structure (0-based).
+        nodes: Number of compute nodes.
+        ntasks_per_node: MPI tasks per node.
+        cpus_per_task: CPUs per task.
+        prepare_input_only: If True, only prepare input files without running.
 
-    Returns
-    -------
-    Dict
-        Dictionary containing:
+    Returns:
+        Dict:
         - run_dir: Working directory path for this task
         - frame_range: (start, end) tuple of frame indices (inclusive)
         - successful: Number of successful SCF calculations
@@ -322,73 +297,56 @@ def _prepare_scf_input(
 
     These files will be copied to each subdirectory.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', etc.).
-    structure : Atoms
-        Atomic structure (used for KPOINTS generation).
-    frame_start : int
-        Starting index for the frame.
-    parameters : SCFInputT
-        SCF parameters.
-    pp_path : str
-        Path to pseudopotential directory.
+    Args:
+        software: Software name ('vasp', etc.).
+        structure: Atomic structure (used for KPOINTS generation).
+        parameters: SCF parameters.
+        pp_path: Path to pseudopotential directory.
+        orb_path: Path to orbital files.
     """
 
     # Create input files
     input = deepcopy(params_default['scf'][software])
-    match software:
-        case 'vasp':
-            input['EDIFF'] = parameters.scf_thr
+    if software == 'vasp':
+        input['EDIFF'] = parameters.scf_thr
 
-            # Use unified prepare_vasp_inputs function
-            prepare_vasp_inputs(
-                structure=structure,
-                pp_path=pp_path,
-                kspacing=parameters.kspacing,
-                incar_dict=input,
-                incar_params=parameters.parameters,
-            )
-
-        case _:
-            raise NotImplementedError(
-                f"Software {software} is not supported for SCF input preparation yet."
-            )
+        # Use unified prepare_vasp_inputs function
+        prepare_vasp_inputs(
+            structure=structure,
+            pp_path=pp_path,
+            kspacing=parameters.kspacing,
+            incar_dict=input,
+            incar_params=parameters.parameters,
+        )
+    else:
+        raise NotImplementedError(
+            f"Software {software} is not supported for SCF input preparation yet."
+        )
 
 
 def _write_stru(software: str, structure: Atoms, output_path: Path):
     """Write ASE Atoms object to a structure file.
 
-    Parameters
-    ----------
-    software : str
-        Software name ('vasp', 'cp2k', etc.).
-    structure : Atoms
-        ASE Atoms object to write.
-    output_path : Path
-        Path to output structure file.
+    Args:
+        software: Software name ('vasp', 'cp2k', etc.).
+        structure: ASE Atoms object to write.
+        output_path: Path to output structure file.
     """
-    match software:
-        case 'vasp':
-            ase.io.write(
-                str(output_path / "POSCAR"), structure, vasp5=True, direct=True
-            )
-        case _:
-            raise ValueError(f"Unsupported software: {software}")
+    if software == 'vasp':
+        ase.io.write(
+            str(output_path / "POSCAR"), structure, vasp5=True, direct=True
+        )
+    else:
+        raise ValueError(f"Unsupported software: {software}")
 
 
-def _get_status(subdir: str) -> Optional[str]:
+def _get_status(subdir: str) -> str | None:
     """Get the status of a subdirectory calculation.
 
-    Parameters
-    ----------
-    subdir : str
-        Path to subdirectory.
+    Args:
+        subdir: Path to subdirectory.
 
-    Returns
-    -------
-    Optional[str]
+    Returns:
         Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL) or None.
     """
     for status in [STATUS_ENDED, STATUS_FAIL, STATUS_RUNNING]:
@@ -401,12 +359,9 @@ def _get_status(subdir: str) -> Optional[str]:
 def _set_status(subdir: str, status: str):
     """Set the status of a subdirectory calculation.
 
-    Parameters
-    ----------
-    subdir : str
-        Path to subdirectory.
-    status : str
-        Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL).
+    Args:
+        subdir: Path to subdirectory.
+        status: Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL).
     """
     # Remove old status files
     for old_status in [STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL]:
@@ -422,12 +377,9 @@ def _set_status(subdir: str, status: str):
 def _clean_all_files(subdir: str, stru: str):
     """Remove all status files from a subdirectory except the structure file.
 
-    Parameters
-    ----------
-    subdir : str
-        Path to subdirectory.
-    stru : str
-        Name of the structure file to preserve.
+    Args:
+        subdir: Path to subdirectory.
+        stru: Name of the structure file to preserve.
     """
     for fname in os.listdir(subdir):
         if fname == stru:
@@ -443,53 +395,51 @@ def _validate_scf_output(software: str):
     Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
     the file tail for efficiency.
 
-    Raises
-    ------
-    RuntimeError
-        If OUTCAR is missing or calculation did not complete/converge.
+    Raises:
+        RuntimeError: If OUTCAR is missing or calculation did not
+            complete/converge.
     """
-    match software:
-        case 'vasp':
-            if not os.path.isfile('OUTCAR'):
-                raise RuntimeError("SCF calculation failed: OUTCAR not found.")
+    if software == 'vasp':
+        if not os.path.isfile('OUTCAR'):
+            raise RuntimeError("SCF calculation failed: OUTCAR not found.")
 
-            with open('OUTCAR', 'rb') as f:
-                content = f.read()
+        with open('OUTCAR', 'rb') as f:
+            content = f.read()
 
-            # Check completion marker
-            if b'Total CPU' not in content:
-                raise RuntimeError(
-                    "SCF calculation failed: OUTCAR does not contain 'Total CPU' marker. "
-                    "The calculation may not have completed successfully."
-                )
-
-            # Check SCF convergence
-            if b'aborting loop because EDIFF is reached' not in content:
-                # Look for common convergence failure markers
-                # if b'WARNING in EDDAV' in content or b'ZBRENT: fatal error' in content:
-                #     raise RuntimeError(
-                #         "SCF calculation failed: SCF did not converge. "
-                #         "Check OUTCAR for convergence errors."
-                #     )
-                raise RuntimeError(
-                    "SCF calculation failed: SCF did not converge. "
-                    "OUTCAR does not contain 'aborting loop because EDIFF is reached' marker."
-                )
-
-            # Check WAVECAR file size
-            if not os.path.isfile('WAVECAR'):
-                raise RuntimeError("SCF calculation failed: WAVECAR not found.")
-            if os.path.getsize('WAVECAR') == 0:
-                raise RuntimeError(
-                    "SCF calculation failed: WAVECAR is empty. "
-                    "The calculation may not have completed successfully."
-                )
-
-            # Clean up unnecessary files
-            for f in ['CHG', 'vasprun.xml']:
-                if os.path.isfile(f):
-                    os.remove(f)
-        case _:
-            raise NotImplementedError(
-                f"Validation for software '{software}' is not implemented."
+        # Check completion marker
+        if b'Total CPU' not in content:
+            raise RuntimeError(
+                "SCF calculation failed: OUTCAR does not contain 'Total CPU' marker. "
+                "The calculation may not have completed successfully."
             )
+
+        # Check SCF convergence
+        if b'aborting loop because EDIFF is reached' not in content:
+            # Look for common convergence failure markers
+            # if b'WARNING in EDDAV' in content or b'ZBRENT: fatal error' in content:
+            #     raise RuntimeError(
+            #         "SCF calculation failed: SCF did not converge. "
+            #         "Check OUTCAR for convergence errors."
+            #     )
+            raise RuntimeError(
+                "SCF calculation failed: SCF did not converge. "
+                "OUTCAR does not contain 'aborting loop because EDIFF is reached' marker."
+            )
+
+        # Check WAVECAR file size
+        if not os.path.isfile('WAVECAR'):
+            raise RuntimeError("SCF calculation failed: WAVECAR not found.")
+        if os.path.getsize('WAVECAR') == 0:
+            raise RuntimeError(
+                "SCF calculation failed: WAVECAR is empty. "
+                "The calculation may not have completed successfully."
+            )
+
+        # Clean up unnecessary files
+        for f in ['CHG', 'vasprun.xml']:
+            if os.path.isfile(f):
+                os.remove(f)
+    else:
+        raise NotImplementedError(
+            f"Validation for software '{software}' is not implemented."
+        )

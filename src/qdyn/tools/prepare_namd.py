@@ -2,7 +2,7 @@ import ast
 import operator
 import os
 from pathlib import Path
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Tuple, Any
 
 import matplotlib
 
@@ -25,37 +25,18 @@ def qdyn_pre_namd(
     nproc: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-):
+) -> Dict[str, Any]:
     """Run NAMD preprocessing: extract eigenvalues and NACs from SCF results.
 
-    Parameters
-    ----------
-    software : str
-        Software name.
-    parameters : PreNAMDInputT
-        Pre-NAMD parameters.
-    run_dirs : List[str]
-        List of SCF run directories.
-    nproc : int
-        Number of processes for parallel calculation.
-    plot : bool
-        Whether to generate plots.
-    prepare_input_only : bool
-        If True, only prepare input files without running.
+    Args:
+        software: Software name.
+        parameters: Pre-NAMD parameters.
+        run_dirs: List of SCF run directories.
+        nproc: Number of processes for parallel calculation.
+        plot: Whether to generate plots.
+        prepare_input_only: If True, only prepare input files without running.
 
-    Returns
-    prev_output : Dict[str, Any]
-        Output from previous step (for compatibility).
-    nproc : int
-        Number of processes for parallel calculation.
-    plot : bool
-        Whether to generate plots.
-    prepare_input_only : bool
-        If True, only prepare input files without running.
-
-    Returns
-    -------
-    Dict
+    Returns:
         Dictionary containing run_dir, software, images, and output file paths.
     """
     software_lower = software.lower()
@@ -177,7 +158,7 @@ def plot_ksen_weight(
     parameters: PreNAMDInputT,
     vbm: int,
     cbm: int,
-    nproc: Optional[int] = None,
+    nproc: int | None = None,
     filename: str = 'ksen_wht.png',
     cmap: str = 'seismic',
     figsize: Tuple[float, float] = (4.8, 3.0),
@@ -188,37 +169,21 @@ def plot_ksen_weight(
     This function creates a scatter plot of energy bands over time,
     where the color represents the weight (e.g., atomic projection).
 
-    Parameters
-    ----------
-    software : str
-        Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
-    run_dirs : list
-        List of directories to process.
-    parameters : PreNAMDInputT
-        Pre-NAMD input parameters containing:
-        - md_dt: time step in fs
-        - adv.ispin: spin index (1-based, converted to 0-based internally)
-        - adv.ikpt: k-point index (1-based, converted to 0-based internally)
-    which_atoms : np.ndarray, optional
-        Array of atom indices for which to calculate weights.
-    nproc : int, optional
-        Number of parallel processes. If None, uses all available CPUs.
-    filename : str
-        Output filename for the plot (default: 'ksen_wht.png').
-    energy_limits : tuple of float, optional
-        (ymin, ymax) for energy axis. If None, auto-determined from data.
-    cbar_labels : tuple of str, optional
-        (max_label, min_label) for colorbar. If None, uses weight values.
-    cmap : str
-        Colormap name (default: 'seismic').
-    figsize : tuple of float
-        Figure size in inches (default: (4.8, 3.0)).
-    dpi : int
-        Output DPI (default: 360).
+    Args:
+        software: Software name: 'vasp', 'cp2k', 'siesta', 'abacus',
+            'openmx'.
+        run_dirs: List of directories to process.
+        parameters: Pre-NAMD input parameters containing:
+            - md_dt: time step in fs
+            - adv.ispin: spin index (1-based, converted to 0-based internally)
+            - adv.ikpt: k-point index (1-based, converted to 0-based internally)
+        nproc: Number of parallel processes. If None, uses all available CPUs.
+        filename: Output filename for the plot (default: 'ksen_wht.png').
+        cmap: Colormap name (default: 'seismic').
+        figsize: Figure size in inches (default: (4.8, 3.0)).
+        dpi: Output DPI (default: 360).
 
-    Returns
-    -------
-    str
+    Returns:
         Path to the saved plot.
     """
     from mpl_toolkits.axes_grid1 import make_axes_locatable

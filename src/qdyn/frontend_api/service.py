@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
@@ -70,7 +70,7 @@ PENDING_RAW_STATES = {"READY", "WAITING"}
 ERROR_RAW_STATES = {"REMOTE_ERROR", "ERROR"}
 
 
-def _dt_str(val: object) -> Optional[str]:
+def _dt_str(val: object) -> str | None:
     """
     Convert a datetime-like value to an ISO string with explicit timezone.
 
@@ -262,8 +262,8 @@ def get_job_info_safe(
 def get_job_error_summary(
     task_id: str,
     job_uuid: str,
-    manager_getter: Optional[Callable[[], MainWorkflow]] = None,
-) -> Optional[str]:
+    manager_getter: Callable[[], MainWorkflow] | None = None,
+) -> str | None:
     """
     Get an error summary for a failed job.
 
@@ -668,7 +668,7 @@ _STEP_ORDER = ["nvt", "nve", "scf", "pre_namd", "namd"]
 def _build_task_summary(
     task_id: str,
     manager_getter: Callable[[], MainWorkflow],
-) -> Optional[TaskSummary]:
+) -> TaskSummary | None:
     """
     Build a TaskSummary for a single task.
 
@@ -729,7 +729,7 @@ def _build_task_summary(
             break  # stop at first incomplete step
 
     # Compute resume_next_step: the step right after the last completed one
-    resume_next_step: Optional[str] = None
+    resume_next_step: str | None = None
     if completed_steps:
         last_completed = completed_steps[-1]
         last_idx = _STEP_ORDER.index(last_completed)
@@ -862,7 +862,7 @@ def _is_blacklisted(name: str) -> bool:
 
 def get_run_dir_access(
     job_uuid: str, manager: MainWorkflow
-) -> Optional[RunDirAccess]:
+) -> RunDirAccess | None:
     """Create the appropriate RunDirAccess based on worker type.
 
     For local workers, returns a ``LocalRunDirAccess`` backed by the local
@@ -984,8 +984,8 @@ def get_job_input_params(
             warning=warning,
         )
 
-    incar: Optional[Dict[str, str]] = None
-    kpoints_text: Optional[str] = None
+    incar: Dict[str, str] | None = None
+    kpoints_text: str | None = None
     warnings: list[str] = []
 
     # Batch-read both files in one pass
@@ -1022,7 +1022,7 @@ def get_job_input_params(
 
 def _read_non_vasp_job_parameters(
     access: RunDirAccess,
-) -> Optional[Dict[str, str]]:
+) -> Dict[str, str] | None:
     """Read serialized non-VASP job parameters from ``jfremote_in.json``."""
     try:
         raw_text = access.read_root_text("jfremote_in.json")
@@ -1394,7 +1394,7 @@ def serve_subdir_file(
 # -----------------------------------------------------------------------------
 
 
-def _detect_step_type(job_name: str, run_dir_path: Optional[str] = None) -> str:
+def _detect_step_type(job_name: str, run_dir_path: str | None = None) -> str:
     """Detect the step type from job name or run_dir path string."""
     name_lower = job_name.lower()
     if "pre_namd" in name_lower:
@@ -1422,7 +1422,7 @@ def _detect_step_type(job_name: str, run_dir_path: Optional[str] = None) -> str:
     return "other"
 
 
-def _parse_nsw_from_incar(incar_path: Path) -> Optional[int]:
+def _parse_nsw_from_incar(incar_path: Path) -> int | None:
     """Parse the NSW value from an INCAR file."""
     try:
         with open(incar_path, "r") as f:
@@ -1441,7 +1441,7 @@ def _parse_nsw_from_incar(incar_path: Path) -> Optional[int]:
     return None
 
 
-def _parse_nsw_from_text(text: str) -> Optional[int]:
+def _parse_nsw_from_text(text: str) -> int | None:
     """Parse the NSW value from INCAR text content."""
     for line in text.splitlines():
         stripped = line.strip().upper()
@@ -1491,7 +1491,7 @@ def read_file_tail(path: Path, max_bytes: int = 65536) -> str:
         return ""
 
 
-def _parse_nelm_from_incar(incar_path: Path) -> Optional[int]:
+def _parse_nelm_from_incar(incar_path: Path) -> int | None:
     """Parse the NELM value (electronic step limit) from an INCAR file.
 
     Uses exact key matching to avoid false hits on NELMIN or similar keys.
@@ -1509,7 +1509,7 @@ def _parse_nelm_from_incar(incar_path: Path) -> Optional[int]:
     return None
 
 
-def _parse_nelm_from_text(text: str) -> Optional[int]:
+def _parse_nelm_from_text(text: str) -> int | None:
     """Parse the NELM value from INCAR text content."""
     import re
     nelm_pattern = re.compile(r'^\s*NELM\s*=\s*(\d+)', re.IGNORECASE)
@@ -1657,8 +1657,8 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
     workers via ``RunDirAccess``.
     """
     current_step = 0
-    last_temp: Optional[float] = None
-    last_energy: Optional[float] = None
+    last_temp: float | None = None
+    last_energy: float | None = None
 
     try:
         if access.root_file_exists("OSZICAR"):
@@ -1680,7 +1680,7 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
             "Failed to read OSZICAR from %s: %s", access.run_dir_path, exc
         )
 
-    total_steps: Optional[int] = None
+    total_steps: int | None = None
     try:
         if access.root_file_exists("INCAR"):
             incar_text = access.read_root_text("INCAR")
@@ -1688,7 +1688,7 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
     except Exception:
         pass
 
-    percent: Optional[float] = None
+    percent: float | None = None
     if total_steps and total_steps > 0:
         percent = round(current_step / total_steps * 100, 2)
 
@@ -1724,7 +1724,7 @@ def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
     completed = 0  # ENDED
     failed = 0  # FAIL
     running = 0  # RUNNING
-    running_subdir: Optional[str] = None
+    running_subdir: str | None = None
     failed_frames: List[str] = []
 
     for subdir_name, info in scf_map.items():
@@ -1750,7 +1750,7 @@ def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
     )
 
     # Build current_frame if a RUNNING subdirectory exists
-    current_frame: Optional[SCFCurrentFrame] = None
+    current_frame: SCFCurrentFrame | None = None
     if running_subdir is not None:
         frame_name = running_subdir  # e.g. "scf_017"
         # Extract global index from directory name: "scf_017" -> 17
@@ -1775,7 +1775,7 @@ def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
             pass
 
         # Read NELM from INCAR (try frame INCAR first, then parent)
-        nelm: Optional[int] = None
+        nelm: int | None = None
         try:
             incar_text = access.read_subdir_text(running_subdir, "INCAR")
             nelm = _parse_nelm_from_text(incar_text)

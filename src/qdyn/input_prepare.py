@@ -2,7 +2,7 @@ import io
 import os
 import glob
 import shutil
-from typing import Any, Dict, List, Tuple, Optional, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import ase.io
 import numpy as np
