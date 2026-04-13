@@ -75,7 +75,19 @@
       :rules="formRules"
       label-position="top"
       class="submit-form"
+      @submit.prevent
     >
+      <!-- Task Name (always visible, all modes) -->
+      <el-form-item label="Task Name" class="task-name-input">
+        <el-input
+          v-model="formData.taskName"
+          placeholder="Custom task name (optional, defaults to formula)"
+          :maxlength="50"
+          show-word-limit
+          clearable
+        />
+      </el-form-item>
+
       <!-- Resume task selector (resume mode only) -->
       <el-card v-if="submitMode === 'resume'" class="form-section">
         <template #header>
@@ -468,6 +480,7 @@ function buildStepDefaults(schemaKey: keyof StepInputSchemas): Record<string, un
 const formData = reactive<{
   steps: string[]
   method: 'namd' | 'n2amd'
+  taskName: string
   basic_input: { software: string; plot: boolean }
   nvt_input: NVTInput | Record<string, unknown>
   nve_input: NVEInput | Record<string, unknown>
@@ -477,6 +490,7 @@ const formData = reactive<{
 }>({
   steps: [],
   method: 'namd',
+  taskName: '',
   basic_input: { software: 'vasp', plot: false },
   nvt_input: {},
   nve_input: {},
@@ -728,6 +742,7 @@ async function fetchResumeTasks(): Promise<void> {
 }
 
 function handleModeChange(mode: string | number | boolean): void {
+  formData.taskName = ''
   if (mode === 'resume') {
     // Clear new-task state, load resume candidates
     formData.steps = []
@@ -754,6 +769,10 @@ function handleResumeTaskSelected(task: TaskSummary | null): void {
     formData.steps = [task.resume_next_step]
   } else {
     formData.steps = []
+  }
+  // Inherit task_name from the previous task only if user hasn't typed one
+  if (!formData.taskName.trim()) {
+    formData.taskName = task?.task_name || task?.formula || ''
   }
 }
 
@@ -819,6 +838,7 @@ async function handleSubmit(): Promise<void> {
     stru: useTrajHash ? '' : (isResume ? '' : poscarContent.value),
     stru_format: 'vasp',
     ...(useTrajHash ? { stru_hash: trajHash.value } : {}),
+    task_name: formData.taskName.trim() || null,
     // Include inputs for selected steps
     ...(formData.steps.includes('nvt') && { nvt_input: formData.nvt_input }),
     ...(formData.steps.includes('nve') && { nve_input: formData.nve_input }),
@@ -1089,5 +1109,10 @@ async function handleSubmit(): Promise<void> {
 
 .pool-queue-hint {
   margin-top: 8px;
+}
+
+.task-name-input {
+  margin-top: 16px;
+  margin-bottom: 0;
 }
 </style>

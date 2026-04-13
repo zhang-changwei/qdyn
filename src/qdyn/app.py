@@ -318,6 +318,7 @@ def _extract_structure_metadata(
     return formula, num_atoms
 
 
+
 def _sync_dispatch(
     m: MainWorkflow,
     task_id: str,
@@ -372,6 +373,7 @@ def _sync_dispatch(
     formula, num_atoms = _extract_structure_metadata(input_obj, resume, prev_task_id, config=m.config)
     qdyndb.update_task_metadata(
         final_task_id,
+        task_name=input_obj.task_name,
         formula=formula,
         num_atoms=num_atoms,
         prev_task_id=prev_task_id if resume and prev_task_id else None,
@@ -509,6 +511,7 @@ async def submit_task(
     formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id, config=m.config)
     qdyndb.update_task_metadata(
         task_id,
+        task_name=input.task_name,
         formula=formula,
         num_atoms=num_atoms,
         prev_task_id=prev_task_id if resume and prev_task_id else None,
