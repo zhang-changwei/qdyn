@@ -17,12 +17,14 @@ from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
+from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
     ComputeConstraintMaskRequest,
     ComputeConstraintMaskResponse,
     ContinueResultResponse,
+    RenameTaskRequest,
     JobErrorResponse,
     JobFilesResponse,
     JobImagesResponse,
@@ -471,6 +473,39 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             )
 
         return Response(status_code=204)
+
+    # -------------------------------------------------------------------------
+    # PATCH /frontend/tasks/{task_id}/name - Rename a task
+    # -------------------------------------------------------------------------
+
+    @router.patch(
+        "/tasks/{task_id}/name",
+        summary="Rename a task",
+        description="Update the display name of a task.",
+    )
+    @handle_query_errors
+    def rename_task(
+        task_id: str,
+        req: RenameTaskRequest,
+        username: str = Depends(get_current_user),
+    ):
+        """
+        Update the task_name in local metadata.
+
+        Args:
+            task_id: The task identifier.
+            req: New task name (or null to clear).
+
+        Returns:
+            Success response with the updated name.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        name = req.task_name.strip() if req.task_name else None
+        if not qdyndb.update_task_name(task_id, name):
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        return success_response({"task_name": name})
 
     # -------------------------------------------------------------------------
     # POST /frontend/structures/validate - POSCAR validation

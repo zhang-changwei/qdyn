@@ -486,9 +486,10 @@ function isConstraintParamsReady(params: {
   if (params.total_layers == null || params.total_layers < 1) return false
   // total_layers must be a positive integer
   if (!Number.isInteger(params.total_layers)) return false
-  // constraint_layers must only contain digits, spaces, and dashes
-  // (rejects half-typed inputs like "1-" or "1- " or trailing dashes)
-  if (!/^[\d]+(?:\s*-\s*[\d]+)?(?:\s+[\d]+(?:\s*-\s*[\d]+)?)*\s*$/.test(params.constraint_layers)) return false
+  // constraint_layers must match backend parse_constraint_layers_spec() syntax:
+  // space-separated tokens, each a number or tight dash range (no spaces around dash)
+  // Valid: "1-3 5", "1 2 3"  Invalid: "1 - 3", "1-", "-3"
+  if (!/^\d+(?:-\d+)?(?:\s+\d+(?:-\d+)?)*$/.test(params.constraint_layers.trim())) return false
   return true
 }
 
