@@ -70,7 +70,7 @@ def qdyn_nve(
 
     structure['momenta'] = np.array(structure['momenta'])
     cstru = Atoms.fromdict(structure)
-    if parameters.constraint_layers is not None and cstru.constraints is None:
+    if parameters.constraint_layers is not None and not cstru.constraints:
         cstru = add_constraints(
             cstru,
             parameters.constraint_layers,
