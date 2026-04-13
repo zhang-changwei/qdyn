@@ -694,11 +694,16 @@ async function saveTaskName(): Promise<void> {
 
 /** Structure preview data (fetched on-demand from dedicated endpoint) */
 const structurePreview = ref<StructurePreviewPayload | null>(null)
+let previewRequestId = 0 // monotonic counter to discard stale responses on route change
 
 async function fetchStructurePreview() {
+  const myRequestId = ++previewRequestId
   try {
-    structurePreview.value = await getTaskStructurePreview(taskId.value)
+    const result = await getTaskStructurePreview(taskId.value)
+    if (previewRequestId !== myRequestId) return // stale — route changed during fetch
+    structurePreview.value = result
   } catch {
+    if (previewRequestId !== myRequestId) return
     // Non-critical: preview unavailable does not block task detail
     structurePreview.value = null
   }
@@ -784,6 +789,7 @@ onMounted(async () => {
 // Reload when navigating between tasks (e.g. "Resumed from" link)
 watch(taskId, async () => {
   stopPolling()
+  previewRequestId++ // invalidate any in-flight preview request
   structurePreview.value = null
   await loadTaskData()
   fetchStructurePreview()

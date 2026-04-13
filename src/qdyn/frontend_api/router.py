@@ -597,6 +597,10 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     ) -> ComputeConstraintMaskResponse:
         """Compute per-atom constraint mask for real-time preview.
 
+        Supports two structure resolution paths:
+        - stru_content: parse raw file content (normal upload mode)
+        - task_id: resolve structure server-side (resume mode)
+
         Follows the same priority as the runtime NVT/NVE logic:
         file-level constraints take precedence over layer-based constraints.
 
@@ -607,8 +611,8 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             A ComputeConstraintMaskResponse with the computed mask.
 
         Raises:
-            HTTPException: 422 if constraint parameters are invalid or
-                layer detection fails.
+            HTTPException: 422 if constraint parameters are invalid,
+                structure cannot be resolved, or layer detection fails.
         """
         import io
 
@@ -617,22 +621,69 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         from .structure_preview import _extract_constraint_mask
         from ..tools.nvt import compute_layer_constraint_mask
 
-        # Step 1: Parse structure
-        try:
-            atoms = ase.io.read(io.StringIO(req.stru_content), format=req.stru_format)
-        except Exception as exc:
+        atoms = None
+
+        if req.stru_content:
+            # Path A: Parse structure from raw file content
+            try:
+                atoms = ase.io.read(
+                    io.StringIO(req.stru_content), format=req.stru_format,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Failed to parse structure: {exc}",
+                )
+        elif req.task_id:
+            # Path B: Resolve structure from task (resume mode)
+            # Use enrich_constraints=False to get raw preview — constraint_mask
+            # here is ONLY from file-level constraints (selective dynamics),
+            # not from the parent task's constraint_layers parameters.
+            verify_task_ownership_local(req.task_id, username)
+            manager = manager_getter()
+            preview = service.compute_structure_preview(
+                req.task_id, manager, enrich_constraints=False
+            )
+            if preview is not None:
+                # File-level constraints take priority (same as runtime)
+                if preview.constraint_mask is not None:
+                    return ComputeConstraintMaskResponse(
+                        constraint_mask=preview.constraint_mask,
+                        source="file",
+                        warning=(
+                            "Structure file already contains constraints "
+                            "(e.g. selective dynamics). These take priority over "
+                            "layer-based constraint parameters."
+                        ),
+                    )
+
+                from ase import Atoms
+
+                try:
+                    atoms = Atoms(
+                        symbols=preview.species,
+                        positions=preview.cart_coords,
+                        cell=preview.lattice,
+                        pbc=preview.pbc,
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Failed to reconstruct Atoms from task preview: {exc}",
+                    )
+        else:
             raise HTTPException(
                 status_code=422,
-                detail=f"Failed to parse structure: {exc}",
+                detail="Either stru_content or task_id must be provided.",
             )
 
         if atoms is None:
             raise HTTPException(
                 status_code=422,
-                detail="Failed to parse structure: ASE returned None",
+                detail="Failed to resolve structure: no structure data available.",
             )
 
-        # Step 2: Check file-level constraints (same priority as runtime)
+        # Check file-level constraints (same priority as runtime)
         file_mask = _extract_constraint_mask(atoms)
         if file_mask is not None:
             return ComputeConstraintMaskResponse(
@@ -645,7 +696,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 ),
             )
 
-        # Step 3: Compute layer-based constraint mask
+        # Compute layer-based constraint mask
         try:
             mask = compute_layer_constraint_mask(
                 atoms,

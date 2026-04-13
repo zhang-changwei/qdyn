@@ -518,10 +518,12 @@ export interface NVEInput {
   parameters: string
 }
 
-/** Request payload for computing constraint mask */
+/** Request payload for computing constraint mask.
+ *  Either stru_content or task_id must be provided. */
 export interface ComputeConstraintMaskRequest {
-  stru_content: string
-  stru_format: string
+  stru_content?: string
+  stru_format?: string
+  task_id?: string
   constraint_layers: string
   layer_direction: string
   total_layers: number

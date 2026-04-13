@@ -178,10 +178,16 @@ class StructureValidationResponse(BaseModel):
 
 
 class ComputeConstraintMaskRequest(BaseModel):
-    """Request payload for computing per-atom constraint mask from layer parameters."""
+    """Request payload for computing per-atom constraint mask from layer parameters.
 
-    stru_content: str
+    Either stru_content or task_id must be provided. When task_id is given,
+    the structure is resolved server-side (for resume mode where the frontend
+    doesn't have the raw file content).
+    """
+
+    stru_content: str | None = None
     stru_format: str = "vasp"
+    task_id: str | None = None
     constraint_layers: str
     layer_direction: Literal[
         '000', '001', '010', '011', '100', '101', '110', '111'

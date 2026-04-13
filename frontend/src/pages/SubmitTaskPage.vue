@@ -365,7 +365,7 @@ import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
-import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
+import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
 // Step configuration: maps step name to formData key and schema key
 const STEP_CONFIG: Record<string, {
@@ -639,8 +639,9 @@ watch(
       return
     }
 
-    // No structure content available — nothing to compute against
-    if (!poscarContent.value || !base) return
+    // Need either uploaded content or a resume task to compute against
+    if (!poscarContent.value && !selectedResumeTask.value) return
+    if (!base) return
 
     // Bump request ID and capture it for staleness check
     const myRequestId = ++constraintRequestId
@@ -649,13 +650,22 @@ watch(
     constraintDebounceTimer = setTimeout(async () => {
       constraintDebounceTimer = null
       try {
-        const result = await computeConstraintMask({
-          stru_content: poscarContent.value,
-          stru_format: 'vasp',
-          constraint_layers: params.constraint_layers,
-          layer_direction: params.layer_direction,
-          total_layers: params.total_layers!,
-        })
+        // Build request: use stru_content if available, otherwise task_id
+        const requestPayload: ComputeConstraintMaskRequest = poscarContent.value
+          ? {
+              stru_content: poscarContent.value,
+              stru_format: 'vasp',
+              constraint_layers: params.constraint_layers,
+              layer_direction: params.layer_direction,
+              total_layers: params.total_layers!,
+            }
+          : {
+              task_id: selectedResumeTask.value!.task_id,
+              constraint_layers: params.constraint_layers,
+              layer_direction: params.layer_direction,
+              total_layers: params.total_layers!,
+            }
+        const result = await computeConstraintMask(requestPayload)
         // Only apply if this is still the latest request
         if (constraintRequestId !== myRequestId) return
         if (basePreview.value) {
