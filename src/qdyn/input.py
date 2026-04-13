@@ -410,6 +410,29 @@ class InputT(BaseModel):
     stru_format: str = 'vasp'
     stru_hash: str = ''
 
+    task_name: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Custom task display name. Defaults to structure formula if empty.",
+        json_schema_extra=HIDDEN_FIELD,
+    )
+
+    @field_validator('task_name', mode='before')
+    @classmethod
+    def normalize_task_name(cls, v):
+        """Strip whitespace, reject empty strings, and validate character set."""
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+            if not re.match(r'^[A-Za-z0-9_\-. ()/+\u4e00-\u9fff]+$', v):
+                raise ValueError(
+                    'Task name may only contain letters, digits, spaces, '
+                    'hyphens, underscores, dots, parentheses, slashes, plus signs, '
+                    'and Chinese characters'
+                )
+        return v
+
     @field_validator('stru_hash')
     @classmethod
     def validate_stru_hash(cls, v: str) -> str:

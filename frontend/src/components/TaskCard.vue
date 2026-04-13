@@ -134,6 +134,7 @@ import { WarningFilled, Connection, Monitor, Link } from '@element-plus/icons-vu
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { stopTask, deleteTask, cancelQueuedTask } from '@/api/tasks'
 import { useTasksStore } from '@/stores/tasks'
+import { getTaskDisplayName } from '@/utils/task-display'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
 
@@ -170,10 +171,9 @@ const STEP_LABELS: Record<string, string> = {
 // Computed properties
 // ============================================
 
-/** Primary display title: formula or truncated UUID as fallback */
+/** Primary display title: task_name > formula > truncated UUID */
 const displayTitle = computed((): string => {
-  if (props.task.formula) return props.task.formula
-  return truncateId(props.task.task_id)
+  return getTaskDisplayName(props.task)
 })
 
 /** Truncated UUID for the meta line */
@@ -223,7 +223,7 @@ const workerTagType = computed((): 'warning' | '' => {
   return isRemoteWorker.value ? 'warning' : ''
 })
 
-/** Display text for "Resumed from" line: try to find parent formula in task list */
+/** Display text for "Resumed from" line: try to find parent in task list */
 const parentDisplay = computed((): string => {
   const prevId = props.task.prev_task_id
   if (!prevId) return ''
@@ -232,8 +232,9 @@ const parentDisplay = computed((): string => {
   const list = tasksStore.taskList?.items
   if (list) {
     const parent = list.find(t => t.task_id === prevId)
-    if (parent?.formula) {
-      return `${parent.formula} (${truncateId(prevId)})`
+    if (parent) {
+      const name = getTaskDisplayName(parent)
+      return `${name} (${truncateId(prevId)})`
     }
   }
   return truncateId(prevId)

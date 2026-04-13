@@ -77,6 +77,10 @@ export interface TaskJobsStatusResponse {
   jobs: JobStatusItem[]
   /** Predecessor task id if this is a resume task */
   prev_task_id?: string | null
+  /** Custom task display name */
+  task_name?: string | null
+  /** Structure formula */
+  formula?: string | null
 }
 
 // ============================================
@@ -104,6 +108,8 @@ export interface TaskSummary {
   completed_steps: string[]
   /** Structure formula (e.g. "MoS2") */
   formula: string | null
+  /** Custom task display name */
+  task_name: string | null
   /** Number of atoms in the structure */
   num_atoms: number | null
   /** Predecessor task id if this is a resume task */
@@ -557,4 +563,5 @@ export interface InputT {
   stru: string
   stru_format: string
   stru_hash?: string
+  task_name?: string | null
 }

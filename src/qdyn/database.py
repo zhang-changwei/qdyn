@@ -69,6 +69,7 @@ class QdynDB:
             "prev_task_id": "ALTER TABLE task_owners ADD COLUMN prev_task_id TEXT DEFAULT NULL",
             "worker": "ALTER TABLE task_owners ADD COLUMN worker TEXT DEFAULT NULL",
             "pool_name": "ALTER TABLE task_owners ADD COLUMN pool_name TEXT DEFAULT NULL",
+            "task_name": "ALTER TABLE task_owners ADD COLUMN task_name TEXT DEFAULT NULL",
         }
         added_pool_name = False
         for col, ddl in migrations.items():
@@ -174,28 +175,32 @@ class QdynDB:
     def update_task_metadata(
         self,
         task_id: str,
+        *,
+        task_name: str | None = None,
         formula: str | None = None,
         num_atoms: int | None = None,
         prev_task_id: str | None = None,
         worker: str | None = None,
         pool_name: str | None = None,
     ) -> None:
-        """Persist structure metadata, resume lineage, worker, and pool for a task."""
+        """Persist task name, structure metadata, resume lineage, worker, and pool for a task."""
         conn = self.get_db()
         with self._lock:
             conn.execute(
-                "UPDATE task_owners SET formula = ?, num_atoms = ?, "
-                "prev_task_id = ?, worker = ?, pool_name = ? WHERE task_id = ?",
-                (formula, num_atoms, prev_task_id, worker, pool_name, task_id),
+                "UPDATE task_owners SET task_name = ?, formula = ?, num_atoms = ?, "
+                "prev_task_id = ?, worker = ?, pool_name = ? "
+                "WHERE task_id = ?",
+                (task_name, formula, num_atoms, prev_task_id, worker, pool_name,
+                 task_id),
             )
             conn.commit()
 
     def get_task_metadata(self, task_id: str) -> dict | None:
-        """Return formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
+        """Return task_name, formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
         conn = self.get_db()
         with self._lock:
             row = conn.execute(
-                "SELECT formula, num_atoms, prev_task_id, worker, pool_name "
+                "SELECT task_name, formula, num_atoms, prev_task_id, worker, pool_name "
                 "FROM task_owners WHERE task_id = ?",
                 (task_id,),
             ).fetchone()
