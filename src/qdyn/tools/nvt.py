@@ -89,7 +89,7 @@ def qdyn_nvt(
     current_structure = Atoms.fromdict(structure)
     if (
         parameters.constraint_layers is not None
-        and current_structure.constraints is None
+        and not current_structure.constraints
     ):
         current_structure = add_constraints(
             current_structure,
