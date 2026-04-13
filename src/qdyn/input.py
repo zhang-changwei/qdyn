@@ -1,7 +1,7 @@
 import re
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal, List, Any
+from typing import Any, List, Literal, Optional
 
 import numpy as np
 
@@ -236,7 +236,7 @@ class NVTInputT(BaseModel):
     constraint_layers: Optional[str] = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
-        json_schema_extra=ADVANCED_GROUP,
+        json_schema_extra={**ADVANCED_GROUP, "widget": "text", "placeholder": "e.g. 1-3 5"},
     )
     layer_direction: Optional[
         Literal['000', '001', '010', '011', '100', '101', '110', '111']
@@ -309,7 +309,7 @@ class NVEInputT(BaseModel):
     constraint_layers: Optional[str] = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
-        json_schema_extra=ADVANCED_GROUP,
+        json_schema_extra={**ADVANCED_GROUP, "widget": "text", "placeholder": "e.g. 1-3 5"},
     )
     layer_direction: Optional[
         Literal['000', '001', '010', '011', '100', '101', '110', '111']

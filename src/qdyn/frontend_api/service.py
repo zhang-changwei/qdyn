@@ -45,6 +45,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+
 # -----------------------------------------------------------------------------
 # Status derivation constants
 # -----------------------------------------------------------------------------
@@ -494,6 +495,7 @@ def _build_queued_task_summary(
         failed_job_names=[],
         steps=[],
         completed_steps=[],
+        task_name=meta.get("task_name"),
         formula=meta.get("formula"),
         num_atoms=meta.get("num_atoms"),
         prev_task_id=meta.get("prev_task_id"),
@@ -556,6 +558,8 @@ def get_task_detail(
                 derived_status=q_status,
                 jobs=[],
                 prev_task_id=prev_task_id,
+                task_name=task_meta.get("task_name") if task_meta else None,
+                formula=task_meta.get("formula") if task_meta else None,
             )
         if q_status == "FAILED" and not job_ids:
             # Queue dispatch genuinely failed, no jobs in jf-remote
@@ -567,6 +571,8 @@ def get_task_detail(
                 derived_status="FAILED",
                 jobs=[],
                 prev_task_id=prev_task_id,
+                task_name=task_meta.get("task_name") if task_meta else None,
+                formula=task_meta.get("formula") if task_meta else None,
             )
         # For FAILED with real job_ids, or SUBMITTED: fall through to normal path
 
@@ -648,7 +654,7 @@ def get_task_detail(
 
     derived_status = derive_task_status(raw_status_counts)
 
-    # Retrieve prev_task_id from task metadata (resume chain)
+    # Retrieve metadata (resume chain, task_name, formula)
     task_meta = qdyndb.get_task_metadata(task_id)
     prev_task_id = task_meta.get("prev_task_id") if task_meta else None
 
@@ -658,6 +664,8 @@ def get_task_detail(
         derived_status=derived_status,
         jobs=jobs,
         prev_task_id=prev_task_id,
+        task_name=task_meta.get("task_name") if task_meta else None,
+        formula=task_meta.get("formula") if task_meta else None,
     )
 
 
@@ -759,6 +767,7 @@ def _build_task_summary(
         failed_job_names=failed_job_names,
         steps=steps,
         completed_steps=completed_steps,
+        task_name=meta.get("task_name"),
         formula=meta.get("formula"),
         num_atoms=meta.get("num_atoms"),
         prev_task_id=meta.get("prev_task_id"),
@@ -2256,3 +2265,439 @@ def get_job_md_timeseries(
         references=references,
         stats=stats,
     )
+
+
+# =============================================================================
+# Structure Preview (on-demand computation)
+# =============================================================================
+
+
+def compute_structure_preview(
+    task_id: str,
+    manager: MainWorkflow,
+):
+    """Compute structure preview on-demand for a task.
+
+    Resolution order:
+    1. Queued task: read input.stru + input.stru_format from queue payload
+    2. Running/completed task: read structure file from first job's run directory
+    3. Resume task with no own structure: trace prev_task_id chain (max 10 hops)
+
+    After resolving the structure, if the preview has no file-level constraints,
+    attempts to apply constraint_layers from the task's InputT (matching runtime
+    semantics where file-level constraints take priority).
+
+    Returns StructurePreviewPayload or None.
+    """
+    result = _try_preview_for_task(task_id, manager)
+    if result is not None:
+        return _enrich_with_layer_constraints(result, task_id)
+
+    # Trace prev_task_id chain for resume tasks (max 10 hops)
+    task_meta = qdyndb.get_task_metadata(task_id)
+    if task_meta and task_meta.get("prev_task_id"):
+        visited: set = {task_id}
+        tid = task_meta["prev_task_id"]
+        for _ in range(10):
+            if not tid or tid in visited:
+                break
+            visited.add(tid)
+            result = _try_preview_for_task(tid, manager)
+            if result is not None:
+                return _enrich_with_layer_constraints(result, task_id)
+            parent_meta = qdyndb.get_task_metadata(tid)
+            if not parent_meta:
+                break
+            tid = parent_meta.get("prev_task_id")
+
+    return None
+
+
+def _enrich_with_layer_constraints(preview, task_id: str):
+    """If preview has no file-level constraints, try to compute layer mask
+    from the task's InputT constraint_layers parameters.
+
+    Matches runtime semantics: file-level constraints always take priority.
+    """
+    if preview.constraint_mask is not None:
+        # File already has constraints — use as-is
+        return preview
+
+    constraint_params = _get_constraint_params_for_task(task_id)
+    if not constraint_params:
+        return preview
+
+    try:
+        import io
+        import ase.io
+        from ..tools.nvt import compute_layer_constraint_mask
+
+        # Reconstruct Atoms from preview data
+        from ase import Atoms
+        atoms = Atoms(
+            symbols=preview.species,
+            positions=preview.cart_coords,
+            cell=preview.lattice,
+            pbc=preview.pbc,
+        )
+
+        mask = compute_layer_constraint_mask(
+            atoms,
+            constraint_params["constraint_layers"],
+            constraint_params["layer_direction"],
+            constraint_params["total_layers"],
+        )
+        preview.constraint_mask = mask
+    except Exception:
+        logger.debug(
+            "Failed to compute layer constraints for task %s", task_id,
+            exc_info=True,
+        )
+
+    return preview
+
+
+def _get_constraint_params_for_task(task_id: str) -> dict | None:
+    """Extract constraint_layers/layer_direction/total_layers from a task's
+    InputT, trying queued payload first, then MongoDB job collection."""
+
+    # Strategy 1: queued payload (for tasks that went through the queue)
+    payload_json = qdyndb.get_queued_payload(task_id)
+    if payload_json:
+        try:
+            payload = json.loads(payload_json)
+            input_data = payload.get("input", {})
+            result = _extract_constraint_params_from_input(input_data)
+            if result:
+                return result
+        except Exception:
+            logger.debug(
+                "Failed to extract constraint params from queued payload for %s",
+                task_id, exc_info=True,
+            )
+
+    # Strategy 2: MongoDB jobs collection, sorted by job index (first step first)
+    try:
+        from jobflow_remote.config.manager import ConfigManager
+
+        cm = ConfigManager()
+        project = cm.get_project()
+        jc = project.get_job_controller()
+
+        docs = jc.jobs.find(
+            {"job.metadata.qdyn_task_id": task_id},
+            {"job.function_kwargs.parameters": 1, "job.index": 1, "_id": 0},
+        ).sort("job.index", 1)
+        for doc in docs:
+            params = (
+                doc.get("job", {})
+                .get("function_kwargs", {})
+                .get("parameters", {})
+            )
+            if isinstance(params, dict):
+                result = _extract_constraint_params_from_input(params)
+                if result:
+                    return result
+    except Exception:
+        logger.debug(
+            "Failed to read constraint params from MongoDB for task %s",
+            task_id, exc_info=True,
+        )
+
+    return None
+
+
+def _extract_constraint_params_from_input(input_data: dict) -> dict | None:
+    """Extract constraint params from an input dict (InputT or NVT/NVE sub-dict)."""
+    # Try direct keys (flat InputT)
+    for key_prefix in ("", "nvt_input.", "nve_input."):
+        cl = input_data.get(f"{key_prefix}constraint_layers") if key_prefix else input_data.get("constraint_layers")
+        ld = input_data.get(f"{key_prefix}layer_direction") if key_prefix else input_data.get("layer_direction")
+        tl = input_data.get(f"{key_prefix}total_layers") if key_prefix else input_data.get("total_layers")
+        if cl and ld and tl:
+            try:
+                return {
+                    "constraint_layers": str(cl),
+                    "layer_direction": str(ld),
+                    "total_layers": int(tl),
+                }
+            except (ValueError, TypeError):
+                continue
+
+    # Try nested dicts (nvt_input / nve_input as sub-dicts)
+    for step_key in ("nvt_input", "nve_input"):
+        step_data = input_data.get(step_key)
+        if isinstance(step_data, dict):
+            cl = step_data.get("constraint_layers")
+            ld = step_data.get("layer_direction")
+            tl = step_data.get("total_layers")
+            if cl and ld and tl:
+                try:
+                    return {
+                        "constraint_layers": str(cl),
+                        "layer_direction": str(ld),
+                        "total_layers": int(tl),
+                    }
+                except (ValueError, TypeError):
+                    continue
+
+    return None
+
+
+def _try_preview_for_task(
+    task_id: str,
+    manager: MainWorkflow,
+):
+    """Attempt to build a structure preview for a single task.
+
+    Tries queued payload first, then run directory of the first job.
+    Returns None if neither source is available or parsing fails.
+    """
+    from .structure_preview import build_preview
+    from ..params import stru_files, md_ase_formats
+
+    # --- Strategy 1: Queued task payload ---
+    payload_json = qdyndb.get_queued_payload(task_id)
+    if payload_json:
+        try:
+            payload = json.loads(payload_json)
+            input_data = payload.get("input", {})
+            stru_text = input_data.get("stru", "")
+            stru_format = input_data.get("stru_format", "vasp")
+
+            if stru_text:
+                return build_preview(stru_text, fmt=stru_format)
+
+            # If stru is empty but stru_hash exists, read first frame from traj
+            stru_hash = input_data.get("stru_hash", "")
+            if stru_hash:
+                preview = _preview_from_traj_hash(
+                    stru_hash, stru_format, manager
+                )
+                if preview is not None:
+                    return preview
+        except Exception:
+            logger.warning(
+                "Failed to build preview from queued payload for task %s",
+                task_id,
+            )
+
+    # --- Strategy 2: First job's run directory ---
+    job_ids = qdyndb.get_task_job_ids(task_id)
+    if not job_ids:
+        return None
+
+    # Get the first step's first job UUID
+    # Preserve step ordering based on canonical workflow order
+    _STEP_ORDER_MAP = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
+    sorted_steps = sorted(
+        job_ids.keys(),
+        key=lambda s: _STEP_ORDER_MAP.get(s, 99),
+    )
+    first_job_uuid = None
+    first_step = None
+    for step in sorted_steps:
+        uuids = job_ids[step]
+        if uuids:
+            first_job_uuid = uuids[0]
+            first_step = step
+            break
+
+    if not first_job_uuid:
+        return None
+
+    access = get_run_dir_access(first_job_uuid, manager)
+    access_ok = access is not None and access.is_available()
+
+    # Determine software from task payload or default to vasp
+    software = _resolve_software_for_task(task_id, manager)
+
+    # For NVT/NVE first steps: read the structure file from run dir
+    if access_ok and first_step in ("nvt", "nve"):
+        stru_filename = stru_files.get(software)
+        if stru_filename and access.root_file_exists(stru_filename):
+            try:
+                content = access.read_root_text(stru_filename)
+                # Determine ASE format from software
+                fmt = software
+                return build_preview(content, fmt=fmt)
+            except Exception:
+                logger.warning(
+                    "Failed to parse structure from %s in run dir for task %s",
+                    stru_filename,
+                    task_id,
+                )
+
+    # For SCF first step: try trajectory file or structure file
+    if access_ok and first_step == "scf":
+        # Try reading trajectory first frame from run dir
+        from ..params import md_tracks
+
+        traj_filename = md_tracks.get(software)
+        if traj_filename and access.root_file_exists(traj_filename):
+            try:
+                content = access.read_root_text(traj_filename)
+                ase_fmt = md_ase_formats.get(software, software)
+                # build_preview reads first frame by default
+                return build_preview(content, fmt=ase_fmt)
+            except Exception:
+                logger.warning(
+                    "Failed to parse trajectory from %s for task %s",
+                    traj_filename,
+                    task_id,
+                )
+
+        # Fallback: try structure file in run dir
+        stru_filename = stru_files.get(software)
+        if stru_filename and access.root_file_exists(stru_filename):
+            try:
+                content = access.read_root_text(stru_filename)
+                fmt = software
+                return build_preview(content, fmt=fmt)
+            except Exception:
+                pass
+
+    # Generic fallback: try structure file regardless of step type
+    if access_ok:
+        stru_filename = stru_files.get(software)
+        if stru_filename and access.root_file_exists(stru_filename):
+            try:
+                content = access.read_root_text(stru_filename)
+                fmt = software
+                return build_preview(content, fmt=fmt)
+            except Exception:
+                pass
+
+    # --- Strategy 3: Read traj_file_path from MongoDB job document ---
+    # SCF jobs store their trajectory source path in function_kwargs.
+    # This handles cases where the trajectory isn't in the run dir but
+    # in a separate data directory (e.g. data/trajs/{hash}).
+    preview = _preview_from_job_kwargs(first_job_uuid, manager)
+    if preview is not None:
+        return preview
+
+    return None
+
+
+def _preview_from_job_kwargs(
+    job_uuid: str,
+    manager: MainWorkflow,
+):
+    """Extract structure data from MongoDB job document and build preview.
+
+    Handles two cases:
+    1. SCF jobs: function_kwargs contains traj_file_path → read trajectory first frame
+    2. NVT/NVE jobs: function_kwargs contains structure (serialized ASE Atoms dict)
+
+    This is the fallback when run directory is unavailable (e.g. remote worker,
+    stopped task, or job that hasn't started yet).
+
+    Returns StructurePreviewPayload or None.
+    """
+    import io
+
+    import ase.io
+    from ase import Atoms
+
+    from ..params import md_ase_formats
+    from .structure_preview import build_preview
+
+    try:
+        jc = manager._ensure_job_controller()
+        jobs_col = jc.db[jc.jobs_collection]
+        doc = jobs_col.find_one(
+            {"uuid": job_uuid},
+            {"job.function_kwargs": 1},
+        )
+        if not doc:
+            return None
+
+        kwargs = doc.get("job", {}).get("function_kwargs", {})
+        software = kwargs.get("software", "vasp")
+
+        # --- Case 1: Serialized ASE Atoms dict (NVT/NVE jobs) ---
+        stru_dict = kwargs.get("structure")
+        if isinstance(stru_dict, dict) and "positions" in stru_dict:
+            # Use fromdict() to restore constraints (FixAtoms etc.)
+            atoms = Atoms.fromdict(stru_dict)
+            buf = io.StringIO()
+            ase.io.write(buf, atoms, format=software)
+            return build_preview(buf.getvalue(), fmt=software)
+
+        # --- Case 2: Trajectory file path (SCF jobs) ---
+        traj_path = kwargs.get("traj_file_path")
+        traj_format = kwargs.get("traj_format", software)
+
+        if traj_path:
+            traj_path = Path(traj_path)
+            if traj_path.is_file():
+                ase_fmt = md_ase_formats.get(traj_format, traj_format)
+                atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+                buf = io.StringIO()
+                stru_fmt = software
+                ase.io.write(buf, atoms, format=stru_fmt)
+                return build_preview(buf.getvalue(), fmt=stru_fmt)
+    except Exception:
+        logger.warning(
+            "Failed to build preview from job kwargs for %s", job_uuid
+        )
+        return None
+
+
+def _preview_from_traj_hash(
+    stru_hash: str,
+    stru_format: str,
+    manager: MainWorkflow,
+):
+    """Read the first frame of a trajectory file identified by hash.
+
+    Returns a StructurePreviewPayload or None on failure.
+    """
+    import io
+
+    import ase.io
+
+    from ..params import md_ase_formats
+    from .structure_preview import build_preview
+
+    data_dir = str(
+        Path(manager.config["basic"].get("user_data", "data/user_data")).resolve()
+    )
+    traj_path = Path(data_dir) / "trajs" / stru_hash
+    if not traj_path.is_file():
+        return None
+
+    try:
+        ase_fmt = md_ase_formats.get(stru_format, stru_format)
+        atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+        # Convert back to text for build_preview (to get constraint handling)
+        buf = io.StringIO()
+        ase.io.write(buf, atoms, format=stru_format)
+        return build_preview(buf.getvalue(), fmt=stru_format)
+    except Exception:
+        logger.warning(
+            "Failed to parse trajectory hash %s for preview", stru_hash
+        )
+        return None
+
+
+def _resolve_software_for_task(task_id: str, manager: MainWorkflow) -> str:
+    """Determine the software used by a task.
+
+    Checks the queued payload first (input.basic_input.software),
+    then defaults to 'vasp'.
+    """
+    payload_json = qdyndb.get_queued_payload(task_id)
+    if payload_json:
+        try:
+            payload = json.loads(payload_json)
+            input_data = payload.get("input", {})
+            basic = input_data.get("basic_input", {})
+            sw = basic.get("software")
+            if sw:
+                return sw
+        except Exception:
+            pass
+    return "vasp"
+
+

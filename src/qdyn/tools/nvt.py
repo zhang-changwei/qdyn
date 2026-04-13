@@ -352,6 +352,137 @@ def _process_nvt_output(
     )
 
 
+def parse_constraint_layers_spec(spec: str, total_layers: int) -> list:
+    """Parse a human-readable constraint layers specification into 0-indexed layer indices.
+
+    Accepts space-separated tokens where each token is either a single layer
+    number or a dash-separated range (e.g. "1-3 5").  Layer numbers are
+    1-indexed (counting from bottom to top) and converted to 0-indexed
+    in the output.
+
+    Parameters
+    ----------
+    spec : str
+        Constraint layers specification string (e.g. "1-3 5"),
+        counting from 1 from bottom to top.
+    total_layers : int
+        Total number of layers in the structure (for range validation).
+
+    Returns
+    -------
+    list[int]
+        Sorted, deduplicated list of 0-indexed layer indices.
+
+    Raises
+    ------
+    ValueError
+        If the specification contains invalid syntax or out-of-range layer numbers.
+    """
+    if not spec or not spec.strip():
+        raise ValueError("constraint_layers specification is empty")
+
+    clayers: list = []
+    for part in spec.split():
+        part = part.strip()
+        if not part:
+            continue
+        if '-' in part:
+            pieces = part.split('-')
+            if len(pieces) != 2 or not pieces[0] or not pieces[1]:
+                raise ValueError(
+                    f"Invalid range syntax '{part}': expected 'start-end' "
+                    f"(e.g. '1-3')"
+                )
+            try:
+                start, end = int(pieces[0]), int(pieces[1])
+            except ValueError:
+                raise ValueError(
+                    f"Invalid range '{part}': start and end must be integers"
+                )
+            if start < 1 or end < 1:
+                raise ValueError(
+                    f"Layer numbers must be >= 1, got range '{part}'"
+                )
+            if start > total_layers or end > total_layers:
+                raise ValueError(
+                    f"Layer number out of range in '{part}': "
+                    f"must be <= {total_layers}"
+                )
+            if start > end:
+                raise ValueError(
+                    f"Invalid range '{part}': start ({start}) > end ({end})"
+                )
+            clayers.extend(range(start - 1, end))
+        else:
+            try:
+                layer_num = int(part)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid layer number '{part}': must be an integer"
+                )
+            if layer_num < 1 or layer_num > total_layers:
+                raise ValueError(
+                    f"Layer number {layer_num} out of range: "
+                    f"must be between 1 and {total_layers}"
+                )
+            clayers.append(layer_num - 1)
+
+    if not clayers:
+        raise ValueError("No valid layer numbers found in specification")
+
+    return sorted(set(clayers))
+
+
+def compute_layer_constraint_mask(
+    structure: Atoms,
+    constraint_layers: str,
+    layer_direction: str,
+    total_layers: int,
+) -> list:
+    """Compute per-atom constraint mask from layer parameters.
+
+    Pure function -- does NOT modify the structure object.
+
+    Parameters
+    ----------
+    structure : Atoms
+        ASE Atoms object representing the structure.
+    constraint_layers : str
+        Constraint layers specification (e.g. "1-3 5"),
+        counting from 1 from bottom to top.
+    layer_direction : str
+        Miller indices as a string of 0/1 digits (e.g. "001").
+    total_layers : int
+        Expected total number of layers in the structure.
+
+    Returns
+    -------
+    list[bool]
+        Per-atom boolean mask where True means the atom is constrained.
+
+    Raises
+    ------
+    ValueError
+        If the specification is invalid, layer numbers are out of range,
+        or auto_tolerance cannot find the expected number of layers.
+    """
+    clayers = parse_constraint_layers_spec(constraint_layers, total_layers)
+
+    miller = np.array(list(layer_direction), dtype=int)
+    _, layers = auto_tolerance(structure, miller, total_layers)
+
+    detected_layers = len(layers[1])
+    if detected_layers != total_layers:
+        raise ValueError(
+            f"Layer detection found {detected_layers} layers, "
+            f"expected {total_layers}. The structure geometry may not "
+            f"match the specified layer parameters."
+        )
+
+    mask = np.isin(layers[0], clayers)
+    return mask.tolist()
+
+
 def add_constraints(
     structure: Atoms,
     constraint_layers: str,
@@ -360,33 +491,31 @@ def add_constraints(
 ) -> Atoms:
     """Add layer-based constraints to the structure.
 
+    Computes a per-atom constraint mask using ``compute_layer_constraint_mask``
+    and wraps it in an ASE ``FixAtoms`` constraint attached to the structure.
+
     Parameters
     ----------
     structure : Atoms
         ASE Atoms object representing the structure.
-    constraint_layers : int
-        Number of layers to constrain (starting from the bottom).
+    constraint_layers : str
+        Constraint layers specification (e.g. "1-3 5"),
+        counting from 1 from bottom to top.
     layer_direction : str
-        Miller indices of the crystal surface.
+        Miller indices of the crystal surface (e.g. "001").
     total_layers : int
         Total number of layers in the structure.
+
+    Returns
+    -------
+    Atoms
+        The same structure object with FixAtoms constraint applied.
     """
     from ase.constraints import FixAtoms
 
-    # Get layer indices based on geometry
-    miller = np.array(list(layer_direction), dtype=int)
-
-    _, layers = auto_tolerance(structure, miller, total_layers)
-
-    clayers = []
-    for part in constraint_layers.split():
-        if '-' in part:
-            start, end = map(int, part.split('-'))
-            clayers.extend(range(start - 1, end))
-        else:
-            clayers.append(int(part) - 1)
-
-    mask = np.isin(layers[0], clayers)
+    mask = compute_layer_constraint_mask(
+        structure, constraint_layers, layer_direction, total_layers
+    )
     c = FixAtoms(mask=mask)
     structure.set_constraint(c)  # type: ignore
     return structure

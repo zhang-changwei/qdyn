@@ -14,7 +14,7 @@
           Back
         </el-button>
         <div class="header-info">
-          <h2 class="task-id">Task: {{ truncatedTaskId }}</h2>
+          <h2 class="task-id">{{ taskDisplayName }}</h2>
           <StatusBadge :status="task.derived_status" />
           <el-tag
             v-if="task.prev_task_id"
@@ -63,6 +63,17 @@
           </el-button>
         </div>
       </div>
+
+      <!-- 3D structure preview -->
+      <el-card v-if="structurePreview" class="structure-card">
+        <template #header>
+          <span class="card-title">Structure Preview</span>
+        </template>
+        <StructureViewer
+          :preview="structurePreview"
+          height="350px"
+        />
+      </el-card>
 
       <!-- Workflow progress timeline -->
       <el-card class="timeline-card">
@@ -555,11 +566,14 @@ import { ArrowLeft, Document, Download, WarningFilled, FolderOpened, Folder } fr
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
 import { fetchJobError, stopTask, continueTask, deleteTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { getTaskStructurePreview } from '@/api/structures'
+import { getTaskDisplayName } from '@/utils/task-display'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
+import StructureViewer from '@/components/StructureViewer.vue'
 import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
-import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse } from '@/api/types'
+import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse, StructurePreviewPayload } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
 const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB
@@ -617,6 +631,26 @@ const truncatedTaskId = computed((): string => {
   if (id.length <= 20) return id
   return `${id.slice(0, 12)}...${id.slice(-8)}`
 })
+
+/** Task display name: task_name > formula > truncated task_id */
+const taskDisplayName = computed((): string => {
+  if (task.value) {
+    return getTaskDisplayName(task.value)
+  }
+  return truncatedTaskId.value
+})
+
+/** Structure preview data (fetched on-demand from dedicated endpoint) */
+const structurePreview = ref<StructurePreviewPayload | null>(null)
+
+async function fetchStructurePreview() {
+  try {
+    structurePreview.value = await getTaskStructurePreview(taskId.value)
+  } catch {
+    // Non-critical: preview unavailable does not block task detail
+    structurePreview.value = null
+  }
+}
 
 // Phase ordering: nvt < nve < scf < pre_namd < namd
 const PHASE_ORDER: Record<string, number> = {
@@ -688,6 +722,7 @@ async function loadTaskData(): Promise<void> {
 
 onMounted(async () => {
   await loadTaskData()
+  fetchStructurePreview()  // fire-and-forget: non-blocking
   startPolling()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('focus', handleFocus)
@@ -697,7 +732,9 @@ onMounted(async () => {
 // Reload when navigating between tasks (e.g. "Resumed from" link)
 watch(taskId, async () => {
   stopPolling()
+  structurePreview.value = null
   await loadTaskData()
+  fetchStructurePreview()
   startPolling()
 })
 
@@ -1291,6 +1328,10 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 
 .card-title {
   font-weight: 600;
+}
+
+.structure-card {
+  margin-bottom: 24px;
 }
 
 .timeline-card {

@@ -206,6 +206,16 @@ class QdynDB:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_queued_payload(self, task_id: str) -> str | None:
+        """Return the payload_json for a queued task, or None if not found."""
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT payload_json FROM queued_submissions WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return row["payload_json"] if row else None
+
     # ------------------------------------------------------------------
     # Queued submissions helpers
     # ------------------------------------------------------------------
