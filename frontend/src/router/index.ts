@@ -47,6 +47,33 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/admin',
+    component: () => import('@/layouts/AdminLayout.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+    children: [
+      {
+        path: '',
+        name: 'admin-dashboard',
+        component: () => import('@/pages/admin/DashboardPage.vue')
+      },
+      {
+        path: 'users',
+        name: 'admin-users',
+        component: () => import('@/pages/admin/UsersPage.vue')
+      },
+      {
+        path: 'tasks',
+        name: 'admin-tasks',
+        component: () => import('@/pages/admin/TasksPage.vue')
+      },
+      {
+        path: 'files',
+        name: 'admin-files',
+        component: () => import('@/pages/admin/FilesPage.vue')
+      }
+    ]
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/'
   }
@@ -62,10 +89,23 @@ const router = createRouter({
  * Redirects unauthenticated users to login page when accessing protected routes
  * Preserves the original destination for redirect after successful login
  */
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+
+  // Check auth requirement across all matched route records
+  const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
+  const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
+
+  if (requiresAuth && !authStore.isAuthenticated) {
     next({ name: 'login', query: { redirect: to.fullPath } })
+  } else if (requiresAdmin) {
+    // Wait for init() to finish so isAdmin is populated before checking
+    await authStore.whenReady()
+    if (!authStore.isAdmin) {
+      next({ name: 'task-list' })
+    } else {
+      next()
+    }
   } else {
     next()
   }

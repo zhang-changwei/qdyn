@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       proxy: {
+        '/api/admin': { target: apiTarget, changeOrigin: true },
         '/api': { target: apiTarget, changeOrigin: true },
         '/auth': { target: apiTarget, changeOrigin: true },
         '/submit': {

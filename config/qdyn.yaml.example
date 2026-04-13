@@ -91,3 +91,4 @@ worker_pools:
 auth:
   secret_key: ""  # leave empty to auto-generate on first start
   token_expire_hours: 24
+  admin_users: []  # list of usernames to grant admin on startup (must register first)

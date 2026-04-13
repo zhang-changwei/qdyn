@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..database import qdyndb
 from .dependencies import get_current_user
-from .models import UserCreate, Token
+from .models import UserCreate, Token, UserInfo
 from .security import hash_password, verify_password, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -35,9 +35,11 @@ def login(body: UserCreate):
     return Token(access_token=token)
 
 
-@router.get("/me")
+@router.get("/me", response_model=UserInfo)
 async def get_current_user_info(
-    username: str = Depends(get_current_user)
-):
-    """Get current logged-in user information."""
-    return {"username": username}
+    username: str = Depends(get_current_user),
+) -> UserInfo:
+    """Get current logged-in user information, including admin status."""
+    user = qdyndb.get_user(username)
+    is_admin = bool(user.get("is_admin")) if user else False
+    return UserInfo(username=username, is_admin=is_admin)

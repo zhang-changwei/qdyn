@@ -16,6 +16,8 @@ from pydantic import BaseModel
 
 from qdyn import __version__
 
+from .admin import StorageCache, create_admin_router
+from .admin.service import set_storage_cache
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .calc_common import extract_structure_metadata
@@ -70,6 +72,21 @@ async def lifespan(app: FastAPI):
     # user_data folders are created on demand when uploading files, if not presented.
     # One user_data for each worker. No longer created at startup.
 
+    # Bootstrap admin users from config
+    admin_usernames = auth_cfg.get("admin_users", [])
+    for au in admin_usernames:
+        user = qdyndb.get_user(au)
+        if user is None:
+            logging.warning(
+                "admin_users config: user '%s' does not exist yet. "
+                "Register this account first, then restart to grant admin.",
+                au,
+            )
+        else:
+            if not user.get("is_admin"):
+                qdyndb.set_admin(au, True)
+                logging.info("Granted admin privileges to user '%s'.", au)
+
     # persist auto-generated key back to config file if it was empty
     if not auth_cfg["secret_key"]:
         manager.config["auth"]["secret_key"] = generated_key
@@ -113,9 +130,37 @@ async def lifespan(app: FastAPI):
         poll_interval,
     )
 
+    # Start the storage cache background task.
+    work_dir_base = pool_cfg.get("work_dir_base", "")
+    user_data_dir = str(
+        Path(
+            manager.config["basic"].get("user_data", "data/user_data")
+        ).resolve()
+    )
+    traj_dir = os.path.join(user_data_dir, "trajs")
+
+    storage_cache = StorageCache(
+        work_dir_base=work_dir_base,
+        traj_dir=traj_dir,
+        interval=300,  # 5 minutes
+    )
+    set_storage_cache(storage_cache)
+
+    storage_task: asyncio.Task | None = asyncio.create_task(
+        storage_cache.run_forever(),
+        name="storage-cache",
+    )
+
     yield
 
     # --- shutdown ---
+    if storage_task is not None:
+        storage_task.cancel()
+        try:
+            await storage_task
+        except asyncio.CancelledError:
+            pass
+
     if poller_task is not None:
         poller_task.cancel()
         try:
@@ -243,6 +288,10 @@ def get_step_input_schemas() -> dict[str, Any]:
 # Create and mount the frontend API router with manager injection
 frontend_router = create_frontend_router(_manager)
 app.include_router(frontend_router)
+
+# Create and mount the admin API router with manager injection
+admin_router = create_admin_router(_manager)
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------

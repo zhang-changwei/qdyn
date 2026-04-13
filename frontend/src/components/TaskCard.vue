@@ -15,7 +15,7 @@
           </span>
         </div>
         <div class="task-header-right">
-          <div v-if="manage" class="card-actions" @click.stop>
+          <div v-if="manage && !adminMode" class="card-actions" @click.stop>
             <el-button
               v-if="isQueued"
               type="warning"
@@ -51,7 +51,13 @@
         </div>
       </div>
 
-      <!-- Row 2: UUID (truncated) + created time + pool/worker -->
+      <!-- Row 2 (admin mode): Owner -->
+      <div v-if="adminMode" class="task-owner-line">
+        <el-icon><UserFilled /></el-icon>
+        <span class="owner-text">{{ task.owner }}</span>
+      </div>
+
+      <!-- Row 3: UUID (truncated) + created time + pool/worker -->
       <div class="task-meta-line">
         <span class="meta-uuid" :title="task.task_id">
           {{ truncatedTaskId }}
@@ -130,7 +136,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { WarningFilled, Connection, Monitor, Link } from '@element-plus/icons-vue'
+import { WarningFilled, Connection, Monitor, Link, UserFilled } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { stopTask, deleteTask, cancelQueuedTask } from '@/api/tasks'
 import { useTasksStore } from '@/stores/tasks'
@@ -139,17 +145,20 @@ import { STEP_LABELS_SHORT } from '@/constants/steps'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
 
-const props = withDefaults(defineProps<{
-  task: TaskSummary
-  manage?: boolean
-}>(), {
-  manage: false,
-})
+const props = withDefaults(
+  defineProps<{
+    task: TaskSummary
+    manage?: boolean
+    adminMode?: boolean
+  }>(),
+  { manage: false, adminMode: false }
+)
 
 const emit = defineEmits<{
   (e: 'task-deleted', taskId: string): void
   (e: 'task-stopped', taskId: string): void
   (e: 'task-queue-cancelled', taskId: string): void
+  (e: 'admin-click', task: TaskSummary): void
 }>()
 
 const router = useRouter()
@@ -327,6 +336,10 @@ function truncateId(id: string): string {
 // ============================================
 
 function handleClick(): void {
+  if (props.adminMode) {
+    emit('admin-click', props.task)
+    return
+  }
   // Don't navigate to detail page for queued tasks — there's nothing to show yet
   if (isQueued.value) return
   router.push({ name: 'task-detail', params: { taskId: props.task.task_id } })
@@ -487,7 +500,21 @@ async function handleCancelQueue(): Promise<void> {
   gap: var(--space-1);
 }
 
-/* Row 2: Meta line */
+/* Row 2 (admin mode): Owner line */
+.task-owner-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.owner-text {
+  white-space: nowrap;
+}
+
+/* Row 3: Meta line */
 .task-meta-line {
   display: flex;
   align-items: center;

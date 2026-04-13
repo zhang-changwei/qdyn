@@ -56,6 +56,20 @@ class QdynDB:
             # Migrate: add optional metadata columns if they don't exist yet
             self._migrate_task_metadata()
 
+            # Migrate: add is_admin column to users if missing
+            self._migrate_users_table()
+
+
+    def _migrate_users_table(self) -> None:
+        """Add is_admin column to users if missing."""
+        assert self._conn is not None
+        cursor = self._conn.execute("PRAGMA table_info(users)")
+        existing = {row["name"] for row in cursor.fetchall()}
+        if "is_admin" not in existing:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"
+            )
+            self._conn.commit()
 
     def _migrate_task_metadata(self) -> None:
         """Add formula, num_atoms, prev_task_id, worker, and pool_name columns
@@ -465,6 +479,91 @@ class QdynDB:
                 count += 1
             conn.commit()
             return count
+
+    # ------------------------------------------------------------------
+    # Admin user management helpers
+    # ------------------------------------------------------------------
+
+    def list_users(self) -> list[dict]:
+        """Return all users as a list of dicts."""
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT username, is_admin, created_at FROM users "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_admin(self, username: str, is_admin: bool) -> None:
+        """Set or revoke admin privilege for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE users SET is_admin = ? WHERE username = ?",
+                (1 if is_admin else 0, username),
+            )
+            conn.commit()
+
+    def update_password(self, username: str, hashed_pw: str) -> None:
+        """Update the hashed password for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE users SET hashed_pw = ? WHERE username = ?",
+                (hashed_pw, username),
+            )
+            conn.commit()
+
+    def delete_user_record(self, username: str) -> None:
+        """Delete the user row from the users table.
+
+        Foreign-key cascades (task_owners, queued_submissions) must be
+        handled by the caller before invoking this method.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute("DELETE FROM users WHERE username = ?", (username,))
+            conn.commit()
+
+    def get_all_task_owners(self) -> list[dict]:
+        """Return all task_owners rows (task_id, username, job_ids, created_at, etc.)."""
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT task_id, username, job_ids, created_at, formula, "
+                "num_atoms, prev_task_id, worker, pool_name "
+                "FROM task_owners ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_user_tasks(self, username: str) -> int:
+        """Return the number of tasks owned by a user."""
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM task_owners WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["cnt"] if row else 0
+
+    def delete_user_tasks(self, username: str) -> None:
+        """Delete all task_owners rows for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "DELETE FROM task_owners WHERE username = ?", (username,)
+            )
+            conn.commit()
+
+    def delete_user_queued(self, username: str) -> None:
+        """Delete all queued_submissions rows for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "DELETE FROM queued_submissions WHERE username = ?",
+                (username,),
+            )
+            conn.commit()
 
     def release_claim(self, task_id: str) -> None:
         """Transition a DISPATCHING task back to QUEUED.

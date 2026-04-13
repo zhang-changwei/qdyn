@@ -180,6 +180,7 @@ export type RegisterResponse = LoginResponse
  */
 export interface UserInfo {
   username: string
+  is_admin: boolean
 }
 
 // ============================================
@@ -486,6 +487,103 @@ export interface JobMdTimeseriesResponse {
   references: MDReferenceLines | null
   stats: MDTimeseriesStats | null
   warning: string | null
+}
+
+// ============================================
+// Admin Types
+// ============================================
+
+/**
+ * Dashboard statistics for the admin panel
+ * Returned by GET /api/admin/stats
+ */
+export interface AdminStatsResponse {
+  total_users: number
+  total_tasks: number
+  running_tasks: number
+  queued_tasks: number
+  storage_bytes: number | null
+  traj_storage_bytes: number | null
+  traj_file_count: number
+}
+
+/**
+ * Single user entry for the admin user list
+ * Returned by GET /api/admin/users
+ */
+export interface AdminUserItem {
+  username: string
+  is_admin: boolean
+  created_at: string
+  task_count: number
+}
+
+/**
+ * Admin task list response reusing TaskSummary
+ * Returned by GET /api/admin/tasks
+ */
+export interface AdminTaskListResponse {
+  total: number
+  items: TaskSummary[]
+}
+
+/**
+ * Single worker entry for the admin worker list
+ * Returned by GET /api/admin/pool/workers
+ */
+export interface AdminWorkerItem {
+  name: string
+  status: string
+  current_user: string | null
+  active_jobs: number
+}
+
+export interface FileSummaryItem {
+  name: string
+  size: number
+}
+
+export interface AdminFileEntry {
+  path: string
+  abs_path: string
+  size_bytes: number | null
+  job_uuid: string
+  task_id: string | null
+  owner: string | null
+  orphan: boolean
+  file_summary: FileSummaryItem[]
+}
+
+export interface AdminFilesResponse {
+  work_dir_base: string
+  total_entries: number
+  orphan_count: number
+  entries: AdminFileEntry[]
+}
+
+export interface FileDeleteTarget {
+  abs_path: string
+  task_id?: string | null
+}
+
+export interface FileDeleteRequest {
+  targets: FileDeleteTarget[]
+  delete_associated_tasks?: boolean
+}
+
+export interface FileNameDeleteRequest {
+  filename: string
+  job_dirs: string[]
+}
+
+export interface FileDeleteFailedItem {
+  path: string
+  error: string
+}
+
+export interface FileDeleteResponse {
+  deleted: number
+  failed: FileDeleteFailedItem[]
 }
 
 // ============================================
