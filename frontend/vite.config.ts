@@ -20,7 +20,16 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true },
         '/auth': { target: apiTarget, changeOrigin: true },
-        '/submit': { target: apiTarget, changeOrigin: true },
+        '/submit': {
+          target: apiTarget,
+          changeOrigin: true,
+          // Only proxy non-GET requests to avoid conflicts with SPA route /submit
+          bypass(req) {
+            if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+              return req.url // skip proxy, let Vite serve SPA
+            }
+          },
+        },
         '/tasks': { target: apiTarget, changeOrigin: true },
         '/workers': { target: apiTarget, changeOrigin: true },
         '/healthz': { target: apiTarget, changeOrigin: true },

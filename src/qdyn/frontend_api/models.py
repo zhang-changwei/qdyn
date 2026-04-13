@@ -6,7 +6,7 @@ implementing a dual-layer status model: raw status passthrough
 plus derived status for UI consumption.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -50,6 +50,10 @@ class TaskJobsStatusResponse(BaseModel):
     jobs: List[JobStatusItem]
     # Resume chain: id of the predecessor task (if this is a resume task)
     prev_task_id: str | None = None
+    # Custom task display name (user-provided or None)
+    task_name: str | None = None
+    # Chemical formula (persisted at submit time)
+    formula: str | None = None
 
 
 class TaskSummary(BaseModel):
@@ -69,6 +73,8 @@ class TaskSummary(BaseModel):
     steps: List[str] = Field(default_factory=list)
     # Steps that have fully completed (contiguous prefix only)
     completed_steps: List[str] = Field(default_factory=list)
+    # Custom task display name (user-provided or None)
+    task_name: str | None = None
     # Structure metadata (persisted at submit time)
     formula: str | None = None
     num_atoms: int | None = None
@@ -142,12 +148,58 @@ class StructureValidationInfo(BaseModel):
     lattice: List[List[float]]
 
 
+class StructurePreviewPayload(BaseModel):
+    """Format-agnostic structure data for 3D rendering.
+
+    Decoupled from file format. Backend parses via ASE -> outputs this.
+    Frontend renderer consumes only this model.
+
+    Invariants:
+    - len(species) == len(cart_coords) == len(constraint_mask) (if not None)
+    - cart_coords in Angstrom, Cartesian
+    - lattice: 3x3 row vectors, Angstrom
+    - pbc: [a, b, c] axis order
+    """
+
+    species: List[str]
+    cart_coords: List[List[float]]
+    lattice: List[List[float]]
+    pbc: List[bool] = Field(default=[True, True, True])
+    constraint_mask: List[bool] | None = None  # true = constrained (source-agnostic)
+
+
 class StructureValidationResponse(BaseModel):
     """Response payload for POSCAR structure validation."""
 
     valid: bool
     error: str | None = None
     structure: StructureValidationInfo | None = None
+    preview: StructurePreviewPayload | None = None
+
+
+class ComputeConstraintMaskRequest(BaseModel):
+    """Request payload for computing per-atom constraint mask from layer parameters."""
+
+    stru_content: str
+    stru_format: str = "vasp"
+    constraint_layers: str
+    layer_direction: Literal[
+        '000', '001', '010', '011', '100', '101', '110', '111'
+    ]
+    total_layers: int = Field(ge=1)
+
+
+class ComputeConstraintMaskResponse(BaseModel):
+    """Response payload for constraint mask computation.
+
+    source indicates how the mask was determined:
+    - "file": structure file already contained ASE constraints (FixAtoms etc.)
+    - "layers": mask was computed from the layer parameters
+    """
+
+    constraint_mask: List[bool]
+    source: Literal["file", "layers"]
+    warning: str | None = None
 
 
 # ============================================

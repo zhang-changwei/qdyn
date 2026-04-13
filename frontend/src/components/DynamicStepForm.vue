@@ -185,6 +185,14 @@
                 @change="commitCsvStrings(field.path, field.nullable)"
               />
 
+              <!-- Single-line text input (widget: "text") -->
+              <el-input
+                v-else-if="field.widget === 'text'"
+                :model-value="String(getFieldValue(field.path) ?? '')"
+                :placeholder="field.schema.placeholder"
+                @update:model-value="setFieldValue(field.path, $event || undefined)"
+              />
+
               <!-- Advanced textarea for string fields -->
               <el-input
                 v-else-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"

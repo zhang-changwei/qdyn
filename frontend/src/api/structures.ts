@@ -1,12 +1,13 @@
 /**
- * Structure validation API module
+ * Structure validation and preview API module
  *
  * Endpoints (under /frontend prefix, wrapped in { success, data }):
  * - POST /frontend/structures/validate - Validate POSCAR content
+ * - GET /frontend/tasks/{taskId}/structure-preview - On-demand structure preview
  */
 
 import http from './http'
-import type { ApiResponse, ValidatePoscarRequest, ValidatePoscarResponse } from './types'
+import type { ApiResponse, ValidatePoscarRequest, ValidatePoscarResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, ComputeConstraintMaskResponse } from './types'
 
 /**
  * Unwrap API response (extract data from { success, data } wrapper)
@@ -44,4 +45,43 @@ export async function validatePoscar(content: string): Promise<ValidatePoscarRes
 export async function validatePoscarFile(file: File): Promise<ValidatePoscarResponse> {
   const content = await file.text()
   return validatePoscar(content)
+}
+
+/**
+ * Get structure preview for a task (on-demand computation)
+ *
+ * Resolution order (backend):
+ * 1. Queued task: from queue payload
+ * 2. Running/completed task: from first job's run directory
+ * 3. Resume task: trace prev_task_id chain (max 10 hops)
+ *
+ * @param taskId - The task ID to get structure preview for
+ * @returns StructurePreviewPayload or null if unavailable
+ */
+export async function getTaskStructurePreview(
+  taskId: string
+): Promise<StructurePreviewPayload | null> {
+  const response = await http.get<ApiResponse<StructurePreviewPayload | null>>(
+    `/frontend/tasks/${taskId}/structure-preview`
+  )
+  return unwrapResponse(response.data)
+}
+
+/**
+ * Compute per-atom constraint mask from layer parameters
+ *
+ * Used by SubmitTaskPage to provide real-time constraint visualization
+ * in the 3D structure preview as the user edits constraint parameters.
+ *
+ * @param params - Structure content and constraint parameters
+ * @returns Constraint mask with source indicator ("file" or "layers")
+ */
+export async function computeConstraintMask(
+  params: ComputeConstraintMaskRequest
+): Promise<ComputeConstraintMaskResponse> {
+  const response = await http.post<ComputeConstraintMaskResponse>(
+    '/frontend/compute-constraint-mask',
+    params
+  )
+  return response.data
 }

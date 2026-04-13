@@ -20,6 +20,8 @@ from ..auth.dependencies import get_current_user
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
+    ComputeConstraintMaskRequest,
+    ComputeConstraintMaskResponse,
     ContinueResultResponse,
     JobErrorResponse,
     JobFilesResponse,
@@ -184,6 +186,42 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         detail = service.get_task_detail(task_id, manager_getter)
         return detail
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/structure-preview - On-demand structure preview
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/structure-preview",
+        summary="Get task structure preview",
+        description=(
+            "Compute structure preview on-demand for a task. "
+            "Resolution order: queued payload -> first job run directory -> "
+            "prev_task_id chain (max 10 hops)."
+        ),
+    )
+    def get_task_structure_preview(
+        task_id: str,
+        username: str = Depends(get_current_user),
+    ) -> Dict[str, Any]:
+        """Compute structure preview on-demand for a task.
+
+        Resolution order:
+        1. Queued task: read input.stru + input.stru_format from queue payload
+        2. Running/completed task: read structure file from first job's run directory
+        3. Resume task with no own structure: trace prev_task_id chain (max 10 hops)
+
+        Returns StructurePreviewPayload or null (wrapped in success response).
+        """
+        verify_task_ownership_local(task_id, username)
+
+        manager = manager_getter()
+        preview = service.compute_structure_preview(task_id, manager)
+        if preview is None:
+            logger.info("structure-preview for %s: no preview found", task_id)
+        else:
+            logger.info("structure-preview for %s: %d atoms", task_id, len(preview.species))
+        return success_response(preview.model_dump() if preview else None)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/status - All job statuses
@@ -474,6 +512,17 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                     "Failed to parse structure: ASE returned None",
                 )
 
+            # Build 3D preview payload (best-effort; failure does not block validation)
+            preview = None
+            try:
+                from .structure_preview import build_preview
+
+                preview = build_preview(payload.content, fmt="vasp")
+            except Exception as preview_exc:
+                logger.warning(
+                    "Structure preview generation failed: %s", preview_exc,
+                )
+
             # Extract basic info for the response
             result = StructureValidationResponse(
                 valid=True,
@@ -482,6 +531,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                     formula=atoms.get_chemical_formula(),
                     lattice=atoms.cell.array.tolist(),
                 ),
+                preview=preview,
             )
             return success_response(result.model_dump())
 
@@ -490,6 +540,94 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 "PARSE_ERROR",
                 f"Failed to parse structure: {str(exc)}",
             )
+
+    # -------------------------------------------------------------------------
+    # POST /frontend/compute-constraint-mask - Real-time constraint preview
+    # -------------------------------------------------------------------------
+
+    @router.post(
+        "/compute-constraint-mask",
+        response_model=ComputeConstraintMaskResponse,
+        summary="Compute per-atom constraint mask",
+        description=(
+            "Compute a per-atom boolean constraint mask for structure preview. "
+            "If the structure file already contains ASE constraints (e.g. selective "
+            "dynamics), those take priority and are returned with source='file'. "
+            "Otherwise, the mask is computed from the layer parameters."
+        ),
+    )
+    def compute_constraint_mask(
+        req: ComputeConstraintMaskRequest,
+        username: str = Depends(get_current_user),
+    ) -> ComputeConstraintMaskResponse:
+        """Compute per-atom constraint mask for real-time preview.
+
+        Follows the same priority as the runtime NVT/NVE logic:
+        file-level constraints take precedence over layer-based constraints.
+
+        Args:
+            req: The constraint mask computation request payload.
+
+        Returns:
+            A ComputeConstraintMaskResponse with the computed mask.
+
+        Raises:
+            HTTPException: 422 if constraint parameters are invalid or
+                layer detection fails.
+        """
+        import io
+
+        import ase.io
+
+        from .structure_preview import _extract_constraint_mask
+        from ..tools.nvt import compute_layer_constraint_mask
+
+        # Step 1: Parse structure
+        try:
+            atoms = ase.io.read(io.StringIO(req.stru_content), format=req.stru_format)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to parse structure: {exc}",
+            )
+
+        if atoms is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Failed to parse structure: ASE returned None",
+            )
+
+        # Step 2: Check file-level constraints (same priority as runtime)
+        file_mask = _extract_constraint_mask(atoms)
+        if file_mask is not None:
+            return ComputeConstraintMaskResponse(
+                constraint_mask=file_mask,
+                source="file",
+                warning=(
+                    "Structure file already contains constraints "
+                    "(e.g. selective dynamics). These take priority over "
+                    "layer-based constraint parameters."
+                ),
+            )
+
+        # Step 3: Compute layer-based constraint mask
+        try:
+            mask = compute_layer_constraint_mask(
+                atoms,
+                req.constraint_layers,
+                req.layer_direction,
+                req.total_layers,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            )
+
+        return ComputeConstraintMaskResponse(
+            constraint_mask=mask,
+            source="layers",
+        )
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files - List job files
