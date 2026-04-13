@@ -2275,6 +2275,8 @@ def get_job_md_timeseries(
 def compute_structure_preview(
     task_id: str,
     manager: MainWorkflow,
+    *,
+    enrich_constraints: bool = True,
 ):
     """Compute structure preview on-demand for a task.
 
@@ -2283,15 +2285,21 @@ def compute_structure_preview(
     2. Running/completed task: read structure file from first job's run directory
     3. Resume task with no own structure: trace prev_task_id chain (max 10 hops)
 
-    After resolving the structure, if the preview has no file-level constraints,
-    attempts to apply constraint_layers from the task's InputT (matching runtime
-    semantics where file-level constraints take priority).
+    After resolving the structure, if enrich_constraints is True and the preview
+    has no file-level constraints, attempts to apply constraint_layers from the
+    task's InputT (matching runtime semantics where file-level constraints take
+    priority).
+
+    Set enrich_constraints=False to get the raw preview with only file-level
+    constraints (useful when the caller will apply its own layer parameters).
 
     Returns StructurePreviewPayload or None.
     """
     result = _try_preview_for_task(task_id, manager)
     if result is not None:
-        return _enrich_with_layer_constraints(result, task_id)
+        if enrich_constraints:
+            return _enrich_with_layer_constraints(result, task_id)
+        return result
 
     # Trace prev_task_id chain for resume tasks (max 10 hops)
     task_meta = qdyndb.get_task_metadata(task_id)
@@ -2304,7 +2312,9 @@ def compute_structure_preview(
             visited.add(tid)
             result = _try_preview_for_task(tid, manager)
             if result is not None:
-                return _enrich_with_layer_constraints(result, task_id)
+                if enrich_constraints:
+                    return _enrich_with_layer_constraints(result, task_id)
+                return result
             parent_meta = qdyndb.get_task_metadata(tid)
             if not parent_meta:
                 break
