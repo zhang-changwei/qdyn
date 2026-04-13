@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 SCF (Self-Consistent Field) calculation module for NAMD workflow.
 
