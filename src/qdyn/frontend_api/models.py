@@ -202,6 +202,16 @@ class ComputeConstraintMaskResponse(BaseModel):
     warning: str | None = None
 
 
+class RenameTaskRequest(BaseModel):
+    """Request payload for renaming a task."""
+
+    task_name: str | None = Field(
+        default=None,
+        max_length=50,
+        description="New display name for the task. Set to null or empty to clear.",
+    )
+
+
 # ============================================
 # Job Files, Progress, and Images Models
 # ============================================

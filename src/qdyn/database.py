@@ -195,6 +195,17 @@ class QdynDB:
             )
             conn.commit()
 
+    def update_task_name(self, task_id: str, task_name: str | None) -> bool:
+        """Update only the task_name for a task. Returns True if the row was found."""
+        conn = self.get_db()
+        with self._lock:
+            cursor = conn.execute(
+                "UPDATE task_owners SET task_name = ? WHERE task_id = ?",
+                (task_name, task_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def get_task_metadata(self, task_id: str) -> dict | None:
         """Return task_name, formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
         conn = self.get_db()
