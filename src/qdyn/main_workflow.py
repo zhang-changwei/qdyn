@@ -12,7 +12,6 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
-import yaml
 from typing import Any, Tuple, Dict, List, Literal
 
 from ase import Atoms
@@ -23,38 +22,16 @@ from jobflow_remote import SETTINGS, set_run_config, submit_flow
 from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
+from .errors import ConfigError, ResumeError, ValidationError, QueryError
 from .input import InputT
-from .params import md_tracks, md_ase_formats
+from .params import md_tracks
+from .validation import load_config, validate_workflow_input
 
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
 from .tools.scf import qdyn_scf
 from .tools.prepare_namd import qdyn_pre_namd
 from .tools.namd import qdyn_namd
-
-
-class ValidationError(Exception):
-    """Input parameters or steps are invalid."""
-
-    pass
-
-
-class ConfigError(Exception):
-    """Server-side qdyn.yaml configuration is missing or incomplete."""
-
-    pass
-
-
-class ResumeError(Exception):
-    """Resume failed: previous task/job not found or has no output."""
-
-    pass
-
-
-class QueryError(Exception):
-    """Error during querying job status or output."""
-
-    pass
 
 
 # States that can be stopped via jc.stop_job()
@@ -76,32 +53,13 @@ _REMOTE_WORKER_TYPES = {"remote", "separated_transfer"}
 
 class MainWorkflow:
 
-    def __init__(self, config_path: str | None = None):
-        self.config, self.jf_config = self._load_config(config_path)
+    def __init__(self, config_path: os.PathLike):
+        self.config, self.jf_config = load_config(config_path)
         self.task_ids: List[str] = []
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
         self.job_ids: Dict[str, Dict[str, List[str]]] = {}
         self.jc: JobController | None = None
-
-        # Resolve active pool / worker configuration.
-        if 'worker_pools' not in self.config:
-            raise ConfigError(
-                "Missing 'worker_pools' section in qdyn.yaml. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
-
-        self.active_pool_name: str = self.config.get(
-            'active_pool', next(iter(self.config['worker_pools']))
-        )
-        if self.active_pool_name not in self.config['worker_pools']:
-            raise ConfigError(
-                f"active_pool '{self.active_pool_name}' not found in "
-                f"worker_pools section of qdyn.yaml. "
-                f"Available: {list(self.config['worker_pools'].keys())}"
-            )
-        pool_def = self.config['worker_pools'][self.active_pool_name]
-        self.pool_worker_cfg: dict = pool_def.get('worker', {})
-        self.pool_config: dict = pool_def.get('pool', {})
+        
 
     def __del__(self):
         jc = getattr(self, "jc", None)
@@ -112,39 +70,11 @@ class MainWorkflow:
     # Config
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _load_config(config_path: str | None) -> Tuple[Dict, Dict]:
-
-        path = config_path or os.environ.get('QDYN_CONFIG') or 'config/qdyn.yaml'
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            raise ConfigError(
-                f"QDYN config file not found: {path}\n"
-                f"Create config/qdyn.yaml or set the QDYN_CONFIG environment variable."
-            )
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
-        logging.info(f"Loaded config from {path}.")
-
-        # Validate config format: only pool-based is supported.
-        if 'worker_pools' not in cfg:
-            raise ConfigError(
-                "Missing 'worker_pools' section in qdyn.yaml. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
-        logging.info("Using pool-based config format (worker_pools).")
-
-        jf_path = cfg.get('basic', {}).get('jf_project_path', '')
-        if jf_path and os.path.exists(jf_path):
-            with open(jf_path) as f:
-                jf_cfg = yaml.safe_load(f)
-            logging.info(f"Found jobflow-remote project config at {jf_path}.")
-        else:
-            raise ConfigError(
-                f"Jobflow-remote project config not found: {jf_path}\n"
-                f"Set basic.jf_project_path in qdyn.yaml to a valid path."
-            )
-        return cfg, jf_cfg
+    def init_active_pool(self) -> None:
+        self.active_pool_name = self.config["active_pool"]
+        pool_def = self.config['worker_pools'][self.active_pool_name]
+        self.pool_worker_cfg: dict = pool_def['worker']
+        self.pool_config: dict = pool_def['pool']
 
     def _resolve_worker_context(
         self, pool_name_override: str | None = None
@@ -160,7 +90,7 @@ class MainWorkflow:
                 f"Pool '{pool_name}' not found in config. "
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
-        return pool_name, self.config['worker_pools'][pool_name].get('worker', {})
+        return pool_name, self.config['worker_pools'][pool_name]['worker']
 
     # ------------------------------------------------------------------
     # Pool helpers
@@ -180,7 +110,7 @@ class MainWorkflow:
                 f"Available: {list(self.config['worker_pools'].keys())}"
             )
         pool_def = self.config['worker_pools'][name]
-        return name, pool_def.get('worker', {}), pool_def.get('pool', {})
+        return name, pool_def['worker'], pool_def['pool']
 
     def _get_pool_workers(self, pool_name: str | None = None) -> List[str]:
         """Return runtime worker names belonging to a pool.
@@ -192,11 +122,8 @@ class MainWorkflow:
         import re
 
         name = pool_name or self.active_pool_name
-        prefix = f"{name}_"
         pattern = re.compile(rf"^{re.escape(name)}_\d{{3,}}$")
-        workers = sorted(
-            w for w in self.jf_config.get('workers', {}) if pattern.match(w)
-        )
+        workers = sorted(w for w in self.jf_config['workers'] if pattern.match(w))
         return workers
 
     # ------------------------------------------------------------------
@@ -364,59 +291,33 @@ class MainWorkflow:
         ``work_dir_base`` from the pool config -- this is the shared
         parent directory for all pool workers.
         """
-        jf_workers = self.jf_config.get('workers', {})
+        jf_workers = self.jf_config['workers']
         if worker_name in jf_workers:
-            return jf_workers[worker_name].get('work_dir', '')
+            return jf_workers[worker_name]["work_dir"]
 
         # Pool name: return pool.work_dir_base from qdyn.yaml
-        pool_def = self.config['worker_pools'].get(worker_name, {})
-        return pool_def.get('pool', {}).get('work_dir_base', '')
-
-    def _get_config(self, worker_name: str, worker_cfg: Dict[str, Any], *keys: str):
-        """Traverse worker_cfg by key path, raising ConfigError if missing.
-
-        Usage: self._get_config(worker_name, worker_cfg, 'nvt', 'vasp', 'nodes')
-        is equivalent to worker_cfg['nvt']['vasp']['nodes']
-        but raises ConfigError with a clear message on KeyError.
-        """
-        node = worker_cfg
-        for i, key in enumerate(keys):
-            if not isinstance(node, dict) or key not in node:
-                path = '.'.join(keys[: i + 1])
-                raise ConfigError(f"Missing '{path}' in worker '{worker_name}' config")
-            node = node[key]
-        return node
-
-    def _configure_jobflow_remote(self) -> None:
-        """Apply optional jobflow-remote settings from qdyn.yaml before first use."""
-        basic_cfg = self.config.get('basic', {})
-        project_path = basic_cfg.get('jf_project_path', '')
-        project_name = basic_cfg.get('jf_project_name', '')
-        if not project_path or not os.path.exists(project_path):
-            raise ConfigError(
-                f"Jobflow-remote project config not found: {project_path}\n"
-                f"Set basic.jf_project_path in qdyn.yaml to a valid path."
-            )
-        if not project_name:
-            raise ConfigError(
-                f"Jobflow-remote project name not specified in qdyn.yaml.\n"
-                f"Set basic.jf_project_name to the project name defined in your jobflow-remote config."
-            )
-
-        SETTINGS.projects_folder = str(Path(project_path).parent.expanduser().resolve())
-        SETTINGS.project = project_name
+        pool_def = self.config['worker_pools'][worker_name]
+        return pool_def["pool"]["work_dir_base"]
 
     def _ensure_job_controller(self) -> JobController:
         """Initialize the jobflow-remote controller on demand."""
+
+        def _configure_jobflow_remote() -> None:
+            """Apply optional jobflow-remote settings from qdyn.yaml before first use."""
+            project_path = self.config["basic"]["jf_project_path"]
+            project_name = self.config["basic"]["jf_project_name"]
+
+            SETTINGS.projects_folder = str(Path(project_path).parent.expanduser().resolve())
+            SETTINGS.project = project_name
+
         if self.jc is None:
             try:
-                self._configure_jobflow_remote()
+                _configure_jobflow_remote()
                 self.jc = JobController.from_project_name()
             except Exception as exc:
                 raise ConfigError(
-                    "Failed to initialize jobflow-remote. "
+                    "Failed to initialize jobflow-remote.\n"
                     "Set basic.jf_project_path/jf_project_name in qdyn.yaml "
-                    "or configure ~/.jfremote before using remote job features."
                 ) from exc
         return self.jc
 
@@ -434,13 +335,13 @@ class MainWorkflow:
         from qdyn.yaml (which is what the jf config generator uses to
         populate each runtime worker's resources).
         """
-        jf_workers = self.jf_config.get('workers', {})
+        jf_workers = self.jf_config['workers']
         if worker_name in jf_workers:
-            return jf_workers[worker_name].get('resources', {})
+            return jf_workers[worker_name]["resources"]
 
         # Fallback: pool-based config — use worker.resources from qdyn.yaml
-        pool_def = self.config['worker_pools'].get(worker_name, {})
-        return pool_def.get('worker', {}).get('resources', {})
+        pool_def = self.config['worker_pools']["resources"]
+        return pool_def["worker"]["resources"]
 
     def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
         """Get machine config (partition, cpus_per_node, etc.) for the active worker/pool.
@@ -458,7 +359,7 @@ class MainWorkflow:
 
         Reads from worker_cfg.<key>.<software>.
         """
-        return worker_cfg.get(key, {}).get(software)
+        return worker_cfg[key][software]
 
     def _is_remote_worker(self, worker_name: str) -> bool:
         """Check if the named worker is a remote (SSH) worker.
@@ -466,7 +367,7 @@ class MainWorkflow:
         In pool-based mode, if *worker_name* is a pool name (e.g.
         ``local_slurm``), we check the pool's worker.type from qdyn.yaml.
         """
-        jf_workers = self.jf_config.get('workers', {})
+        jf_workers = self.jf_config['workers']
         if worker_name in jf_workers:
             return jf_workers[worker_name].get('type') in _REMOTE_WORKER_TYPES
 
@@ -509,92 +410,6 @@ class MainWorkflow:
         return cmd
 
     # ------------------------------------------------------------------
-    # Pre-flight validation
-    # ------------------------------------------------------------------
-
-    def _validate_input(
-        self,
-        input: InputT,
-        method: str,
-        stru: str,
-        stru_format: str,
-        stru_hash: str,
-        resume: bool,
-        prev_task_id: str,
-    ) -> None:
-        """Validate inputs before building the workflow. Raises
-        ValidationError, ResumeError, or NotImplementedError with a
-        clear message."""
-        software = input.basic_input.software
-        if not (software == 'vasp' and method == 'namd'):
-            raise NotImplementedError(
-                f"Currently only the combination of software='vasp' and method='namd' is supported.\n"
-                f"Got software='{software}', method='{method}'."
-            )
-
-        # --- steps ---
-        if not input.steps:
-            raise ValidationError(
-                "input.steps is empty; at least one step is required."
-            )
-
-        valid_steps = {'nvt', 'nve', 'scf', 'pre_namd', 'namd'}
-        unknown = set(input.steps) - valid_steps  # type: ignore
-        if unknown:
-            raise ValidationError(
-                f"Unknown step(s): {unknown}. Valid steps: {sorted(valid_steps)}"
-            )
-
-        if method == 'namd':
-            key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
-            step_int = sorted(key_map[s] for s in input.steps)
-            for i in range(1, len(step_int)):
-                if step_int[i] != step_int[i - 1] + 1:
-                    raise ValidationError(
-                        f"Steps must be contiguous. Got: {input.steps}"
-                    )
-        else:
-            raise NotImplementedError(f"Method '{method}' is not supported yet.")
-
-        # --- resume ---
-        if resume:
-            if not prev_task_id:
-                raise ValidationError("prev_task_id must be provided when resume=True.")
-            if prev_task_id not in self.task_ids:
-                raise ResumeError(f"Previous task '{prev_task_id}' not found.")
-
-        if stru:
-            try:
-                ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-            except Exception as exc:
-                raise ValidationError(
-                    f"Provided structure string could not be parsed "
-                    f"by ASE with format '{stru_format}'."
-                ) from exc
-
-        if stru_hash:
-            # Hash format already validated by InputT.validate_stru_hash (pydantic)
-            data_dir = Path(
-                self.config['basic'].get('user_data', 'data/user_data')
-            ).resolve()
-            stru_path = data_dir / "trajs" / f"{stru_hash}"
-            if not stru_path.is_file():
-                raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
-            ase_format = md_ase_formats.get(stru_format)
-            if ase_format is None:
-                raise ValidationError(
-                    f"Unsupported trajectory format: '{stru_format}'. "
-                    f"Supported: {', '.join(md_ase_formats.keys())}"
-                )
-            try:
-                ase.io.read(stru_path, format=ase_format, index=0)
-            except Exception as exc:
-                raise ValidationError(
-                    f"Structure with hash '{stru_hash}' could not be parsed "
-                    f"by ASE with format '{ase_format}'."
-                ) from exc
-
-    # ------------------------------------------------------------------
     # Core logic
     # ------------------------------------------------------------------
 
@@ -635,8 +450,17 @@ class MainWorkflow:
         resource_worker = runtime_worker or effective_worker_name
 
         # pre-flight validation
-        self._validate_input(
-            input, method, stru, stru_format, stru_hash, resume, prev_task_id
+        validate_workflow_input(
+            input,
+            method,
+            stru,
+            stru_format,
+            stru_hash,
+            resume,
+            prev_task_id,
+            known_task_ids=self.task_ids,
+            config=self.config,
+            worker_cfg=effective_worker_cfg,
         )
 
         if method == 'namd':
@@ -692,7 +516,7 @@ class MainWorkflow:
                 str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
             )
             orb_path = str(
-                Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                Path(effective_worker_cfg["orb_path"][software])
                 .expanduser()
                 .resolve()
             )
@@ -725,9 +549,6 @@ class MainWorkflow:
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': self._get_machine_config(
-                        effective_worker_name, effective_worker_cfg
-                    )['partition'],
                     **effective_worker_cfg['nvt'][software],
                     'nodes': nodes,
                 },
@@ -785,7 +606,7 @@ class MainWorkflow:
                 str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
             )
             orb_path = str(
-                Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                Path(effective_worker_cfg["orb_path"][software])
                 .expanduser()
                 .resolve()
             )
@@ -818,9 +639,6 @@ class MainWorkflow:
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': self._get_machine_config(
-                        effective_worker_name, effective_worker_cfg
-                    )['partition'],
                     **effective_worker_cfg['nve'][software],
                     'nodes': nodes,
                 },
@@ -868,9 +686,7 @@ class MainWorkflow:
                             f"Cannot resume scf."
                         ) from exc
                 elif stru_hash:
-                    data_dir = Path(
-                        self.config['basic'].get('user_data', 'data/user_data')
-                    ).resolve()
+                    data_dir = Path(self.config['basic']['user_data']).resolve()
                     traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
                     traj_format = stru_format
                 elif stru:
@@ -959,7 +775,7 @@ class MainWorkflow:
                     str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
                 )
                 orb_path = str(
-                    Path(effective_worker_cfg.get('orb_path', {}).get(software, ''))
+                    Path(effective_worker_cfg["orb_path"][software])
                     .expanduser()
                     .resolve()
                 )
@@ -1003,9 +819,6 @@ class MainWorkflow:
                         ),
                         resources={
                             **self._get_worker_resources(resource_worker),
-                            'partition': self._get_machine_config(
-                                effective_worker_name, effective_worker_cfg
-                            )['partition'],
                             **effective_worker_cfg['scf'][software],
                             'nodes': nodes,
                         },
@@ -1084,7 +897,6 @@ class MainWorkflow:
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': machine_cfg['partition'],
                     'nodes': 1,
                     'ntasks_per_node': 1,
                     'cpus_per_task': ncpus,
@@ -1177,7 +989,6 @@ class MainWorkflow:
                 ),
                 resources={
                     **self._get_worker_resources(resource_worker),
-                    'partition': machine_cfg['partition'],
                     'nodes': nodes,
                     'ntasks_per_node': ntasks_per_node,
                     'cpus_per_task': cpus_per_task,

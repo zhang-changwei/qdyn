@@ -1,5 +1,7 @@
-import pytest
 from types import MethodType, SimpleNamespace
+from pathlib import Path
+
+import pytest
 
 from qdyn.input import BasicInputT, InputT, SchedulerConfigT
 from qdyn.main_workflow import MainWorkflow, ConfigError
@@ -35,8 +37,8 @@ def _make_manager() -> MainWorkflow:
     }
     manager.active_pool_name = "local_slurm"
     pool_def = manager.config["worker_pools"]["local_slurm"]
-    manager.pool_worker_cfg = pool_def.get("worker", {})
-    manager.pool_config = pool_def.get("pool", {})
+    manager.pool_worker_cfg = pool_def["worker"]
+    manager.pool_config = pool_def["pool"]
     manager.task_ids = []
     manager.job_ids = {}
     manager.jc = None
@@ -70,13 +72,13 @@ def test_submit_uses_pool_dispatch(monkeypatch):
     def fake_main_workflow(self, **kwargs):
         captured["worker_name"] = kwargs["worker_name"]
         captured["worker_cfg"] = kwargs["worker_cfg"]
-        captured["runtime_worker"] = kwargs.get("runtime_worker")
+        captured["runtime_worker"] = kwargs["runtime_worker"]
         return {"nvt": [SimpleNamespace(uuid="job-1")]}
 
     class DummyFlow:
         def __init__(self, jobs, **kwargs):
             captured["jobs"] = jobs
-            self.uuid = kwargs.get("uuid", "task-1")
+            self.uuid = kwargs["uuid"]
 
         def update_metadata(self, metadata, dynamic=False):
             pass
@@ -110,15 +112,15 @@ def test_submit_uses_pool_dispatch(monkeypatch):
     assert captured["submitted_worker"] == "local_slurm_002"
 
 
-def test_missing_worker_pools_raises():
-    """Verify that missing 'worker_pools' raises ConfigError."""
-    manager = MainWorkflow.__new__(MainWorkflow)
-    manager.config = {"basic": {}}
-    manager.jf_config = {}
+def test_load_config_requires_worker_pools(tmp_path: Path):
+    jf_config = tmp_path / "jf.yaml"
+    jf_config.write_text("workers: {}\n", encoding="utf-8")
+
+    qdyn_config = tmp_path / "qdyn.yaml"
+    qdyn_config.write_text(
+        f"basic:\n  jf_project_path: {jf_config.as_posix()}\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(ConfigError, match="Missing 'worker_pools'"):
-        if 'worker_pools' not in manager.config:
-            raise ConfigError(
-                "Missing 'worker_pools' section in qdyn.yaml. "
-                "See config/qdyn.yaml.example for the expected structure."
-            )
+        MainWorkflow._load_config(str(qdyn_config))

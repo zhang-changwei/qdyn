@@ -36,7 +36,9 @@ worker_pools:
       resources:
         partition: chu
         time: "48:00:00"
-      partition: chu
+
+      # QDYN specific worker configs
+      # Don't remove any following entries.
       cpus_per_node: 96
       modules:
         vasp: ['compiler/oneAPI/2023.2.0', 'vasp/6.5.1']
@@ -54,6 +56,12 @@ worker_pools:
         vasp: 'source /absolute/path/to/qdyn/.venv/bin/activate'
         python: 'source /absolute/path/to/qdyn/.venv/bin/activate'
         namd: 'source /absolute/path/to/qdyn/.venv/bin/activate'
+      installed:
+        vasp: true
+        vasp_ae: true
+        abacus: false
+        python: true
+        namd: true
       pp_path:
         vasp: '/absolute/path/to/vasp-pp'
       orb_path:

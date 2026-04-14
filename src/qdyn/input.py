@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, PositiveInt
 from typing import Literal, List, Any
 
 import numpy as np
@@ -36,7 +36,7 @@ class SchedulerConfigT(BaseModel):
 
 
 class NAMDInputT(BaseModel):
-    nodes: int | None = Field(
+    nodes: PositiveInt | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -178,7 +178,7 @@ class PreNAMDInputT(BaseModel):
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
 
-    nodes: int | None = Field(
+    nodes: PositiveInt | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -233,19 +233,18 @@ class NVTInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
-    constraint_layers: Optional[str] = Field(
+    constraint_layers: str | None = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
         json_schema_extra=ADVANCED_GROUP,
     )
-    layer_direction: Optional[
-        Literal['000', '001', '010', '011', '100', '101', '110', '111']
-    ] = Field(
+    layer_direction: Literal['000', '001', '010', '011', 
+                             '100', '101', '110', '111'] | None = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
         json_schema_extra=ADVANCED_GROUP,
     )
-    total_layers: Optional[int] = Field(
+    total_layers: int | None = Field(
         default=None,
         description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
         json_schema_extra=ADVANCED_GROUP,
@@ -265,7 +264,7 @@ class NVTInputT(BaseModel):
 class NVEInputT(BaseModel):
     """Input parameters for NVE molecular dynamics."""
 
-    nodes: int | None = Field(
+    nodes: PositiveInt | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -306,19 +305,18 @@ class NVEInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
-    constraint_layers: Optional[str] = Field(
+    constraint_layers: str | None = Field(
         default=None,
         description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
         json_schema_extra=ADVANCED_GROUP,
     )
-    layer_direction: Optional[
-        Literal['000', '001', '010', '011', '100', '101', '110', '111']
-    ] = Field(
+    layer_direction: Literal['000', '001', '010', '011', 
+                             '100', '101', '110', '111'] | None = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
         json_schema_extra=ADVANCED_GROUP,
     )
-    total_layers: Optional[int] = Field(
+    total_layers: int | None = Field(
         default=None,
         description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
         json_schema_extra=ADVANCED_GROUP,
@@ -338,7 +336,7 @@ class NVEInputT(BaseModel):
 class SCFInputT(BaseModel):
     """Input parameters for static SCF calculation."""
 
-    nodes: int | None = Field(
+    nodes: PositiveInt | None = Field(
         default=None,
         description="Number of compute nodes. Leave empty to use qdyn config default.",
         json_schema_extra={
@@ -422,110 +420,3 @@ class InputT(BaseModel):
             )
         return v
 
-
-# deprecated
-def grep_input_parameters(file_path: str) -> dict:
-    """
-    Extract parameters from a plain text file and return a dictionary.
-
-    File format example:
-        parameter_name = value1 value2 value3 ... # comments
-
-    Args:
-        file_path: Path to the text file
-
-    Returns:
-        dict: Dictionary mapping parameter names to parameter values
-              - Single values are automatically converted to int/float/bool/str
-              - Multiple values return a list, with each element automatically converted
-    """
-    result = {}
-
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            # Remove leading and trailing whitespace
-            line = line.strip()
-
-            # Skip empty lines
-            if not line:
-                continue
-
-            # Remove comments (content after #)
-            if '#' in line:
-                line = line[: line.index('#')].strip()
-
-            # Skip lines with only comments
-            if not line:
-                continue
-
-            # Parse parameter name and value
-            if '=' in line:
-                parts = line.split('=', 1)
-                param_name = parts[0].strip()
-                param_value_str = parts[1].strip() if len(parts) > 1 else ''
-
-                if not param_name:
-                    continue
-
-                # Parse parameter values
-                result[param_name] = _parse_value_string(param_value_str)
-
-    return result
-
-
-def _parse_value_string(value_str: str) -> Any:
-    """
-    Parse parameter value string and automatically convert types.
-
-    Args:
-        value_str: Parameter value string (may contain multiple space-separated values)
-
-    Returns:
-        - If single value: return int/float/bool/str
-        - If multiple values: return a list, with each element automatically converted
-    """
-    if not value_str:
-        return ''
-
-    # Split multiple values
-    values = value_str.split()
-
-    # Parse each value
-    parsed_values = [_parse_single_value(v) for v in values]
-
-    # If only one value, return it directly; otherwise return a list
-    if len(parsed_values) == 1:
-        return parsed_values[0]
-    return parsed_values
-
-
-def _parse_single_value(value: str) -> Any:
-    """
-    Parse a single parameter value and automatically convert types.
-
-    Args:
-        value: Single parameter value string
-
-    Returns:
-        Converted value (int/float/bool/str)
-    """
-    # Try to convert to bool (supports various software boolean formats)
-    # Supported formats: True/False, true/false, T/F, t/f, .TRUE./.FALSE., .true./.false.
-    value_lower = value.lower()
-    if value_lower in ('true', 't', '.true.'):
-        return True
-    if value_lower in ('false', 'f', '.false.'):
-        return False
-
-    # Try to convert to float first to preserve decimal values
-    try:
-        float_val = float(value)
-        # If the float value is a whole number (e.g., 3.0), return as int
-        if float_val.is_integer():
-            return int(float_val)
-        return float_val
-    except ValueError:
-        pass
-
-    # Keep as str
-    return value

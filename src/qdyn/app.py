@@ -11,7 +11,6 @@ from typing import Any, Dict, Literal
 
 import ase
 import ase.io
-import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi import status as http_status
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +20,7 @@ from qdyn import __version__
 
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
+from .errors import ConfigError
 from .database import qdyndb
 from .frontend_api import create_frontend_router
 from .input import InputT, NVTInputT, NVEInputT, SCFInputT, PreNAMDInputT, NAMDInputT
@@ -28,6 +28,7 @@ from .main_workflow import (
     MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError,
 )
 from .params import HASH_PATTERN as _HASH_PATTERN
+from .validation import validate_and_fill_runtime_config
 
 # Maximum upload file size: 500 MB.
 # Trajectory files are typically a few tens of MB; 500 MB provides ample headroom.
@@ -48,28 +49,34 @@ async def lifespan(app: FastAPI):
         or os.environ.get("QDYN_CONFIG")
         or "config/qdyn.yaml"
     )
+    config_path = Path(config_path).expanduser().resolve()
     manager = MainWorkflow(config_path)
+    validate_and_fill_runtime_config(
+        manager.config,
+        manager.jf_config,
+    )
+    manager.init_active_pool()
 
-    auth_cfg = manager.config.get("auth", {})
+    auth_cfg = manager.config["auth"]
 
     # --- auth & DB init ---
-    db_path = manager.config['basic'].get("user_db_path", "data/qdyn_users.db")
+    db_path = manager.config["basic"]["user_db_path"]
     qdyndb.init_db(db_path)
 
-    secret_key = auth_cfg.get("secret_key", "")
-    expire_hours = auth_cfg.get("token_expire_hours", 24)
+    secret_key = auth_cfg["secret_key"]
+    expire_hours = auth_cfg["token_expire_hours"]
     generated_key = configure_auth(secret_key, expire_hours)
 
     # -- create user_data folder if not exist --
-    user_data_dir = str(Path(manager.config['basic'].get('user_data', 'data/user_data')).resolve())
+    user_data_dir = str(Path(manager.config["basic"]["user_data"]).resolve())
     traj_dir = os.path.join(user_data_dir, "trajs")
     model_dir = os.path.join(user_data_dir, "models")
     os.makedirs(traj_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
     # persist auto-generated key back to config file if it was empty
-    if not auth_cfg.get("secret_key"):
-        manager.config.setdefault("auth", {})["secret_key"] = generated_key
+    if not auth_cfg["secret_key"]:
+        manager.config["auth"]["secret_key"] = generated_key
         with open(config_path, "r") as f:
             raw = f.read()
             raw = raw.replace('secret_key: ""', f'secret_key: "{generated_key}"')
@@ -92,9 +99,9 @@ async def lifespan(app: FastAPI):
     # Start the queue poller background task.
     from .queue_poller import queue_dispatch_loop
 
-    # Read poll interval from pool config (default 60s).
+    # Read poll interval from normalized pool config.
     _, _, pool_cfg = manager._resolve_pool_context()
-    poll_interval = pool_cfg.get("queue_poll_interval", 60)
+    poll_interval = pool_cfg["queue_poll_interval"]
 
     poller_task: asyncio.Task | None = asyncio.create_task(
         queue_dispatch_loop(
@@ -292,7 +299,7 @@ def _extract_structure_metadata(
             except Exception:
                 logging.warning("Failed to parse structure metadata from POSCAR")
         elif input.stru_hash and config:
-            data_dir = str(Path(config['basic'].get('user_data', 'data/user_data')).resolve())
+            data_dir = str(Path(config["basic"]["user_data"]).resolve())
             traj_path = Path(data_dir) / "trajs" / input.stru_hash
             if traj_path.is_file():
                 try:
@@ -602,7 +609,7 @@ async def upload(
     m = _manager()
     type_mapping = {"trajectory": "trajs", "model": "models"}
 
-    data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
+    data_dir = str(Path(m.config["basic"]["user_data"]).resolve())
     target_dir = Path(data_dir) / type_mapping[file_type]
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -683,7 +690,7 @@ def check_hash(
     m = _manager()
     type_mapping = {"trajectory": "trajs", "model": "models"}
 
-    data_dir = str(Path(m.config['basic'].get('user_data', 'data/user_data')).resolve())
+    data_dir = str(Path(m.config["basic"]["user_data"]).resolve())
     target_dir = Path(data_dir) / type_mapping[file_type]
 
     file_path = target_dir / hash

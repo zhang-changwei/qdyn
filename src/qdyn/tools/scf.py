@@ -24,16 +24,13 @@ import natsort
 import numpy as np
 import ase.io
 from ase import Atoms
-from jobflow import job
+from jobflow import job, Job
 
 from ..input import SCFInputT
 from ..params import params_default, chg_name, ipt_files, stru_files
 from ..input_prepare import prepare_vasp_inputs
 from .nve import read_strus
 from .run_software import run_software
-
-if TYPE_CHECKING:
-    from jobflow import Job # type: ignore
 
 # Status file names
 STATUS_RUNNING = 'RUNNING'
