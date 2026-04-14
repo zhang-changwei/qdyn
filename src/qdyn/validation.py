@@ -71,6 +71,11 @@ def _warn_and_fill_default_leaf(
                 default,
             )
         node[key] = default
+    elif not isinstance(node[key], type(default)):
+        raise ConfigError(
+            f"Invalid type for QDYN config key '{dotted_name}'.\n"
+            f"Expected {type(default).__name__}, got {type(node[key]).__name__}."
+        )
 
 
 def load_config(
@@ -209,7 +214,6 @@ def validate_and_fill_runtime_config(
     # auth
     auth_cfg = _require_mapping_child(cfg, "auth", err_msg="Missing 'auth' section in QDYN config.")
 
-    _warn_and_fill_default_leaf(auth_cfg, "auth.secret_key", "secret_key", "")
     _warn_and_fill_default_leaf(auth_cfg, "auth.token_expire_hours", "token_expire_hours", 24)
     if "secret_key" not in auth_cfg:
         raise ConfigError(

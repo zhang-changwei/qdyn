@@ -11,14 +11,39 @@ def _make_runtime_config() -> dict:
             "jf_project_path": "C:/tmp/jf.yaml",
             "jf_project_name": "jf_qdyn",
         },
+        "auth": {
+            "secret_key": "",
+        },
         "worker_pools": {
             "local_slurm": {
                 "pool": {
+                    "size": 3,
                     "work_dir_base": "/tmp/qdyn",
                 },
                 "worker": {
-                    "partition": "queue1",
+                    "type": "local",
+                    "scheduler_type": "slurm",
                     "cpus_per_node": 64,
+                    "installed": {
+                        "vasp": True,
+                        "vasp_ae": False,
+                        "abacus": False,
+                        "python": False,
+                        "namd": False,
+                    },
+                    "modules": {
+                        "vasp": [],
+                    },
+                    "export": {
+                        "vasp": {},
+                    },
+                    "pre_run": {
+                        "vasp": "",
+                    },
+                    "pp_path": {
+                        "vasp": "/tmp/pp",
+                    },
+                    "orb_path": {},
                     "nvt": {
                         "vasp": {
                             "nodes": 1,
@@ -65,7 +90,6 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
         validate_and_fill_runtime_config(
             config,
             _make_jf_config(),
-            active_pool_name="local_slurm",
         )
 
     assert config["active_pool"] == "local_slurm"
@@ -78,13 +102,17 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
     assert config["worker_pools"]["local_slurm"]["pool"]["queue_poll_interval"] == 60
     assert config["worker_pools"]["local_slurm"]["worker"]["type"] == "local"
     assert config["worker_pools"]["local_slurm"]["worker"]["resources"] == {}
-    assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {}
+    assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {"vasp": ""}
+    assert config["worker_pools"]["local_slurm"]["worker"]["modules"]["vasp"] == []
+    assert config["worker_pools"]["local_slurm"]["worker"]["export"]["vasp"] == {}
+    assert config["worker_pools"]["local_slurm"]["worker"]["pre_run"]["vasp"] == ""
 
     warning_text = caplog.text
     assert "basic.user_db_path" in warning_text
     assert "auth.token_expire_hours" in warning_text
     assert "active_pool" in warning_text
     assert "worker_pools.local_slurm.pool.queue_poll_interval" in warning_text
+    assert "worker_pools.local_slurm.worker.resources" in warning_text
 
 
 def test_validate_and_fill_runtime_config_requires_non_optional_runtime_keys():
@@ -98,7 +126,6 @@ def test_validate_and_fill_runtime_config_requires_non_optional_runtime_keys():
         validate_and_fill_runtime_config(
             config,
             _make_jf_config(),
-            active_pool_name="local_slurm",
         )
 
 
@@ -110,7 +137,6 @@ def test_validate_and_fill_runtime_config_requires_jf_project_name():
         validate_and_fill_runtime_config(
             config,
             _make_jf_config(),
-            active_pool_name="local_slurm",
         )
 
 
@@ -119,10 +145,9 @@ def test_validate_and_fill_runtime_config_requires_jf_workers():
 
     with pytest.raises(
         ConfigError,
-        match="Missing 'workers' in jobflow-remote project config",
+        match="Missing 'workers' in jf-remote project config",
     ):
         validate_and_fill_runtime_config(
             config,
             {},
-            active_pool_name="local_slurm",
         )

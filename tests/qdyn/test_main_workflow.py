@@ -5,6 +5,7 @@ import pytest
 
 from qdyn.input import BasicInputT, InputT, SchedulerConfigT
 from qdyn.main_workflow import MainWorkflow, ConfigError
+from qdyn.validation import load_config, validate_and_fill_runtime_config
 
 
 def _make_manager() -> MainWorkflow:
@@ -118,9 +119,16 @@ def test_load_config_requires_worker_pools(tmp_path: Path):
 
     qdyn_config = tmp_path / "qdyn.yaml"
     qdyn_config.write_text(
-        f"basic:\n  jf_project_path: {jf_config.as_posix()}\n",
+        (
+            "basic:\n"
+            f"  jf_project_path: {jf_config.as_posix()}\n"
+            "  jf_project_name: jf_qdyn\n"
+            "auth:\n"
+            "  secret_key: ''\n"
+        ),
         encoding="utf-8",
     )
 
     with pytest.raises(ConfigError, match="Missing 'worker_pools'"):
-        MainWorkflow._load_config(str(qdyn_config))
+        cfg, jf_cfg = load_config(qdyn_config)
+        validate_and_fill_runtime_config(cfg, jf_cfg)
