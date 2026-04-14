@@ -23,9 +23,12 @@ from .models import (
     AdminTaskListResponse,
     AdminUserItem,
     AdminWorkerItem,
+    AuditLogResponse,
     FileDeleteRequest,
     FileDeleteResponse,
     FileNameDeleteRequest,
+    LogViewResponse,
+    TrajListResponse,
 )
 
 
@@ -86,9 +89,10 @@ def create_admin_router(
     def reset_password(
         username: str,
         body: PasswordResetRequest,
+        admin: str = Depends(get_current_admin),
     ) -> dict[str, bool]:
         """Reset a user's password."""
-        service.reset_user_password(username, body.password)
+        service.reset_user_password(username, body.password, admin)
         return {"ok": True}
 
     # -----------------------------------------------------------------
@@ -279,5 +283,60 @@ def create_admin_router(
         """Return per-worker status, current user, and active job count."""
         workers = service.get_worker_details(manager_getter)
         return [AdminWorkerItem(**w) for w in workers]
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/trajectories
+    # -----------------------------------------------------------------
+
+    @router.get("/trajectories", response_model=TrajListResponse)
+    def list_trajectories() -> TrajListResponse:
+        """List all trajectory files with metadata and reference counts."""
+        data = service.list_trajectories(manager_getter)
+        return TrajListResponse(**data)
+
+    # -----------------------------------------------------------------
+    # DELETE /api/admin/trajectories/{file_hash}
+    # -----------------------------------------------------------------
+
+    @router.delete("/trajectories/{file_hash}", status_code=204)
+    def delete_trajectory(
+        file_hash: str,
+        force: bool = Query(False, description="Force delete even if referenced"),
+        admin: str = Depends(get_current_admin),
+    ) -> Response:
+        """Delete a trajectory file by hash."""
+        service.delete_trajectory(file_hash, manager_getter, admin, force=force)
+        return Response(status_code=204)
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/audit-logs
+    # -----------------------------------------------------------------
+
+    @router.get("/audit-logs", response_model=AuditLogResponse)
+    def get_audit_logs(
+        limit: int = Query(200, ge=1, le=2000),
+        username: str | None = Query(None),
+        action: str | None = Query(None),
+    ) -> AuditLogResponse:
+        """Return audit log entries, newest first."""
+        from ..database import qdyndb as db
+
+        logs = db.get_audit_logs(
+            limit=limit, username=username, action=action
+        )
+        return AuditLogResponse(total=len(logs), items=logs)
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/logs
+    # -----------------------------------------------------------------
+
+    @router.get("/logs", response_model=LogViewResponse)
+    def get_logs(
+        lines: int = Query(200, ge=1, le=5000),
+        log: str = Query("backend"),
+    ) -> LogViewResponse:
+        """Return the last N lines of a log file."""
+        data = service.read_log_tail(log_name=log, num_lines=lines)
+        return LogViewResponse(**data)
 
     return router

@@ -587,6 +587,76 @@ export interface FileDeleteResponse {
 }
 
 // ============================================
+// Trajectory Management Types
+// ============================================
+
+/**
+ * A single trajectory file entry
+ * Returned by GET /api/admin/trajectories
+ */
+export interface TrajFileItem {
+  hash: string
+  size_bytes: number
+  created_at: string
+  format: string | null
+  formula: string | null
+  num_atoms: number | null
+  num_frames: number | null
+  ref_count: number
+}
+
+/**
+ * Trajectory list response
+ * Returned by GET /api/admin/trajectories
+ */
+export interface TrajListResponse {
+  total: number
+  total_bytes: number
+  items: TrajFileItem[]
+}
+
+// ============================================
+// Audit Log Types
+// ============================================
+
+/**
+ * A single audit log entry
+ * Returned by GET /api/admin/audit-logs
+ */
+export interface AuditLogItem {
+  id: number
+  timestamp: string
+  username: string
+  action: string
+  target: string | null
+  detail: string | null
+}
+
+/**
+ * Audit log response
+ * Returned by GET /api/admin/audit-logs
+ */
+export interface AuditLogResponse {
+  total: number
+  items: AuditLogItem[]
+}
+
+// ============================================
+// Log Viewer Types
+// ============================================
+
+/**
+ * Log viewer response
+ * Returned by GET /api/admin/logs
+ */
+export interface LogViewResponse {
+  log_name: string
+  lines: string[]
+  total_lines: number
+  file_size: number
+}
+
+// ============================================
 // Input Types (matching backend Pydantic models)
 // ============================================
 

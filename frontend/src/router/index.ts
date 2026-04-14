@@ -70,6 +70,21 @@ const routes = [
         path: 'files',
         name: 'admin-files',
         component: () => import('@/pages/admin/FilesPage.vue')
+      },
+      {
+        path: 'trajectories',
+        name: 'admin-trajectories',
+        component: () => import('@/pages/admin/TrajectoriesPage.vue')
+      },
+      {
+        path: 'audit-log',
+        name: 'admin-audit-log',
+        component: () => import('@/pages/admin/AuditLogPage.vue')
+      },
+      {
+        path: 'logs',
+        name: 'admin-logs',
+        component: () => import('@/pages/admin/LogsPage.vue')
       }
     ]
   },

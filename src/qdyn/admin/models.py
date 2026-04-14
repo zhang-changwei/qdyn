@@ -109,3 +109,66 @@ class FileNameDeleteRequest(BaseModel):
 
     filename: str
     job_dirs: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Trajectory management models
+# ---------------------------------------------------------------------------
+
+
+class TrajFileItem(BaseModel):
+    """A single trajectory file entry."""
+
+    hash: str
+    size_bytes: int
+    created_at: str
+    format: str | None = None
+    formula: str | None = None
+    num_atoms: int | None = None
+    num_frames: int | None = None
+    ref_count: int = 0
+
+
+class TrajListResponse(BaseModel):
+    """Response for GET /api/admin/trajectories."""
+
+    total: int
+    total_bytes: int
+    items: list[TrajFileItem]
+
+
+# ---------------------------------------------------------------------------
+# Audit log models
+# ---------------------------------------------------------------------------
+
+
+class AuditLogItem(BaseModel):
+    """A single audit log entry."""
+
+    id: int
+    timestamp: str
+    username: str
+    action: str
+    target: str | None = None
+    detail: str | None = None
+
+
+class AuditLogResponse(BaseModel):
+    """Response for GET /api/admin/audit-logs."""
+
+    total: int
+    items: list[AuditLogItem]
+
+
+# ---------------------------------------------------------------------------
+# Log viewer models
+# ---------------------------------------------------------------------------
+
+
+class LogViewResponse(BaseModel):
+    """Response for GET /api/admin/logs."""
+
+    log_name: str
+    lines: list[str]
+    total_lines: int
+    file_size: int

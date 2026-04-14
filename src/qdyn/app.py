@@ -383,7 +383,7 @@ def _sync_dispatch(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=active_worker,
         pool_name=pool_name,
-        stru_hash=input_obj.stru_hash,
+        stru_hash=input_obj.stru_hash or None,
         stru_format=input_obj.stru_format,
     )
 
@@ -486,6 +486,7 @@ async def submit_task(
         raise HTTPException(status_code=501, detail=f"Not supported: {e}")
 
     if runtime_worker is not None:
+        qdyndb.log_audit(username, "submit_task", target=task_id)
         return SubmitResponse(
             task_id=task_id,
             status="SUBMITTED",
@@ -501,6 +502,7 @@ async def submit_task(
         "pool_name": pool_name,
     }
     qdyndb.enqueue_submission(task_id, username, pool_name, json.dumps(payload))
+    qdyndb.log_audit(username, "submit_task", target=task_id)
 
     # Also create a placeholder in task_owners so the task shows up in
     # the user's task list immediately (with empty job_ids).
@@ -528,7 +530,7 @@ async def submit_task(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=None,
         pool_name=pool_name,
-        stru_hash=input.stru_hash,
+        stru_hash=input.stru_hash or None,
         stru_format=input.stru_format,
     )
 
@@ -679,14 +681,19 @@ async def upload(
     # upload tmp file to final_path on local/remote worker
     try:
         pool.upload_user_file(
-            file_type=file_type, 
-            file_hash=file_hash, 
+            file_type=file_type,
+            file_hash=file_hash,
             local_path=tmp_path
         )
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+    qdyndb.log_audit(
+        user,
+        f"upload_{file_type}",
+        detail=f"hash={file_hash}, size={total_size}",
+    )
     return {"hash": file_hash, "pool_name": pool.name, **summary}
 
 

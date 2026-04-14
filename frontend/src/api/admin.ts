@@ -27,7 +27,10 @@ import type {
   TaskJobsStatusResponse,
   FileDeleteRequest,
   FileNameDeleteRequest,
-  FileDeleteResponse
+  FileDeleteResponse,
+  TrajListResponse,
+  AuditLogResponse,
+  LogViewResponse
 } from './types'
 
 // ============================================
@@ -209,5 +212,66 @@ export async function deleteAdminFilesByName(
  */
 export async function getAdminWorkers(): Promise<AdminWorkerItem[]> {
   const response = await http.get<AdminWorkerItem[]>('/api/admin/pool/workers')
+  return response.data
+}
+
+// ============================================
+// Trajectory Management
+// ============================================
+
+/**
+ * List all trajectory files with metadata and reference counts
+ */
+export async function getAdminTrajectories(): Promise<TrajListResponse> {
+  const response = await http.get<TrajListResponse>('/api/admin/trajectories')
+  return response.data
+}
+
+/**
+ * Delete a trajectory file by hash
+ * @param hash - 32-char hex hash of the trajectory file
+ * @param force - Force delete even if referenced (default false)
+ */
+export async function deleteTrajectory(
+  hash: string,
+  force: boolean = false
+): Promise<void> {
+  await http.delete(`/api/admin/trajectories/${encodeURIComponent(hash)}`, {
+    params: force ? { force: true } : undefined
+  })
+}
+
+// ============================================
+// Audit Log
+// ============================================
+
+/**
+ * Get audit log entries, newest first
+ */
+export async function getAuditLogs(params?: {
+  limit?: number
+  username?: string
+  action?: string
+}): Promise<AuditLogResponse> {
+  const response = await http.get<AuditLogResponse>('/api/admin/audit-logs', {
+    params
+  })
+  return response.data
+}
+
+// ============================================
+// Log Viewer
+// ============================================
+
+/**
+ * Get the last N lines of a log file
+ */
+export async function getAdminLogs(params?: {
+  lines?: number
+  log?: string
+}): Promise<LogViewResponse> {
+  const response = await http.get<LogViewResponse>('/api/admin/logs', {
+    params
+  })
   return response.data
 }

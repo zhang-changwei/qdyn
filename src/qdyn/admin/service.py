@@ -7,8 +7,10 @@ All functions that need MainWorkflow access receive it via a
 import json
 import logging
 import os
+import re
 import shutil
 import time as _time
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -215,7 +217,9 @@ def get_all_users() -> list[dict]:
     return result
 
 
-def reset_user_password(username: str, new_password: str) -> None:
+def reset_user_password(
+    username: str, new_password: str, admin_username: str = "system"
+) -> None:
     """Reset a user's password (admin action)."""
     from ..auth.security import hash_password
 
@@ -224,6 +228,7 @@ def reset_user_password(username: str, new_password: str) -> None:
         raise HTTPException(status_code=404, detail="User not found")
     hashed = hash_password(new_password)
     qdyndb.update_password(username, hashed)
+    qdyndb.log_audit(admin_username, "admin_reset_password", target=username)
 
 
 def set_user_role(
@@ -255,6 +260,12 @@ def set_user_role(
             )
 
     qdyndb.set_admin(username, is_admin)
+    qdyndb.log_audit(
+        admin_username,
+        "admin_set_role",
+        target=username,
+        detail=f"is_admin={is_admin}",
+    )
 
 
 def delete_user(
@@ -370,6 +381,7 @@ def delete_user(
     # 10. Delete user record
     qdyndb.delete_user_record(username)
 
+    qdyndb.log_audit(admin_username, "admin_delete_user", target=username)
     logger.info("User '%s' deleted by admin '%s'.", username, admin_username)
 
 
@@ -779,6 +791,12 @@ def admin_stop_task(
         )
 
     result = manager.stop_task_jobs(task_id)
+    qdyndb.log_audit(
+        admin_username,
+        "admin_stop_task",
+        target=task_id,
+        detail=f"owner={owner}",
+    )
     logger.info(
         "Admin '%s' stopped task '%s' (owner: '%s'): "
         "%d stopped, %d skipped, %d failed",
@@ -831,6 +849,12 @@ def admin_continue_task(
         )
 
     result = manager.continue_task_jobs(task_id)
+    qdyndb.log_audit(
+        admin_username,
+        "admin_continue_task",
+        target=task_id,
+        detail=f"owner={owner}",
+    )
     logger.info(
         "Admin '%s' continued task '%s' (owner: '%s'): "
         "%d continued, %d skipped, %d failed",
@@ -968,6 +992,12 @@ def admin_delete_task(
                     "Failed to delete run_dir '%s': %s", rd, exc
                 )
 
+    qdyndb.log_audit(
+        admin_username,
+        "admin_delete_task",
+        target=task_id,
+        detail=f"owner={owner}, dirs_deleted={deleted_dirs}",
+    )
     logger.info(
         "Admin '%s' deleted task '%s' (owner: '%s'): "
         "%d dirs deleted, %d dirs failed",
@@ -1302,6 +1332,11 @@ def delete_files(
 
     if deleted > 0:
         invalidate_files_cache()
+        qdyndb.log_audit(
+            "system",
+            "admin_delete_files",
+            detail=f"deleted={deleted}",
+        )
     return {"deleted": deleted, "failed": failed}
 
 
@@ -1358,5 +1393,286 @@ def delete_files_by_name(
 
     if deleted > 0:
         invalidate_files_cache()
+        qdyndb.log_audit(
+            "system",
+            "admin_delete_files_by_name",
+            detail=f"filename={filename}, deleted={deleted}",
+        )
 
     return {"deleted": deleted, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# Trajectory management
+# ---------------------------------------------------------------------------
+
+_HASH_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _get_traj_dir(
+    manager_getter: Callable[[], MainWorkflow],
+) -> Path:
+    """Resolve the trajectory storage directory from config."""
+    manager = manager_getter()
+    user_data_dir = str(
+        Path(
+            manager.config["basic"].get("user_data", "data/user_data")
+        ).resolve()
+    )
+    return Path(user_data_dir) / "trajs"
+
+
+def _count_traj_refs(file_hash: str) -> int:
+    """Count how many distinct tasks reference a trajectory hash.
+
+    Uses UNION to deduplicate across queued_submissions (queued tasks)
+    and task_owners (directly submitted tasks).
+    """
+    conn = qdyndb.get_db()
+    with qdyndb._lock:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM ("
+            "  SELECT task_id FROM queued_submissions "
+            "    WHERE payload_json LIKE ? "
+            "  UNION "
+            "  SELECT task_id FROM task_owners "
+            "    WHERE stru_hash = ?"
+            ")",
+            (f"%{file_hash}%", file_hash),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def list_trajectories(
+    manager_getter: Callable[[], MainWorkflow],
+) -> dict:
+    """List all trajectory files with metadata and reference counts.
+
+    Returns a dict matching TrajListResponse fields.
+    """
+    traj_dir = _get_traj_dir(manager_getter)
+    if not traj_dir.is_dir():
+        return {"total": 0, "total_bytes": 0, "items": []}
+
+    from ..params import md_ase_formats
+
+    items: list[dict] = []
+    total_bytes = 0
+
+    try:
+        for entry in os.scandir(str(traj_dir)):
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            if not _HASH_RE.match(entry.name):
+                continue
+
+            stat = entry.stat(follow_symlinks=False)
+            size = stat.st_size
+            total_bytes += size
+
+            # Format creation time from mtime
+            mtime = datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            )
+            created_at = mtime.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Parse structure metadata with ASE
+            fmt_name: str | None = None
+            formula: str | None = None
+            num_atoms: int | None = None
+            num_frames: int | None = None
+
+            for sw_fmt, ase_fmt in md_ase_formats.items():
+                try:
+                    import ase.io
+
+                    atoms = ase.io.read(
+                        entry.path, format=ase_fmt, index=0
+                    )
+                    formula = atoms.get_chemical_formula()
+                    num_atoms = len(atoms)
+                    fmt_name = ase_fmt
+                    # Count frames using lightweight method
+                    try:
+                        from ..app import _count_trajectory_frames
+
+                        num_frames = _count_trajectory_frames(
+                            entry.path, ase_fmt
+                        )
+                    except Exception:
+                        num_frames = None
+                    break
+                except Exception:
+                    continue
+
+            # Reference count
+            ref_count = _count_traj_refs(entry.name)
+
+            items.append(
+                {
+                    "hash": entry.name,
+                    "size_bytes": size,
+                    "created_at": created_at,
+                    "format": fmt_name,
+                    "formula": formula,
+                    "num_atoms": num_atoms,
+                    "num_frames": num_frames,
+                    "ref_count": ref_count,
+                }
+            )
+    except OSError as exc:
+        logger.warning("Failed to scan trajectory directory: %s", exc)
+
+    # Sort by creation time descending
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return {
+        "total": len(items),
+        "total_bytes": total_bytes,
+        "items": items,
+    }
+
+
+def delete_trajectory(
+    file_hash: str,
+    manager_getter: Callable[[], MainWorkflow],
+    admin_username: str,
+    force: bool = False,
+) -> None:
+    """Delete a trajectory file by its hash.
+
+    Parameters
+    ----------
+    file_hash : str
+        The 32-character hex hash of the trajectory file.
+    manager_getter : callable
+        Returns the MainWorkflow instance.
+    admin_username : str
+        The admin performing the deletion (for audit).
+    force : bool
+        If True, delete even if references exist.
+
+    Raises
+    ------
+    HTTPException
+        400 if hash format is invalid.
+        404 if file not found.
+        409 if file is referenced and force is False.
+    """
+    if not _HASH_RE.match(file_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid hash format: expected 32-char hex string",
+        )
+
+    traj_dir = _get_traj_dir(manager_getter)
+    file_path = traj_dir / file_hash
+
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=404, detail="Trajectory file not found"
+        )
+
+    if not force:
+        ref_count = _count_traj_refs(file_hash)
+        if ref_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Trajectory '{file_hash}' is referenced by "
+                    f"{ref_count} submission(s). Use force=true to "
+                    f"delete anyway."
+                ),
+            )
+
+    file_path.unlink()
+    qdyndb.log_audit(
+        admin_username,
+        "admin_delete_trajectory",
+        target=file_hash,
+    )
+    logger.info(
+        "Admin '%s' deleted trajectory '%s'.",
+        admin_username,
+        file_hash,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Log viewer
+# ---------------------------------------------------------------------------
+
+# Base directory for log files, resolved relative to the package root.
+# Layout: <project>/logs/backend.log, <project>/logs/frontend.log
+_LOGS_BASE: Path | None = None
+
+
+def _get_logs_base() -> Path:
+    """Return the logs directory path, caching for performance."""
+    global _LOGS_BASE
+    if _LOGS_BASE is None:
+        # src/qdyn/admin/service.py -> src/qdyn/admin -> src/qdyn -> src -> project root
+        _LOGS_BASE = Path(__file__).resolve().parent.parent.parent.parent / "logs"
+    return _LOGS_BASE
+
+
+def read_log_tail(
+    log_name: str = "backend",
+    num_lines: int = 200,
+) -> dict:
+    """Read the last N lines of a log file.
+
+    Parameters
+    ----------
+    log_name : str
+        Log file to read: "backend" or "frontend".
+    num_lines : int
+        Number of lines to read from the end (default 200).
+
+    Returns
+    -------
+    dict matching LogViewResponse fields.
+
+    Raises
+    ------
+    HTTPException
+        400 if log_name is invalid.
+        404 if log file does not exist.
+    """
+    if log_name not in ("backend", "frontend"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid log name '{log_name}'. Must be 'backend' or 'frontend'.",
+        )
+
+    logs_dir = _get_logs_base()
+    log_path = logs_dir / f"{log_name}.log"
+
+    if not log_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Log file '{log_name}.log' not found",
+        )
+
+    file_size = log_path.stat().st_size
+
+    # Use deque for efficient tail reading
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            tail = deque(f, maxlen=num_lines)
+        lines = [line.rstrip("\n") for line in tail]
+    except Exception as exc:
+        logger.warning("Failed to read log file '%s': %s", log_path, exc)
+        lines = []
+
+    # Approximate total line count from file size
+    # (more efficient than reading the entire file for large logs)
+    avg_line_len = max(1, file_size // max(1, len(lines))) if lines else 80
+    total_lines = file_size // avg_line_len if file_size > 0 else 0
+
+    return {
+        "log_name": log_name,
+        "lines": lines,
+        "total_lines": total_lines,
+        "file_size": file_size,
+    }

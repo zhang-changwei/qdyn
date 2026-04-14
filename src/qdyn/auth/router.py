@@ -19,6 +19,7 @@ def register(body: UserCreate):
         )
     hashed = hash_password(body.password)
     qdyndb.create_user(body.username, hashed)
+    qdyndb.log_audit(body.username, "register", target=body.username)
     token = create_access_token(body.username)
     return Token(access_token=token)
 
@@ -27,10 +28,12 @@ def register(body: UserCreate):
 def login(body: UserCreate):
     user = qdyndb.get_user(body.username)
     if not user or not verify_password(body.password, user["hashed_pw"]):
+        qdyndb.log_audit(body.username, "login_failed", target=body.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+    qdyndb.log_audit(body.username, "login", target=body.username)
     token = create_access_token(body.username)
     return Token(access_token=token)
 

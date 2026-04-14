@@ -26,6 +26,18 @@
           <el-icon><FolderOpened /></el-icon>
           <span>Files</span>
         </el-menu-item>
+        <el-menu-item index="/admin/trajectories">
+          <el-icon><Document /></el-icon>
+          <span>Trajectories</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/audit-log">
+          <el-icon><Memo /></el-icon>
+          <span>Audit Log</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/logs">
+          <el-icon><Monitor /></el-icon>
+          <span>Logs</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -58,7 +70,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { DataAnalysis, User, List, Back, FolderOpened } from '@element-plus/icons-vue'
+import { DataAnalysis, User, List, Back, FolderOpened, Document, Memo, Monitor } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -74,6 +86,9 @@ const activeMenu = computed((): string => {
   if (path.startsWith('/admin/users')) return '/admin/users'
   if (path.startsWith('/admin/tasks')) return '/admin/tasks'
   if (path.startsWith('/admin/files')) return '/admin/files'
+  if (path.startsWith('/admin/trajectories')) return '/admin/trajectories'
+  if (path.startsWith('/admin/audit-log')) return '/admin/audit-log'
+  if (path.startsWith('/admin/logs')) return '/admin/logs'
   return '/admin'
 })
 

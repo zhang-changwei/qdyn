@@ -53,6 +53,25 @@ class QdynDB:
             """)
             self._conn.commit()
 
+            # Audit log table
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
+                    username   TEXT NOT NULL,
+                    action     TEXT NOT NULL,
+                    target     TEXT DEFAULT NULL,
+                    detail     TEXT DEFAULT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+                    ON audit_log(timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_username
+                    ON audit_log(username);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_action
+                    ON audit_log(action, timestamp DESC);
+            """)
+            self._conn.commit()
+
             # Migrate: add optional metadata columns if they don't exist yet
             self._migrate_task_metadata()
 
@@ -598,6 +617,86 @@ class QdynDB:
                 (json.dumps(job_ids), worker, task_id),
             )
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Audit log
+    # ------------------------------------------------------------------
+
+    def log_audit(
+        self,
+        username: str,
+        action: str,
+        target: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Record an audit log entry.
+
+        Parameters
+        ----------
+        username : str
+            The user performing the action.
+        action : str
+            Action identifier (e.g. "admin_delete_user", "login").
+        target : str, optional
+            The target of the action (e.g. username, task_id, hash).
+        detail : str, optional
+            Additional detail about the action.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO audit_log (username, action, target, detail) "
+                "VALUES (?, ?, ?, ?)",
+                (username, action, target, detail),
+            )
+            conn.commit()
+
+    def get_audit_logs(
+        self,
+        limit: int = 200,
+        username: str | None = None,
+        action: str | None = None,
+    ) -> list[dict]:
+        """Retrieve audit log entries, newest first.
+
+        Parameters
+        ----------
+        limit : int
+            Maximum number of entries to return (default 200).
+        username : str, optional
+            Filter by username.
+        action : str, optional
+            Filter by action type.
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: id, timestamp, username, action, target, detail.
+        """
+        conn = self.get_db()
+        conditions: list[str] = []
+        params: list[str] = []
+        if username:
+            conditions.append("username = ?")
+            params.append(username)
+        if action:
+            conditions.append("action = ?")
+            params.append(action)
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        query = (
+            f"SELECT id, timestamp, username, action, target, detail "
+            f"FROM audit_log {where_clause} "
+            f"ORDER BY timestamp DESC, id DESC LIMIT ?"
+        )
+        params.append(str(limit))
+
+        with self._lock:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
 
 qdyndb = QdynDB()
