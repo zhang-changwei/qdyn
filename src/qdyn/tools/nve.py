@@ -8,7 +8,6 @@ from ase import Atoms
 from jobflow import job
 import numpy as np
 
-from qdyn.tools.nvt import add_constraints
 
 from ..input import NVEInputT
 from ..params import params_default, md_tracks, md_ase_formats
@@ -20,6 +19,7 @@ from ..output_postprocess import (
     plot_md_results,
 )
 from .run_software import run_software
+from .seldyn import add_constraints
 
 
 @job
@@ -70,13 +70,8 @@ def qdyn_nve(
 
     structure['momenta'] = np.array(structure['momenta'])
     cstru = Atoms.fromdict(structure)
-    if parameters.constraint_layers is not None and not cstru.constraints:
-        cstru = add_constraints(
-            cstru,
-            parameters.constraint_layers,
-            parameters.layer_direction,  # type: ignore
-            parameters.total_layers,  # type: ignore
-        )
+    if parameters.sel.constraint_layers is not None and not cstru.constraints:
+        cstru = add_constraints(cstru, parameters.sel)
 
     # Prepare input files
     _prepare_nve_input(
