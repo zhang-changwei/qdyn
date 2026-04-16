@@ -13,6 +13,7 @@ from functools import wraps
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError as PydanticValidationError
 from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
@@ -204,8 +205,13 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     )
     def get_task_structure_preview(
         task_id: str,
+        raw: bool = Query(
+            False,
+            description="If true, return raw preview without enriching "
+            "with layer-based constraints from task parameters.",
+        ),
         username: str = Depends(get_current_user),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compute structure preview on-demand for a task.
 
         Resolution order:
@@ -218,7 +224,9 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_task_ownership_local(task_id, username)
 
         manager = manager_getter()
-        preview = service.compute_structure_preview(task_id, manager)
+        preview = service.compute_structure_preview(
+            task_id, manager, enrich_constraints=not raw
+        )
         if preview is None:
             logger.info("structure-preview for %s: no preview found", task_id)
         else:
@@ -618,8 +626,8 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         import ase.io
 
-        from .structure_preview import _extract_constraint_mask
-        from ..tools.nvt import compute_layer_constraint_mask
+        from ..input import SelDynInputT
+        from ..tools.seldyn import add_constraints, extract_constraint_mask
 
         atoms = None
 
@@ -684,7 +692,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             )
 
         # Check file-level constraints (same priority as runtime)
-        file_mask = _extract_constraint_mask(atoms)
+        file_mask = extract_constraint_mask(atoms)
         if file_mask is not None:
             return ComputeConstraintMaskResponse(
                 constraint_mask=file_mask,
@@ -696,22 +704,26 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 ),
             )
 
-        # Compute layer-based constraint mask
+        # Compute layer-based constraint mask via add_constraints + readback
         try:
-            mask = compute_layer_constraint_mask(
-                atoms,
-                req.constraint_layers,
-                req.layer_direction,
-                req.total_layers,
+            from copy import deepcopy
+
+            sel = SelDynInputT(
+                constraint_layers=req.constraint_layers,
+                layer_direction=req.layer_direction,
+                total_layers=req.total_layers,
             )
-        except ValueError as exc:
+            atoms_copy = deepcopy(atoms)
+            add_constraints(atoms_copy, sel)
+            mask = extract_constraint_mask(atoms_copy)
+        except (ValueError, PydanticValidationError) as exc:
             raise HTTPException(
                 status_code=422,
                 detail=str(exc),
             )
 
         return ComputeConstraintMaskResponse(
-            constraint_mask=mask,
+            constraint_mask=mask or [False] * len(atoms),
             source="layers",
         )
 

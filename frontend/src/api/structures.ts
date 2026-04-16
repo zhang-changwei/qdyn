@@ -59,10 +59,12 @@ export async function validatePoscarFile(file: File): Promise<ValidatePoscarResp
  * @returns StructurePreviewPayload or null if unavailable
  */
 export async function getTaskStructurePreview(
-  taskId: string
+  taskId: string,
+  { raw = false }: { raw?: boolean } = {}
 ): Promise<StructurePreviewPayload | null> {
   const response = await http.get<ApiResponse<StructurePreviewPayload | null>>(
-    `/frontend/tasks/${taskId}/structure-preview`
+    `/frontend/tasks/${taskId}/structure-preview`,
+    { params: raw ? { raw: true } : undefined }
   )
   return unwrapResponse(response.data)
 }

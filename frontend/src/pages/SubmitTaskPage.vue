@@ -108,6 +108,15 @@
           @task-selected="handleResumeTaskSelected"
         />
         <StructureViewer v-if="structurePreview" :preview="structurePreview" class="structure-preview" />
+        <el-alert
+          v-if="fileHasConstraints"
+          type="info"
+          :closable="false"
+          show-icon
+          class="constraint-file-hint"
+        >
+          Structure file already contains fixed atoms (selective dynamics). Constraint Layers will be ignored.
+        </el-alert>
       </el-card>
 
       <!-- Step selection section — shown first so user picks steps before uploading -->
@@ -145,6 +154,15 @@
           class="validation-alert"
         />
         <StructureViewer v-if="structurePreview" :preview="structurePreview" class="structure-preview" />
+        <el-alert
+          v-if="fileHasConstraints"
+          type="info"
+          :closable="false"
+          show-icon
+          class="constraint-file-hint"
+        >
+          Structure file already contains fixed atoms (selective dynamics). Constraint Layers will be ignored.
+        </el-alert>
       </el-card>
 
       <!-- Trajectory upload (SCF first step) -->
@@ -394,6 +412,11 @@ const schemas = ref<StepInputSchemas | null>(null)
 // Constraint mask debounce state
 let constraintDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let constraintRequestId = 0 // monotonic counter to discard stale responses
+/** Whether the uploaded structure file has built-in constraints (selective dynamics). */
+const fileHasConstraints = computed(() => {
+  const mask = basePreview.value?.constraint_mask
+  return Array.isArray(mask) && mask.some(Boolean)
+})
 const CONSTRAINT_DEBOUNCE_MS = 400
 
 // Pool status
@@ -449,22 +472,24 @@ const isSubmitDisabled = computed(() => {
  */
 const activeConstraintParams = computed(() => {
   const steps = formData.steps
-  // Only NVT and NVE have constraint parameters
+  // Only NVT and NVE have constraint parameters (nested under sel)
   for (const step of steps) {
     if (step === 'nvt') {
       const input = formData.nvt_input as Record<string, unknown>
+      const sel = (input?.sel as Record<string, unknown>) ?? {}
       return {
-        constraint_layers: (input?.constraint_layers as string) ?? '',
-        layer_direction: (input?.layer_direction as string) ?? '',
-        total_layers: input?.total_layers as number | null | undefined,
+        constraint_layers: (sel?.constraint_layers as string) ?? '',
+        layer_direction: (sel?.layer_direction as string) ?? '',
+        total_layers: sel?.total_layers as number | null | undefined,
       }
     }
     if (step === 'nve') {
       const input = formData.nve_input as Record<string, unknown>
+      const sel = (input?.sel as Record<string, unknown>) ?? {}
       return {
-        constraint_layers: (input?.constraint_layers as string) ?? '',
-        layer_direction: (input?.layer_direction as string) ?? '',
-        total_layers: input?.total_layers as number | null | undefined,
+        constraint_layers: (sel?.constraint_layers as string) ?? '',
+        layer_direction: (sel?.layer_direction as string) ?? '',
+        total_layers: sel?.total_layers as number | null | undefined,
       }
     }
   }
@@ -934,7 +959,7 @@ async function handleResumeTaskSelected(task: TaskSummary | null): Promise<void>
   // Fetch structure preview from the parent task
   if (task) {
     try {
-      const preview = await getTaskStructurePreview(task.task_id)
+      const preview = await getTaskStructurePreview(task.task_id, { raw: true })
       if (poscarVersion.value !== currentVersion) return // stale
       basePreview.value = preview
       structurePreview.value = preview
@@ -1291,5 +1316,9 @@ async function handleSubmit(): Promise<void> {
 
 .structure-preview {
   margin-top: 16px;
+}
+
+.constraint-file-hint {
+  margin-top: 8px;
 }
 </style>

@@ -161,11 +161,11 @@ class StructurePreviewPayload(BaseModel):
     - pbc: [a, b, c] axis order
     """
 
-    species: List[str]
-    cart_coords: List[List[float]]
-    lattice: List[List[float]]
-    pbc: List[bool] = Field(default=[True, True, True])
-    constraint_mask: List[bool] | None = None  # true = constrained (source-agnostic)
+    species: list[str]
+    cart_coords: list[list[float]]
+    lattice: list[list[float]]
+    pbc: list[bool] = Field(default=[True, True, True])
+    constraint_mask: list[bool] | None = None  # true = constrained (source-agnostic)
 
 
 class StructureValidationResponse(BaseModel):
@@ -203,7 +203,7 @@ class ComputeConstraintMaskResponse(BaseModel):
     - "layers": mask was computed from the layer parameters
     """
 
-    constraint_mask: List[bool]
+    constraint_mask: list[bool]
     source: Literal["file", "layers"]
     warning: str | None = None
 

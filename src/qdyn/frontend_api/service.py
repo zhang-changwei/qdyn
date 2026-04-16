@@ -2338,9 +2338,10 @@ def _enrich_with_layer_constraints(preview, task_id: str):
         return preview
 
     try:
-        import io
-        import ase.io
-        from ..tools.nvt import compute_layer_constraint_mask
+        from copy import deepcopy
+
+        from ..input import SelDynInputT
+        from ..tools.seldyn import add_constraints, extract_constraint_mask
 
         # Reconstruct Atoms from preview data
         from ase import Atoms
@@ -2351,13 +2352,14 @@ def _enrich_with_layer_constraints(preview, task_id: str):
             pbc=preview.pbc,
         )
 
-        mask = compute_layer_constraint_mask(
-            atoms,
-            constraint_params["constraint_layers"],
-            constraint_params["layer_direction"],
-            constraint_params["total_layers"],
+        sel = SelDynInputT(
+            constraint_layers=constraint_params["constraint_layers"],
+            layer_direction=constraint_params["layer_direction"],
+            total_layers=constraint_params["total_layers"],
         )
-        preview.constraint_mask = mask
+        atoms_copy = deepcopy(atoms)
+        add_constraints(atoms_copy, sel)
+        preview.constraint_mask = extract_constraint_mask(atoms_copy)
     except Exception:
         logger.debug(
             "Failed to compute layer constraints for task %s", task_id,
@@ -2418,38 +2420,45 @@ def _get_constraint_params_for_task(task_id: str) -> dict | None:
 
 
 def _extract_constraint_params_from_input(input_data: dict) -> dict | None:
-    """Extract constraint params from an input dict (InputT or NVT/NVE sub-dict)."""
-    # Try direct keys (flat InputT)
-    for key_prefix in ("", "nvt_input.", "nve_input."):
-        cl = input_data.get(f"{key_prefix}constraint_layers") if key_prefix else input_data.get("constraint_layers")
-        ld = input_data.get(f"{key_prefix}layer_direction") if key_prefix else input_data.get("layer_direction")
-        tl = input_data.get(f"{key_prefix}total_layers") if key_prefix else input_data.get("total_layers")
-        if cl and ld and tl:
-            try:
-                return {
-                    "constraint_layers": str(cl),
-                    "layer_direction": str(ld),
-                    "total_layers": int(tl),
-                }
-            except (ValueError, TypeError):
-                continue
+    """Extract constraint params from an input dict (InputT or NVT/NVE sub-dict).
 
-    # Try nested dicts (nvt_input / nve_input as sub-dicts)
+    Looks for the nested sel layout (sel.constraint_layers) at the top level
+    or inside nvt_input / nve_input sub-dicts.
+
+    constraint_layers may be list[int] (post-validator) or str (raw).
+    Both are accepted and converted to str for downstream SelDynInputT construction.
+    """
+    def _try_extract(data: dict) -> dict | None:
+        sel = data.get("sel")
+        if not isinstance(sel, dict):
+            return None
+        cl = sel.get("constraint_layers")
+        ld = sel.get("layer_direction")
+        tl = sel.get("total_layers")
+        if not cl or not ld or not tl:
+            return None
+        try:
+            cl_str = " ".join(str(x) for x in cl) if isinstance(cl, list) else str(cl)
+            return {
+                "constraint_layers": cl_str,
+                "layer_direction": str(ld),
+                "total_layers": int(tl),
+            }
+        except (ValueError, TypeError):
+            return None
+
+    # Try nested sel at top level (direct NVT/NVE input dict)
+    result = _try_extract(input_data)
+    if result:
+        return result
+
+    # Try nested dicts (nvt_input / nve_input as sub-dicts of InputT)
     for step_key in ("nvt_input", "nve_input"):
         step_data = input_data.get(step_key)
         if isinstance(step_data, dict):
-            cl = step_data.get("constraint_layers")
-            ld = step_data.get("layer_direction")
-            tl = step_data.get("total_layers")
-            if cl and ld and tl:
-                try:
-                    return {
-                        "constraint_layers": str(cl),
-                        "layer_direction": str(ld),
-                        "total_layers": int(tl),
-                    }
-                except (ValueError, TypeError):
-                    continue
+            result = _try_extract(step_data)
+            if result:
+                return result
 
     return None
 
@@ -2464,7 +2473,7 @@ def _try_preview_for_task(
     Returns None if neither source is available or parsing fails.
     """
     from .structure_preview import build_preview
-    from ..params import stru_files, md_ase_formats
+    from ..params import stru_files, TRAJ_FORMAT_MAPPING
 
     # --- Strategy 1: Queued task payload ---
     payload_json = qdyndb.get_queued_payload(task_id)
@@ -2541,13 +2550,13 @@ def _try_preview_for_task(
     # For SCF first step: try trajectory file or structure file
     if access_ok and first_step == "scf":
         # Try reading trajectory first frame from run dir
-        from ..params import md_tracks
+        from ..params import TRAJ_FNAME_MAPPING
 
-        traj_filename = md_tracks.get(software)
+        traj_filename = TRAJ_FNAME_MAPPING.get(software)
         if traj_filename and access.root_file_exists(traj_filename):
             try:
                 content = access.read_root_text(traj_filename)
-                ase_fmt = md_ase_formats.get(software, software)
+                ase_fmt = TRAJ_FORMAT_MAPPING.get(software, software)
                 # build_preview reads first frame by default
                 return build_preview(content, fmt=ase_fmt)
             except Exception:
@@ -2578,7 +2587,7 @@ def _try_preview_for_task(
             except Exception:
                 pass
 
-    # --- Strategy 3: Read traj_file_path from MongoDB job document ---
+    # --- Strategy 3: Read traj_path from MongoDB job document ---
     # SCF jobs store their trajectory source path in function_kwargs.
     # This handles cases where the trajectory isn't in the run dir but
     # in a separate data directory (e.g. data/trajs/{hash}).
@@ -2596,7 +2605,7 @@ def _preview_from_job_kwargs(
     """Extract structure data from MongoDB job document and build preview.
 
     Handles two cases:
-    1. SCF jobs: function_kwargs contains traj_file_path → read trajectory first frame
+    1. SCF jobs: function_kwargs contains traj_path → read trajectory first frame
     2. NVT/NVE jobs: function_kwargs contains structure (serialized ASE Atoms dict)
 
     This is the fallback when run directory is unavailable (e.g. remote worker,
@@ -2609,7 +2618,7 @@ def _preview_from_job_kwargs(
     import ase.io
     from ase import Atoms
 
-    from ..params import md_ase_formats
+    from ..params import TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
     try:
@@ -2635,13 +2644,13 @@ def _preview_from_job_kwargs(
             return build_preview(buf.getvalue(), fmt=software)
 
         # --- Case 2: Trajectory file path (SCF jobs) ---
-        traj_path = kwargs.get("traj_file_path")
+        traj_path = kwargs.get("traj_path")
         traj_format = kwargs.get("traj_format", software)
 
         if traj_path:
             traj_path = Path(traj_path)
             if traj_path.is_file():
-                ase_fmt = md_ase_formats.get(traj_format, traj_format)
+                ase_fmt = TRAJ_FORMAT_MAPPING.get(traj_format, traj_format)
                 atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
                 buf = io.StringIO()
                 stru_fmt = software
@@ -2667,7 +2676,7 @@ def _preview_from_traj_hash(
 
     import ase.io
 
-    from ..params import md_ase_formats
+    from ..params import TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
     data_dir = str(
@@ -2678,7 +2687,7 @@ def _preview_from_traj_hash(
         return None
 
     try:
-        ase_fmt = md_ase_formats.get(stru_format, stru_format)
+        ase_fmt = TRAJ_FORMAT_MAPPING.get(stru_format, stru_format)
         atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
         # Convert back to text for build_preview (to get constraint handling)
         buf = io.StringIO()
@@ -2709,5 +2718,3 @@ def _resolve_software_for_task(task_id: str, manager: MainWorkflow) -> str:
         except Exception:
             pass
     return "vasp"
-
-

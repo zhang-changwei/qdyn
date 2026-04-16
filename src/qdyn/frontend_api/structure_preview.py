@@ -7,11 +7,10 @@ StructurePreviewPayload suitable for frontend 3D visualization.
 
 import io
 import logging
-from typing import List
 
 import ase.io
-from ase.constraints import FixAtoms
 
+from ..tools.seldyn import extract_constraint_mask
 from .models import StructurePreviewPayload
 
 logger = logging.getLogger(__name__)
@@ -47,13 +46,13 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
     if atoms is None:
         raise ValueError("Failed to parse structure: ASE returned None")
 
-    species: List[str] = atoms.get_chemical_symbols()
-    cart_coords: List[List[float]] = atoms.get_positions().tolist()
-    lattice: List[List[float]] = atoms.cell.tolist()
-    pbc: List[bool] = atoms.pbc.tolist()
+    species: list[str] = atoms.get_chemical_symbols()
+    cart_coords: list[list[float]] = atoms.get_positions().tolist()
+    lattice: list[list[float]] = atoms.cell.tolist()
+    pbc: list[bool] = atoms.pbc.tolist()
 
     # Extract constraint mask from ASE constraints
-    constraint_mask = _extract_constraint_mask(atoms)
+    constraint_mask = extract_constraint_mask(atoms)
 
     return StructurePreviewPayload(
         species=species,
@@ -62,45 +61,3 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
         pbc=pbc,
         constraint_mask=constraint_mask,
     )
-
-
-def _extract_constraint_mask(atoms) -> List[bool] | None:
-    """Extract a per-atom boolean constraint mask from ASE constraints.
-
-    Handles FixAtoms (fully constrained) and partial constraints
-    (FixCartesian, FixedLine, FixedPlane, etc.) where any axis
-    being constrained marks the atom as True.
-
-    Returns None if there are no constraints at all.
-    """
-    if not atoms.constraints:
-        return None
-
-    n_atoms = len(atoms)
-    mask = [False] * n_atoms
-    has_any = False
-
-    for constraint in atoms.constraints:
-        if isinstance(constraint, FixAtoms):
-            # FixAtoms stores constrained atom indices
-            for idx in constraint.index:
-                if 0 <= idx < n_atoms:
-                    mask[idx] = True
-                    has_any = True
-        elif hasattr(constraint, "index"):
-            # Partial constraints (FixCartesian, FixedLine, FixedPlane, etc.)
-            # have an .index attribute (single int or array).
-            # Any axis constrained -> atom marked True.
-            indices = constraint.index
-            if hasattr(indices, "__iter__"):
-                for idx in indices:
-                    if 0 <= idx < n_atoms:
-                        mask[idx] = True
-                        has_any = True
-            else:
-                idx = int(indices)
-                if 0 <= idx < n_atoms:
-                    mask[idx] = True
-                    has_any = True
-
-    return mask if has_any else None

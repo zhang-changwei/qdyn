@@ -489,6 +489,13 @@ export interface JobMdTimeseriesResponse {
 // Input Types (matching backend Pydantic models)
 // ============================================
 
+/** Selective dynamics input parameters */
+export interface SelDynInput {
+  constraint_layers?: string | null
+  layer_direction?: string | null
+  total_layers?: number | null
+}
+
 /** NVT input parameters */
 export interface NVTInput {
   nodes?: number | null
@@ -499,9 +506,7 @@ export interface NVTInput {
   temp_begin: number
   temp_end: number
   scf_thr: number
-  constraint_layers?: string | null
-  layer_direction?: string | null
-  total_layers?: number | null
+  sel?: SelDynInput
   parameters: string
 }
 
@@ -512,9 +517,7 @@ export interface NVEInput {
   md_dt: number
   md_step: number
   scf_thr: number
-  constraint_layers?: string | null
-  layer_direction?: string | null
-  total_layers?: number | null
+  sel?: SelDynInput
   parameters: string
 }
 
