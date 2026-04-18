@@ -2,10 +2,11 @@ import logging
 import multiprocessing
 from pathlib import Path
 import os
+import re
 import numpy as np
 import numpy.typing as npt
 
-from typing import Literal, List, Dict, Sequence, cast
+from typing import Literal, List, Dict, Any, Sequence, cast
 
 from .libcanac import aeolap
 from .libcanac.utils import (load_wfc, close_wfc, 
@@ -20,12 +21,11 @@ def version():
     logging.info(f"CA-NAC {CA_NAC_VERSION}\n"
                   "Should you have any question, please contact wbchu@fudan.edu.cn")
 
-def extract_eigvals_and_nacs(
+def extract_tdolaps(
     run_dirs: List[str],
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx', 'hamgnn'] = 'vasp',
     sysname: str = 'qdyn',
     is_gamma_ver: bool = False,
-    is_reorder: bool = False,
     is_alle: bool = False,
     bmin: int = 0,
     bmax: int = 0,
@@ -33,16 +33,11 @@ def extract_eigvals_and_nacs(
     ispin: int = 1,
     soc: bool = False,
     nproc: int = 1,
-    bmin_stored: int | None = None,
-    bmax_stored: int | None = None,
     dirs_sorted: bool = False,
+    generator: bool = False,
 ):
     # input validation
-    if not bmin_stored:
-        bmin_stored = bmin
-    if not bmax_stored:
-        bmax_stored = bmax
-    nbasis = bmax_stored - bmin_stored + 1
+    nbasis = bmax - bmin + 1
     
     if not dirs_sorted:
         import natsort
@@ -64,10 +59,10 @@ def extract_eigvals_and_nacs(
     olapT = np.complex128 if software == 'vasp' and not is_gamma_ver else np.float64
 
     # resume
-    store_path = 'canac_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_ae={}.npz'.format(
-        nstep, bmin_stored, bmax_stored, ikpt, ispin, int(is_alle)
+    store_path = 'tdolap_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_gam={}_ae={}.npz'.format(
+        nstep, bmin, bmax, ikpt, ispin, int(is_gamma_ver), int(is_alle)
     )
-    if Path(store_path).exists():
+    if Path(store_path).is_file():
         logging.info(f"Found existing results at {store_path}. Loading...")
         data = np.load(store_path)
         check_list = data['success']
@@ -86,48 +81,120 @@ def extract_eigvals_and_nacs(
         # for alle, do some checkings beforehand
         if is_alle:
             dir_first = check_first_dir_alle(run_dirs)
-            aeolap.test(bmin_stored, bmax_stored, dir_first)
+            aeolap.test(bmin, bmax, dir_first)
             paw_info = aeolap.PawProj_info(dir_first)
 
         # tdolap
-        for idx in indices:
-            # skip if already processed
-            if check_list[idx]:
-                continue
+        if generator:
+            for idx_start in indices[::nproc]:
+                for idx in indices[idx_start : idx_start + nproc]:
+                    # skip if already processed
+                    if check_list[idx]:
+                        continue
 
-            result = pool.apply_async(calc_tdolap_wrapper,
-                kwds = {
-                    'index': idx,
-                    'dirA': run_dirs[idx],
-                    'dirB': run_dirs[idx + 1],
-                    'software': software,
-                    'bmin': bmin_stored,
-                    'bmax': bmax_stored,
-                    'ikpt': ikpt,
-                    'ispin': ispin,
-                    'soc': soc,
-                    'is_alle': is_alle,
-                    'paw_info': paw_info,
-                    'sysname': sysname,
-                }
-            )
-            results.append(result)
+                    result = pool.apply_async(calc_tdolap_wrapper,
+                        kwds = {
+                            'index': idx,
+                            'dirA': run_dirs[idx],
+                            'dirB': run_dirs[idx + 1],
+                            'software': software,
+                            'bmin': bmin,
+                            'bmax': bmax,
+                            'ikpt': ikpt,
+                            'ispin': ispin,
+                            'soc': soc,
+                            'is_alle': is_alle,
+                            'paw_info': paw_info,
+                            'sysname': sysname,
+                        }
+                    )
+                    results.append(result)
 
-        for result in results:
-            success, idx, tdolap, ev = result.get()
-            if success:
-                tdolaps[idx] = tdolap
-                eigenvalues[idx] = ev
-                check_list[idx] = True
-        
+                for result in results:
+                    success, idx, tdolap, ev = result.get()
+                    if success:
+                        tdolaps[idx] = tdolap
+                        eigenvalues[idx] = ev
+                        check_list[idx] = True
+                
+                # reset results
+                results = []
+
+                yield
+        else:
+            for idx in indices:
+                # skip if already processed
+                if check_list[idx]:
+                    continue
+
+                result = pool.apply_async(calc_tdolap_wrapper,
+                    kwds = {
+                        'index': idx,
+                        'dirA': run_dirs[idx],
+                        'dirB': run_dirs[idx + 1],
+                        'software': software,
+                        'bmin': bmin,
+                        'bmax': bmax,
+                        'ikpt': ikpt,
+                        'ispin': ispin,
+                        'soc': soc,
+                        'is_alle': is_alle,
+                        'paw_info': paw_info,
+                        'sysname': sysname,
+                    }
+                )
+                results.append(result)
+
+            for result in results:
+                success, idx, tdolap, ev = result.get()
+                if success:
+                    tdolaps[idx] = tdolap
+                    eigenvalues[idx] = ev
+                    check_list[idx] = True
+    
     # save results
     np.savez(
         store_path,
+        allow_pickle=False,
         success=check_list,
         tdolaps=tdolaps,
-        eigenvalues=eigenvalues
+        eigenvalues=eigenvalues,
     )
 
+    yield {
+        "tdolap_path": str(Path.cwd() / store_path),
+        "tdolaps": tdolaps,
+        "eigenvalues": eigenvalues,
+    }
+
+
+def extract_nacs(
+    data: dict[str, npt.NDArray], 
+    tdolap_path: str | Path,
+    is_reorder: bool = False, 
+    nproc: int = 1,
+) -> dict[str, Any] :
+    pattern = re.compile(r"tdolap_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
+    m = pattern.match(os.path.basename(tdolap_path))
+    assert m is not None
+    nstep = int(m.group(1))
+    bmin = int(m.group(2))
+    bmax = int(m.group(3))
+    is_gamma_ver = bool(int(m.group(6)))
+
+    check_list = data['success']
+    tdolaps = data['tdolaps']
+    eigenvalues = data['eigenvalues']
+
+    nbasis = bmax - bmin + 1
+    indices = np.arange(nstep) # from 0
+    olapT = tdolaps.dtype
+
+    store_path = 'nac_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_gam={}_ae={}.npz'.format(
+        nstep, bmin, bmax, m.group(4), m.group(5), m.group(6), m.group(7)
+    )
+
+    nacs = np.zeros((nstep, nbasis, nbasis), dtype=np.float64)
     if np.all(check_list):
         logging.info("All steps processed successfully.")
         with multiprocessing.Pool(processes=nproc) as pool:
@@ -145,7 +212,6 @@ def extract_eigvals_and_nacs(
 
             cc_left = np.ones(nbasis, dtype=olapT)
             perm_left = np.arange(nbasis, dtype=int)
-            nacs = np.zeros((nstep, nbasis, nbasis), dtype=np.float64)
 
             for idx, result in enumerate(results):
                 tdolap, _, cc2, _, perm2 = result.get()
@@ -168,13 +234,49 @@ def extract_eigvals_and_nacs(
                 cc_left = cc_right
                 if is_reorder:
                     perm_left = perm_right # type: ignore
+    
+        np.savez(
+            store_path,
+            allow_pickle=False,
+            nacs=nacs,
+            eigenvalues=eigenvalues,
+        )
+    
+    return {
+        "nac_path": str(Path.cwd() / store_path),
+        "nacs": nacs,
+        "eigenvalues": eigenvalues,
+    }
 
-        # save in HFNAMD format
-        logging.info("Saving results in HFNAMD format...")
-        bot = bmin - bmin_stored
-        top = bmax - bmin + 1
-        np.savetxt('EIGTXT', eigenvalues[:, bot:top])
-        np.savetxt('NATXT', nacs[:, bot:top, bot:top].reshape(nstep, -1))
+
+def save_hfnamd_inputs(
+    nac_path: str | Path,
+    bmin: int,
+    bmax: int,
+    out_dir: str | Path = '.',
+):
+    pattern = re.compile(r"nac_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
+    m = pattern.match(os.path.basename(nac_path))
+    assert m is not None
+    nstep = int(m.group(1))
+    bmin_stored = int(m.group(2))
+    bmax_stored = int(m.group(3))
+    if bmin < bmin_stored or bmax > bmax_stored or bmax < bmin:
+        raise ValueError("Requested band range exceeds the range stored in nac file.\n"
+                         "Or bmax < bmin.")
+
+    data = np.load(nac_path)
+    nacs = data['nacs']
+    eigenvalues = data['eigenvalues']
+
+    # save in HFNAMD format
+    logging.info("Saving results in HFNAMD format...")
+    bot = bmin - bmin_stored
+    top = bmax - bmin + 1
+    np.savetxt(os.path.join(out_dir, 'EIGTXT'), 
+               eigenvalues[:, bot:top])
+    np.savetxt(os.path.join(out_dir, 'NATXT'), 
+               nacs[:, bot:top, bot:top].reshape(nstep, -1))
 
 
 
@@ -209,13 +311,13 @@ def calc_tdolap_wrapper(
     f_waveA = Path(dirA) / waveA_mapping[software]
     f_waveB = Path(dirB) / waveB_mapping[software]
 
-    if not f_waveA.exists() or not f_waveB.exists():
+    if not f_waveA.is_file() or not f_waveB.is_file():
         success = False
         return success, index, None, None
     if is_alle:
         f_normalcarA = Path(dirA) / 'NormalCAR'
         f_normalcarB = Path(dirB) / 'NormalCAR'
-        if not f_normalcarA.exists() or not f_normalcarB.exists():
+        if not f_normalcarA.is_file() or not f_normalcarB.is_file():
             success = False
             return success, index, None, None
     wfc_A = load_wfc(software, str(f_waveA))
@@ -223,7 +325,7 @@ def calc_tdolap_wrapper(
 
     S = None
     if software in ['hamgnn', 'siesta', 'abacus', 'openmx']:
-        if (Path(dirA) / 'overlap.npz').exists():
+        if (Path(dirA) / 'overlap.npz').is_file():
             from scipy.sparse import csr_array as csr
             f_SA = Path(dirA) / 'overlap.npz'
             S_raw = np.load(f_SA)
@@ -233,7 +335,7 @@ def calc_tdolap_wrapper(
             S_shape = S_raw['shape']
             S = csr((S_data, S_indices, S_indptr), shape=S_shape, dtype=np.float32)
             S = S.toarray()
-        elif (Path(dirA) / 'overlap.npy').exists():
+        elif (Path(dirA) / 'overlap.npy').is_file():
             f_SA = Path(dirA) / 'overlap.npy'
             S = np.load(f_SA)
         else:
@@ -317,7 +419,7 @@ def calc_nac_wrapper(
 
 def check_first_dir_alle(dirs: Sequence[str]):
     for dir in dirs:
-        if (Path(dir) / 'WAVECAR').exists() and (Path(dir) / 'NormalCAR').exists():
+        if (Path(dir) / 'WAVECAR').is_file() and (Path(dir) / 'NormalCAR').is_file():
             return dir
     else:
         raise FileNotFoundError("No directory contains both WAVECAR and NormalCAR for alle checking.")

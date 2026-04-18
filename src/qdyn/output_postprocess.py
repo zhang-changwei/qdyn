@@ -398,7 +398,7 @@ def _validate_spin_kpoint_indices(
 
 def extract_band_edges(
     software: str, dir_path: str, whichK: int = 0, whichS: int = 0
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """Extract VBM and CBM band indices from output files for different software.
 
     This function parses the output files to find the last occupied band (VBM)
@@ -417,12 +417,12 @@ def extract_band_edges(
 
     Returns
     -------
-    Tuple[int, int]
-        (vbm, cbm) - VBM and CBM band indices (0-based).
+    Tuple[int, int, int]
+        (vbm, cbm, nbands) - VBM and CBM band indices (0-based) and number of bands.
     """
     if software == 'vasp':
         return extract_from_vasp_outcar(dir_path, whichK, whichS)
-    raise NotImplementedError
+    raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
 
 # ===========================================================================
@@ -638,7 +638,7 @@ def extract_from_vasp_outcar(
     dir_path: str,
     whichK: int = 1,
     whichS: int = 1,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """Extract VBM and CBM band indices from OUTCAR.
 
     Parses the eigenvalue section after "E-fermi :" to find the last
@@ -655,8 +655,8 @@ def extract_from_vasp_outcar(
 
     Returns
     -------
-    Tuple[int, int]
-        (vbm, cbm) - VBM and CBM band indices (1-based VASP convention).
+    Tuple[int, int, int]
+        (vbm, cbm, nbands) - VBM and CBM band indices (1-based VASP convention) and number of bands.
     """
     outcar_path = os.path.join(dir_path, 'OUTCAR')
     with open(outcar_path, 'r') as f:
@@ -710,4 +710,4 @@ def extract_from_vasp_outcar(
     if cbm == 0:
         cbm = vbm + 1
 
-    return vbm, cbm
+    return vbm, cbm, NBANDS

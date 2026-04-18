@@ -26,10 +26,10 @@ import ase.io
 from ase import Atoms
 from jobflow import job, Job
 
+from ..calc_common import write_stru, read_strus
 from ..input import SCFInputT
 from ..params import params_default, chg_name, ipt_files, stru_files
-from ..input_prepare import prepare_vasp_inputs
-from .nve import read_strus
+from ..input_prepare import DFTInputs
 from .run_software import run_software
 
 # Status file names
@@ -163,13 +163,17 @@ def qdyn_scf_task(
     n_frames = len(batch_structures)
 
     # Prepare common input files once (these will be copied to each subdir)
-    _prepare_scf_input(
+    inputs_dict = _prepare_scf_input(software_lower, parameters)
+    dftinputs = DFTInputs(
         software=software_lower,
-        structure=batch_structures[0],  # Use first structure for KPOINTS generation
-        parameters=parameters,
+        structure=batch_structures[0],
         pp_path=pp_path,
         orb_path=orb_path,
+        kspacing=parameters.kspacing,
+        inputs_dict=inputs_dict,
+        inputs_params=parameters.parameters,
     )
+    dftinputs.write()
 
     if prepare_input_only:
         return {
@@ -193,7 +197,7 @@ def qdyn_scf_task(
 
         # Create subdirectories and write structure
         subdir_path.mkdir(exist_ok=True)
-        _write_stru(software_lower, structure, subdir_path)
+        write_stru(software_lower, structure, subdir_path)
 
         subdirs.append(str(subdir_path))
 
@@ -285,10 +289,7 @@ def qdyn_scf_task(
 
 def _prepare_scf_input(
     software: str,
-    structure: Atoms,
     parameters: SCFInputT,
-    pp_path: str,
-    orb_path: str,
 ):
     """Prepare common input files (INCAR, KPOINTS, POTCAR) in current directory.
 
@@ -306,35 +307,11 @@ def _prepare_scf_input(
     input = deepcopy(params_default['scf'][software])
     if software == 'vasp':
         input['EDIFF'] = parameters.scf_thr
-
-        # Use unified prepare_vasp_inputs function
-        prepare_vasp_inputs(
-            structure=structure,
-            pp_path=pp_path,
-            kspacing=parameters.kspacing,
-            incar_dict=input,
-            incar_params=parameters.parameters,
-        )
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for SCF input preparation yet."
         )
-
-
-def _write_stru(software: str, structure: Atoms, output_path: Path):
-    """Write ASE Atoms object to a structure file.
-
-    Args:
-        software: Software name ('vasp', 'cp2k', etc.).
-        structure: ASE Atoms object to write.
-        output_path: Path to output structure file.
-    """
-    if software == 'vasp':
-        ase.io.write(
-            str(output_path / "POSCAR"), structure, vasp5=True, direct=True
-        )
-    else:
-        raise ValueError(f"Unsupported software: {software}")
+    return input
 
 
 def _get_status(subdir: str) -> str | None:

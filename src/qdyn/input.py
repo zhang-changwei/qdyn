@@ -60,6 +60,22 @@ class NAMDInputT(BaseModel):
         'DISH',
         description="Surface hopping method",
     )
+    bmin: str = Field(
+        'VBM',
+        description="Lower band index, accepts integer or expressions like VBM-2",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. VBM, VBM-2, 10",
+        },
+    )
+    bmax: str = Field(
+        'CBM',
+        description="Upper band index, accepts integer or expressions like CBM+4",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. CBM, CBM+4, 20",
+        },
+    )
     nsample: int = Field(
         200, ge=1, le=10000, description="Number of sampled initial conditions"
     )
@@ -138,16 +154,16 @@ class _PreNAMDInputAdvT(BaseModel):
 
 
 class PreNAMDInputT(BaseModel):
-    bmin: int | str = Field(
-        'VBM',
+    bmin: str = Field(
+        'VBM-31',
         description="Lower band index, accepts integer or expressions like VBM-2",
         json_schema_extra={
             "widget": "band-input",
             "placeholder": "e.g. VBM, VBM-2, 10",
         },
     )
-    bmax: int | str = Field(
-        'CBM',
+    bmax: str = Field(
+        'CBM+31',
         description="Upper band index, accepts integer or expressions like CBM+4",
         json_schema_extra={
             "widget": "band-input",
@@ -403,7 +419,8 @@ class InputT(BaseModel):
     prenamd_input: PreNAMDInputT | None = None
     namd_input: NAMDInputT | None = None
 
-    steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd']] = ['nvt']
+    steps: List[Literal['nvt', 'nve', 'scf', 'pre_namd', 'namd', 
+                        'fused_scf_prenamd']] = ['nvt']
     stru: str = ''
     stru_format: str = 'vasp'
     stru_hash: str = ''

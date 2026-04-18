@@ -211,4 +211,7 @@ potcar_default = {
     'Am': 'Am',
     'Cm': 'Cm',
 }
+
+valence_electrons = {}
+
 __all__ = ['params_default']

@@ -343,14 +343,6 @@ class MainWorkflow:
         pool_def = self.config['worker_pools']["resources"]
         return pool_def["worker"]["resources"]
 
-    def _get_machine_config(self, worker_name: str, worker_cfg: Dict[str, Any]) -> dict:
-        """Get machine config (partition, cpus_per_node, etc.) for the active worker/pool.
-
-        In pool-based format, worker_cfg is pool_worker_cfg which
-        contains partition, cpus_per_node, etc. directly.
-        """
-        return worker_cfg
-
     def _get_exec_config(
         self, worker_name: str, worker_cfg: Dict[str, Any], software: str, key: str
     ):
@@ -509,17 +501,8 @@ class MainWorkflow:
             ), "[NVT] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
             cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
-            pp_path_raw = self._get_exec_config(
-                effective_worker_name, effective_worker_cfg, software, 'pp_path'
-            )
-            pp_path = (
-                str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-            )
-            orb_path = str(
-                Path(effective_worker_cfg["orb_path"][software])
-                .expanduser()
-                .resolve()
-            )
+            pp_path = effective_worker_cfg["pp_path"][software]
+            orb_path = effective_worker_cfg["orb_path"][software]
 
             job_nvt = qdyn_nvt(
                 software=software,
@@ -599,17 +582,8 @@ class MainWorkflow:
             ), "[NVE] nodes must be a positive integer or omitted to use the default."
             ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
             cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
-            pp_path_raw = self._get_exec_config(
-                effective_worker_name, effective_worker_cfg, software, 'pp_path'
-            )
-            pp_path = (
-                str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-            )
-            orb_path = str(
-                Path(effective_worker_cfg["orb_path"][software])
-                .expanduser()
-                .resolve()
-            )
+            pp_path = effective_worker_cfg["pp_path"][software]
+            orb_path = effective_worker_cfg["orb_path"][software]
 
             job_nve = qdyn_nve(
                 software=software,
@@ -768,17 +742,8 @@ class MainWorkflow:
                     'ntasks_per_node'
                 ]
                 cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
-                pp_path_raw = self._get_exec_config(
-                    effective_worker_name, effective_worker_cfg, software, 'pp_path'
-                )
-                pp_path = (
-                    str(Path(pp_path_raw).expanduser().resolve()) if pp_path_raw else ''
-                )
-                orb_path = str(
-                    Path(effective_worker_cfg["orb_path"][software])
-                    .expanduser()
-                    .resolve()
-                )
+                pp_path = effective_worker_cfg["pp_path"][software]
+                orb_path = effective_worker_cfg["orb_path"][software]
 
                 jobs_scf = qdyn_scf(
                     software=software,
@@ -863,10 +828,7 @@ class MainWorkflow:
                     f"'{prev_step}' results."
                 )
 
-            machine_cfg = self._get_machine_config(
-                effective_worker_name, effective_worker_cfg
-            )
-            ncpus = machine_cfg['cpus_per_node']
+            ncpus = effective_worker_cfg['cpus_per_node']
             job_pre_namd = qdyn_pre_namd(
                 software=software,
                 parameters=input.prenamd_input,
@@ -939,13 +901,10 @@ class MainWorkflow:
             natxt = prev_output['NATXT']
             dephtime = prev_output['DEPHTIME']
 
-            machine_cfg = self._get_machine_config(
-                effective_worker_name, effective_worker_cfg
-            )
             if input.namd_input.surface_hopping == 'FSSH':
                 nodes = 1
                 ntasks_per_node = 1
-                cpus_per_task = machine_cfg['cpus_per_node']
+                cpus_per_task = effective_worker_cfg['cpus_per_node']
             else:
                 nodes = (
                     input.namd_input.nodes if input.namd_input.nodes is not None else 1
@@ -953,7 +912,7 @@ class MainWorkflow:
                 assert (
                     nodes > 0
                 ), "[NAMD] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = machine_cfg['cpus_per_node']
+                ntasks_per_node = effective_worker_cfg['cpus_per_node']
                 cpus_per_task = 1
 
             job_namd = qdyn_namd(

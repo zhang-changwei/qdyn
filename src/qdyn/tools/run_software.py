@@ -1,23 +1,24 @@
 import os
 import subprocess
 from pathlib import Path
+from typing import Callable
 
-def run_software(software: str, nprocs: int, is_alle: bool | None = False) -> None:
+def run_software(software: str, nprocs: int, monitor: Callable | None = None, **kwargs) -> None:
     """Run the specified software with appropriate settings.
 
     Args:
         software: Name of the software to run (e.g., 'vasp').
         nprocs: Number of MPI processes to use.
-        is_alle: Whether to use all-electron version (if applicable).
+        monitor: Optional callback function to monitor the calculation progress.
     """
 
     if software == 'vasp':
-        run_vasp(nprocs=nprocs, is_alle=is_alle)
+        run_vasp(nprocs, **kwargs)
     else:
         raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
 
-def run_vasp(nprocs: int, is_alle: bool | None = False) -> None:
+def run_vasp(nprocs: int, is_alle: bool | None = False, **kwargs) -> None:
     """Run VASP calculation using mpirun.
 
     Args:
@@ -40,27 +41,15 @@ def run_vasp(nprocs: int, is_alle: bool | None = False) -> None:
         # Use vasp_gam for single K-point, otherwise vasp_std
         if kx == 1 and ky == 1 and kz == 1:
             vasp_exe = 'vasp_gam'
-            with open('INCAR', 'r') as f:
-                lines = f.readlines()
-            with open('INCAR', 'w') as incar:
-                for line in lines:
-                    if line.strip().startswith('KPAR'):
-                        incar.write('KPAR = 1\n')
-                    else:
-                        incar.write(line)
         else:
             vasp_exe = 'vasp_std'
-            with open('INCAR', 'r') as f:
-                lines = f.readlines()
-            with open('INCAR', 'w') as incar:
-                for line in lines:
-                    if line.strip().startswith('KPAR'):
-                        incar.write('KPAR = 2\n')
-                    else:
-                        incar.write(line)
 
     # Launch VASP
-    result = subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
+    if "omp" in kwargs:
+        result = subprocess.run([f'OMP_NUM_THREADS={kwargs["omp"]}', 
+                                 'mpirun', '-np', str(nprocs), vasp_exe])
+    else:
+        result = subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
     if result.returncode != 0:
         # Read queue.err for real error details
         err_hint = ""

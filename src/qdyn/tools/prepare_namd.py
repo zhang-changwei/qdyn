@@ -1,7 +1,6 @@
-import ast
-import operator
 import os
 from pathlib import Path
+import shutil
 from typing import List, Dict, Tuple, Any
 
 import matplotlib
@@ -11,9 +10,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from jobflow import job
 
+from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
 from ..output_postprocess import extract_wht_with_cache, extract_band_edges
-from .canac import extract_eigvals_and_nacs
+from .canac import extract_tdolaps, extract_nacs
 from .dephase import calculate_dephasing_time
 
 
@@ -42,7 +42,7 @@ def qdyn_pre_namd(
     software_lower = software.lower()
     # No input files required
     if prepare_input_only:
-        return
+        return {}
 
     # Reconstruct all SCF subdirectories from batch results
     # Subdirectories may have different naming patterns but always contain digits (e.g., 001, 0001, 0250)
@@ -52,17 +52,23 @@ def qdyn_pre_namd(
         for entry in Path(run_dir).glob('scf_*'):
             if entry.is_dir():
                 all_scf_dirs.append(entry)
+        # Find resume file
+        for entry in Path(run_dir).glob("tdolap_nstep=*.npz"):
+            if entry.is_file():
+                fname = entry.name
+                shutil.copy2(entry, Path.cwd() / fname)
 
     if len(all_scf_dirs) == 0:
         raise IndexError(
-            f"No scf_* directories found in {run_dirs}. Please check the directory structure."
+            f"No scf_* directories found in {run_dirs}. "
+            "Please check the directory structure."
         )
 
     # Sort directories by scf index to ensure chronological order
     # (different batches may have different run_dir UUIDs)
     all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('scf_')[-1]))
 
-    vbm, cbm = extract_band_edges(
+    vbm, cbm, nbands = extract_band_edges(
         software=software_lower,
         dir_path=all_scf_dirs[0],
         whichK=parameters.adv.ikpt,
@@ -85,54 +91,37 @@ def qdyn_pre_namd(
     elif software_lower in ['abacus', 'hamgnn', 'openmx', 'siesta']:
         is_gamma_ver = True
 
-    def safe_eval(expr: str) -> Any:
-        ALLOWED_OPS = {ast.Add: operator.add, ast.Sub: operator.sub}
-        tree = ast.parse(expr, mode='eval')
+    bmin = parse_band_index(parameters.bmin, vbm, nbands)
+    bmax = parse_band_index(parameters.bmax, vbm, nbands)
 
-        def _eval(node):
-            if isinstance(node, ast.Constant):
-                return node.value
-            elif isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPS:
-                return ALLOWED_OPS[type(node.op)](_eval(node.left), _eval(node.right))
-            else:
-                raise ValueError(f"Unsupported expression: {expr}")
-
-        return _eval(tree.body)
-
-    if isinstance(parameters.bmin, str):
-        bmin_ = parameters.bmin.lower()
-        bmin_ = bmin_.replace('vbm', str(vbm))
-        bmin_ = bmin_.replace('cbm', str(cbm))
-        bmin_ = safe_eval(bmin_)
-    else:
-        bmin_ = parameters.bmin
-    if isinstance(parameters.bmax, str):
-        bmax_ = parameters.bmax.lower()
-        bmax_ = bmax_.replace('vbm', str(vbm))
-        bmax_ = bmax_.replace('cbm', str(cbm))
-        bmax_ = safe_eval(bmax_)
-    else:
-        bmax_ = parameters.bmax
-
-    extract_eigvals_and_nacs(
+    for out_traj in extract_tdolaps(
         run_dirs=all_scf_dirs,
         software=software_lower,  # type: ignore
         is_gamma_ver=is_gamma_ver,
-        is_reorder=parameters.adv.reorder,
         is_alle=parameters.adv.alle,
-        bmin=bmin_,
-        bmax=bmax_,
+        bmin=bmin,
+        bmax=bmax,
         ikpt=parameters.adv.ikpt,
         ispin=parameters.adv.ispin,
         nproc=nproc,
         dirs_sorted=True,
+    ):
+        pass
+
+    # symlink tdolap file to run_dir
+    os.symlink(out_traj['tdolap_path'], run_dirs[0])
+
+    tdolap_data = np.load(out_traj['tdolap_path'])
+    out_nac = extract_nacs(
+        data=tdolap_data,
+        tdolap_path=out_traj['tdolap_path'],
+        nproc=nproc,
     )
 
     # DEPHTIME
     if parameters.surface_hopping == 'DISH':
         output = calculate_dephasing_time(
-            working_dir=Path.cwd(),
-            energies_path='EIGTXT',
+            energies=out_nac['eigenvalues'],
             md_dt=parameters.md_dt,
             plot=plot,
         )
@@ -141,10 +130,12 @@ def qdyn_pre_namd(
     return {
         'run_dir': str(Path.cwd()),
         'software': software_lower,
-        'images': images,
-        'EIGTXT': str(Path.cwd() / 'EIGTXT'),
-        'NATXT': str(Path.cwd() / 'NATXT'),
-        'DEPHTIME': (
+        'images': images[:10], # Only return the first 10 images to avoid overflow
+        'VBM': vbm,
+        'CBM': cbm,
+        'traj_path': out_traj['tdolap_path'],
+        'nac_path': out_nac['nac_path'],
+        'deph_path': (
             str(Path.cwd() / 'DEPHTIME')
             if parameters.surface_hopping == 'DISH'
             else None

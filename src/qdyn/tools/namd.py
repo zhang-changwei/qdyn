@@ -1,5 +1,8 @@
 from glob import glob
+import math
 from pathlib import Path
+import os
+import re
 import shutil
 import subprocess
 
@@ -12,30 +15,57 @@ from jobflow import job
 
 from typing import List
 
+from ..calc_common import parse_band_index
 from ..input import NAMDInputT
+from .canac import save_hfnamd_inputs
 
 @job
 def qdyn_namd(
     parameters: NAMDInputT,
-    eigtxt: str,
-    natxt: str,
-    dephtime: str | None,
+    nac_path: str,
+    deph_path: str | None,
+    VBM: int,
+    CBM: int,
     nodes: int,
     ntasks_per_node: int,
     cpus_per_task: int,
     plot: bool = False,
     prepare_input_only: bool = False,
 ):
+    """
+    Step 1: Generate HFNAMD inputs: inp, EIGTXT, NATXT, INICON, DEPHTIME (optional).
+    Step 2: Run HFNAMD.
+    """
     sh = parameters.surface_hopping
-    eigenvalues = np.loadtxt(eigtxt)
-    nsw, nbasis = eigenvalues.shape
-    
-    # Prepare input files for NAMD
-    shutil.copy(eigtxt, 'EIGTXT')
-    shutil.copy(natxt, 'NATXT')
-    if sh == 'DISH' and dephtime is not None:
-        shutil.copy(dephtime, 'DEPHTIME')
+    # bmin and bmax will be validated in save_hfnamd_inputs
+    bmin = parse_band_index(parameters.bmin, VBM, 2147483647)
+    bmax = parse_band_index(parameters.bmax, VBM, 2147483647)
 
+    eigenvalues = np.loadtxt("EIGTXT")
+    nsw, nbasis = eigenvalues.shape
+
+    # EIGTXT and NATXT
+    save_hfnamd_inputs(nac_path, bmin, bmax)
+
+    # DEPHTIME
+    if sh == 'DISH':
+        if deph_path is not None:
+            deph = np.loadtxt(deph_path)
+
+            pattern = re.compile(r"nac_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
+            m = pattern.match(os.path.basename(nac_path))
+            assert m is not None
+            bmin_stored = int(m.group(2))
+            bmax_stored = int(m.group(3))
+
+            bot = bmin - bmin_stored
+            top = bmax - bmin + 1
+            deph = deph[bot:top, bot:top]
+            np.savetxt('DEPHTIME', deph)
+        else:
+            raise FileNotFoundError("Dephasing time file not found.")
+
+    # INICON
     time_start = 2
     time_stop = nsw - parameters.namdtime - 1 if sh == 'FSSH' else nsw - 1
     assert time_stop > time_start, "Not enough time steps for the specified namdtime."
@@ -48,7 +78,8 @@ def qdyn_namd(
     )
     np.savetxt('INICON', inicon, fmt='%d')
 
-    inp = _parepare_namd_input(parameters, nodes, nbasis, nsw)
+    # inp
+    inp = _prepare_namd_input(parameters, nodes, nbasis, nsw)
     with open('inp', 'w') as f:
         f.write(inp)
 
@@ -93,7 +124,7 @@ def sample_initial_conditions(
     inicon[:, 1] = rng.choice(inibands, size=nsample)
     return inicon
 
-def _parepare_namd_input(
+def _prepare_namd_input(
     parameters: NAMDInputT,
     nodes: int,
     nbasis: int,

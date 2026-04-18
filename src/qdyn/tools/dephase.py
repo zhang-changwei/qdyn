@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 from pathlib import Path
 import numpy as np
 import numpy.typing as npt
@@ -16,8 +17,7 @@ from typing import Tuple, Dict, Any
 
 
 def calculate_dephasing_time(
-    working_dir: str | Path,
-    energies_path: str | Path = 'EIGTXT',
+    energies: npt.NDArray[np.float64],
     md_dt: float = 1.0,
     plot: bool = False,
 ) -> Dict[str, Any]:
@@ -25,8 +25,7 @@ def calculate_dephasing_time(
 
     Args:
         working_dir: Directory where output files and optional plots are written.
-        energies_path: Path to the KS energy file in EIGTXT format: a
-            plain-text array of shape ``(nstep, nbasis)`` with energies in eV.
+        energies: Array of KS energies in eV with shape ``(nstep, nbasis)``.
         md_dt: MD time step in femtoseconds used to set the time axis.
             Default 1.0 fs.
         plot: If ``True``, save a ``dephasing_i_j.png`` plot of ``D(t)``
@@ -36,14 +35,17 @@ def calculate_dephasing_time(
         dict: Mapping with ``DEPHTIME`` and generated image paths.
     """
 
-    energy = np.loadtxt(energies_path)  # shape (nstep, nbasis)
-    nbasis = energy.shape[1]
+    nbasis = energies.shape[1]
     matrix = np.zeros((nbasis, nbasis), dtype=np.float64)
     images = []
 
+    working_dir = str(Path.cwd())
+    if plot:
+        os.makedirs("img_dephasing", exist_ok=True)
+
     for ii in range(nbasis):
         for jj in range(ii):
-            Et = energy[:, ii] - energy[:, jj]
+            Et = energies[:, ii] - energies[:, jj]
             T = np.arange(Et.size) * md_dt
 
             Ct, Dt, Iw = dephase(Et)
@@ -57,7 +59,7 @@ def calculate_dephasing_time(
                 ax.set_xlabel('Time (fs)')
                 ax.set_ylabel('Dephasing function')
                 plt.tight_layout()
-                img_path = f'{working_dir}/dephasing_{ii}_{jj}.png'
+                img_path = f'{working_dir}/img_dephasing/dephasing_{ii}_{jj}.png'
                 plt.savefig(img_path, dpi=300)
 
                 images.append(img_path)
