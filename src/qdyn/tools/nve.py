@@ -30,8 +30,8 @@ def qdyn_nve(
     orb_path: str,
     structure: Dict,
     nodes: int = 1,
-    ntasks_per_node: int = 1,
-    cpus_per_task: int = 1,
+    processes_per_node: int = 1,
+    threads_per_process: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
 ) -> Dict:
@@ -47,8 +47,8 @@ def qdyn_nve(
         orb_path: Path to orbital files (for SIESTA/ABACUS/OpenMX).
         structure: Atomic structure (typically CONTCAR from NVT).
         nodes: Number of nodes for parallel calculation.
-        ntasks_per_node: Number of MPI tasks per node.
-        cpus_per_task: Number of CPUs per task.
+        processes_per_node: Number of MPI tasks per node.
+        threads_per_process: Number of CPUs per task.
         plot: Whether to generate plots.
         prepare_input_only: If True, only prepare input files without running
             the calculation.
@@ -66,7 +66,7 @@ def qdyn_nve(
     """
 
     software_lower = software.lower()
-    nprocs = nodes * ntasks_per_node
+    nprocs = nodes * processes_per_node
 
     structure['momenta'] = np.array(structure['momenta'])
     cstru = Atoms.fromdict(structure)

@@ -36,6 +36,9 @@ worker_pools:
       resources:
         partition: chu
         time: "48:00:00"
+        # worker.resources keeps only nodes/processes_per_node/threads_per_process
+        # as portable top-level fields; all other keys pass through unchanged
+        # via QResources.scheduler_kwargs.
 
       # QDYN specific worker configs
       # Don't remove any following entries.
@@ -67,11 +70,13 @@ worker_pools:
       orb_path:
         vasp: ''
       nvt:
-        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+        vasp: { nodes: 1, processes_per_node: 96, threads_per_process: 1 }
       nve:
-        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+        vasp: { nodes: 1, processes_per_node: 96, threads_per_process: 1 }
       scf:
-        vasp: { nodes: 1, ntasks_per_node: 96, cpus_per_task: 1 }
+        vasp: { nodes: 1, processes_per_node: 96, threads_per_process: 1 }
+      # nvt/nve/scf must use portable resource keys above. They override
+      # same-meaning values from worker.resources during dispatch.
 
 auth:
   secret_key: ""  # leave empty to auto-generate on first start

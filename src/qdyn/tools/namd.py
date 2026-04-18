@@ -27,8 +27,8 @@ def qdyn_namd(
     VBM: int,
     CBM: int,
     nodes: int,
-    ntasks_per_node: int,
-    cpus_per_task: int,
+    processes_per_node: int,
+    threads_per_process: int,
     plot: bool = False,
     prepare_input_only: bool = False,
 ):
@@ -92,7 +92,7 @@ def qdyn_namd(
     if sh == 'FSSH':
         subprocess.run(['hfnamd'])
     else:
-        subprocess.run(['mpirun', '-np', str(nodes * ntasks_per_node), 'hfnamd'])
+        subprocess.run(['mpirun', '-np', str(nodes * processes_per_node), 'hfnamd'])
 
     # plot
     images = []

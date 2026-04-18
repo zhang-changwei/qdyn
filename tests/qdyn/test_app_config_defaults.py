@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from qdyn.resources import normalize_worker_resources
 from qdyn.validation import ConfigError, validate_and_fill_runtime_config
 
 
@@ -47,22 +48,22 @@ def _make_runtime_config() -> dict:
                     "nvt": {
                         "vasp": {
                             "nodes": 1,
-                            "ntasks_per_node": 64,
-                            "cpus_per_task": 1,
+                            "processes_per_node": 64,
+                            "threads_per_process": 1,
                         }
                     },
                     "nve": {
                         "vasp": {
                             "nodes": 1,
-                            "ntasks_per_node": 64,
-                            "cpus_per_task": 1,
+                            "processes_per_node": 64,
+                            "threads_per_process": 1,
                         }
                     },
                     "scf": {
                         "vasp": {
                             "nodes": 1,
-                            "ntasks_per_node": 64,
-                            "cpus_per_task": 1,
+                            "processes_per_node": 64,
+                            "threads_per_process": 1,
                         }
                     },
                 },
@@ -113,6 +114,57 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
     assert "active_pool" in warning_text
     assert "worker_pools.local_slurm.pool.queue_poll_interval" in warning_text
     assert "worker_pools.local_slurm.worker.resources" in warning_text
+
+
+def test_validate_and_fill_runtime_config_normalizes_worker_resource_aliases():
+    config = _make_runtime_config()
+    config["worker_pools"]["local_slurm"]["worker"]["resources"] = {
+        "partition": "chu",
+        "time": "48:00:00",
+        "ntasks_per_node": 32,
+        "cpus_per_task": 2,
+    }
+
+    validate_and_fill_runtime_config(
+        config,
+        _make_jf_config(),
+    )
+
+    assert config["worker_pools"]["local_slurm"]["worker"]["resources"] == {
+        "processes_per_node": 32,
+        "threads_per_process": 2,
+        "scheduler_kwargs": {
+            "partition": "chu",
+            "time": "48:00:00",
+        },
+    }
+
+
+def test_validate_and_fill_runtime_config_rejects_old_step_resource_names():
+    config = _make_runtime_config()
+    config["worker_pools"]["local_slurm"]["worker"]["nvt"]["vasp"] = {
+        "nodes": 1,
+        "ntasks_per_node": 64,
+        "cpus_per_task": 1,
+    }
+
+    with pytest.raises(ConfigError, match="processes_per_node"):
+        validate_and_fill_runtime_config(
+            config,
+            _make_jf_config(),
+        )
+
+
+def test_normalize_worker_resources_maps_cpus_per_node_to_threads():
+    resources = normalize_worker_resources(
+        {"nodes": 1, "cpus_per_node": 4, "p": 2}
+    )
+
+    assert resources == {
+        "nodes": 1,
+        "threads_per_process": 4,
+        "scheduler_kwargs": {"p": 2},
+    }
 
 
 def test_validate_and_fill_runtime_config_requires_non_optional_runtime_keys():

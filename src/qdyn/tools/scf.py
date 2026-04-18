@@ -46,8 +46,8 @@ def qdyn_scf(
     traj_path: str,
     traj_format: str = 'vasp-xdatcar',
     nodes: int = 1,
-    ntasks_per_node: int = 1,
-    cpus_per_task: int = 1,
+    processes_per_node: int = 1,
+    threads_per_process: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
 ) -> List[Job]:
@@ -65,8 +65,8 @@ def qdyn_scf(
         traj_path: Path to the trajectory file (e.g. XDATCAR for VASP).
         traj_format: Format of the trajectory file.
         nodes: Number of nodes.
-        ntasks_per_node: MPI tasks per node.
-        cpus_per_task: CPUs per task.
+        processes_per_node: MPI tasks per node.
+        threads_per_process: CPUs per task.
         plot: Whether to generate TDKS plot.
         prepare_input_only: If True, only prepare input files.
 
@@ -97,8 +97,8 @@ def qdyn_scf(
             frame_start=frame_start,
             frame_end=frame_end,
             nodes=nodes,
-            ntasks_per_node=ntasks_per_node,
-            cpus_per_task=cpus_per_task,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
             prepare_input_only=prepare_input_only,
         )
         jobs.append(j)
@@ -117,8 +117,8 @@ def qdyn_scf_task(
     frame_start: int = 0,
     frame_end: int = 0,
     nodes: int = 1,
-    ntasks_per_node: int = 1,
-    cpus_per_task: int = 1,
+    processes_per_node: int = 1,
+    threads_per_process: int = 1,
     prepare_input_only: bool = False,
 ) -> Dict:
     """Run a batch of SCF calculations for multiple structures.
@@ -140,8 +140,8 @@ def qdyn_scf_task(
         frame_start: Global frame index of the first structure (0-based).
         frame_end: Global frame index of the last structure (0-based).
         nodes: Number of compute nodes.
-        ntasks_per_node: MPI tasks per node.
-        cpus_per_task: CPUs per task.
+        processes_per_node: MPI tasks per node.
+        threads_per_process: CPUs per task.
         prepare_input_only: If True, only prepare input files without running.
 
     Returns:
@@ -154,7 +154,7 @@ def qdyn_scf_task(
         - cbm: CBM band index (from the last successful calculation)
     """
     software_lower = software.lower()
-    nprocs = nodes * ntasks_per_node
+    nprocs = nodes * processes_per_node
     scf_step = parameters.scf_step
 
     all_strus = read_strus(traj_format, traj_path=traj_path)

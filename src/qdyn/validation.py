@@ -9,6 +9,7 @@ import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
 from .input import InputT
+from .resources import normalize_worker_resources, validate_step_resources
 
 SUPPORTED_SOFTWARE = ["vasp", "vasp_ae", "abacus", "python", "namd"]
 SOFTWARE_MAPPING = {
@@ -181,20 +182,13 @@ def validate_and_fill_runtime_config(
             f"Missing '{dotted_prefix}.{key}' section in QDYN config.",
         )
         if key in ["nvt", "nve", "scf"] and software in ["vasp", "abacus"]:
-            try:
-                if not (isinstance(key_cfg[software]["nodes"], int) and 
-                        isinstance(key_cfg[software]["ntasks_per_node"], int) and 
-                        isinstance(key_cfg[software]["cpus_per_task"], int)):
-                    raise TypeError
-                if not (key_cfg[software]["nodes"] > 0 and 
-                        key_cfg[software]["ntasks_per_node"] > 0 and 
-                        key_cfg[software]["cpus_per_task"] > 0):
-                    raise ValueError
-            except Exception:
+            if software not in key_cfg:
                 raise ConfigError(
                     f"Invalid resource config for '{dotted_prefix}.{key}.{software}' in QDYN config.\n"
-                    "Should contain 'nodes', 'ntasks_per_node', and 'cpus_per_task' as integers."
+                    "Should contain 'nodes', 'processes_per_node', and "
+                    "'threads_per_process' as positive integers."
                 )
+            validate_step_resources(key_cfg[software], f"{dotted_prefix}.{key}.{software}")
             return
             
         if required:
@@ -320,6 +314,7 @@ def validate_and_fill_runtime_config(
             "resources",
             {},
         )
+        worker_cfg["resources"] = normalize_worker_resources(worker_cfg["resources"])
         _require_present_leaf(
             worker_cfg,
             "cpus_per_node",

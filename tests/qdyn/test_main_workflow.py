@@ -2,10 +2,12 @@ from types import MethodType, SimpleNamespace
 from pathlib import Path
 
 import pytest
+from qtoolkit import QResources
 
 from qdyn.errors import ValidationError
 from qdyn.input import BasicInputT, InputT, SchedulerConfigT, SCFInputT
 from qdyn.main_workflow import MainWorkflow, ConfigError
+from qdyn.resources import build_qresources
 from qdyn.validation import (
     load_config,
     validate_and_fill_runtime_config,
@@ -22,7 +24,8 @@ def _make_manager() -> MainWorkflow:
                 "worker": {
                     "partition": "chu",
                     "cpus_per_node": 96,
-                    "nvt": {"vasp": {"nodes": 1, "ntasks_per_node": 96, "cpus_per_task": 1}},
+                    "resources": {"partition": "chu"},
+                    "nvt": {"vasp": {"nodes": 1, "processes_per_node": 96, "threads_per_process": 1}},
                 },
                 "pool": {
                     "size": 3,
@@ -81,6 +84,26 @@ def test_get_worker_resources_falls_back_to_pool_worker_config():
     resources = manager._get_worker_resources("local_slurm")
 
     assert resources == {"partition": "chu", "account": "proj"}
+
+
+def test_build_qresources_uses_qresources_with_override_order():
+    resources = build_qresources(
+        {
+        "partition": "base",
+        "nodes": 9,
+        "ntasks_per_node": 9,
+        "cpus_per_task": 9,
+        },
+        {"nodes": 2, "processes_per_node": 4, "threads_per_process": 8},
+        nodes=3,
+    )
+
+    assert isinstance(resources, QResources)
+    assert resources.queue_name is None
+    assert resources.nodes == 3
+    assert resources.processes_per_node == 4
+    assert resources.threads_per_process == 8
+    assert resources.scheduler_kwargs == {"partition": "base"}
 
 
 def test_submit_uses_pool_dispatch(monkeypatch):

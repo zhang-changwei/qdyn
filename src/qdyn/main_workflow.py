@@ -24,6 +24,7 @@ from jobflow_remote import JobController
 
 from .errors import ConfigError, ResumeError, ValidationError, QueryError
 from .input import InputT
+from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
 from .calc_common import write_strus, TRAJ_FORMAT_MAPPING
 
@@ -464,18 +465,6 @@ class MainWorkflow:
             post_run=None,
         )
 
-    def _build_resources(
-        self,
-        resource_worker: str,
-        base_resources: Dict[str, Any] | None = None,
-        **overrides: Any,
-    ) -> dict[str, Any]:
-        resources = {**self._get_worker_resources(resource_worker)}
-        if base_resources is not None:
-            resources.update(base_resources)
-        resources.update(overrides)
-        return resources
-
     def _write_user_trajectory(
         self,
         *,
@@ -575,8 +564,8 @@ class MainWorkflow:
             if input.nvt_input.nodes is not None
             else active_worker_cfg['nvt'][software]['nodes']
         )
-        ntasks_per_node = active_worker_cfg['nvt'][software]['ntasks_per_node']
-        cpus_per_task = active_worker_cfg['nvt'][software]['cpus_per_task']
+        processes_per_node = active_worker_cfg['nvt'][software]['processes_per_node']
+        threads_per_process = active_worker_cfg['nvt'][software]['threads_per_process']
 
         job_nvt = qdyn_nvt(
             software=software,
@@ -585,8 +574,8 @@ class MainWorkflow:
             orb_path=active_worker_cfg["orb_path"][software],
             structure=structure,
             nodes=nodes,
-            ntasks_per_node=ntasks_per_node,
-            cpus_per_task=cpus_per_task,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
@@ -597,8 +586,8 @@ class MainWorkflow:
                 active_worker_cfg,
                 [software],
             ),
-            resources=self._build_resources(
-                resource_worker,
+            resources=build_qresources(
+                self._get_worker_resources(resource_worker),
                 active_worker_cfg['nvt'][software],
                 nodes=nodes,
             ),
@@ -648,8 +637,8 @@ class MainWorkflow:
             if input.nve_input.nodes is not None
             else active_worker_cfg['nve'][software]['nodes']
         )
-        ntasks_per_node = active_worker_cfg['nve'][software]['ntasks_per_node']
-        cpus_per_task = active_worker_cfg['nve'][software]['cpus_per_task']
+        processes_per_node = active_worker_cfg['nve'][software]['processes_per_node']
+        threads_per_process = active_worker_cfg['nve'][software]['threads_per_process']
 
         job_nve = qdyn_nve(
             software=software,
@@ -658,8 +647,8 @@ class MainWorkflow:
             orb_path=active_worker_cfg["orb_path"][software],
             structure=structure,
             nodes=nodes,
-            ntasks_per_node=ntasks_per_node,
-            cpus_per_task=cpus_per_task,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
@@ -670,8 +659,8 @@ class MainWorkflow:
                 active_worker_cfg,
                 [software],
             ),
-            resources=self._build_resources(
-                resource_worker,
+            resources=build_qresources(
+                self._get_worker_resources(resource_worker),
                 active_worker_cfg['nve'][software],
                 nodes=nodes,
             ),
@@ -728,8 +717,8 @@ class MainWorkflow:
             if input.scf_input.nodes is not None
             else active_worker_cfg['scf'][software]['nodes']
         )
-        ntasks_per_node = active_worker_cfg['scf'][software]['ntasks_per_node']
-        cpus_per_task = active_worker_cfg['scf'][software]['cpus_per_task']
+        processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
+        threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
 
         jobs_scf = qdyn_scf(
             software=software,
@@ -739,8 +728,8 @@ class MainWorkflow:
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
             nodes=nodes,
-            ntasks_per_node=ntasks_per_node,
-            cpus_per_task=cpus_per_task,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
@@ -752,8 +741,8 @@ class MainWorkflow:
                     active_worker_cfg,
                     [software],
                 ),
-                resources=self._build_resources(
-                    resource_worker,
+                resources=build_qresources(
+                    self._get_worker_resources(resource_worker),
                     active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
@@ -810,9 +799,9 @@ class MainWorkflow:
                 "FUSED_SCF_PRENAMD step is designed to run on a single node. "
                 "Overriding nodes to 1 for this step."
             )
-        ntasks_per_node = active_worker_cfg['scf'][software]['ntasks_per_node']
-        cpus_per_task = active_worker_cfg['scf'][software]['cpus_per_task']
-        total_cpus = nodes * ntasks_per_node * cpus_per_task
+        processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
+        threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
+        total_cpus = nodes * processes_per_node * threads_per_process
         nproc = max(1, min(8, total_cpus))
         omp_python = max(1, total_cpus // nproc)
 
@@ -825,7 +814,7 @@ class MainWorkflow:
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
             total_cpus=total_cpus,
-            omp_software=cpus_per_task,
+            omp_software=threads_per_process,
             omp_python=omp_python,
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
@@ -841,8 +830,8 @@ class MainWorkflow:
                     software_names,
                     omp_threads=omp_python,
                 ),
-                resources=self._build_resources(
-                    resource_worker,
+                resources=build_qresources(
+                    self._get_worker_resources(resource_worker),
                     active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
@@ -903,12 +892,12 @@ class MainWorkflow:
                 ['python'],
                 omp_threads=omp_threads,
             ),
-            resources=self._build_resources(
-                resource_worker,
+            resources=build_qresources(
+                self._get_worker_resources(resource_worker),
                 None,
                 nodes=1,
-                ntasks_per_node=1,
-                cpus_per_task=ncpus,
+                processes_per_node=1,
+                threads_per_process=ncpus,
             ),
         )
         return [job_pre_namd]
@@ -954,16 +943,16 @@ class MainWorkflow:
 
         if input.namd_input.surface_hopping == 'FSSH':
             nodes = 1
-            ntasks_per_node = 1
-            cpus_per_task = active_worker_cfg['cpus_per_node']
+            processes_per_node = 1
+            threads_per_process = active_worker_cfg['cpus_per_node']
         else:
             nodes = (
                 input.namd_input.nodes
                 if input.namd_input.nodes is not None
                 else 1
             )
-            ntasks_per_node = active_worker_cfg['cpus_per_node']
-            cpus_per_task = 1
+            processes_per_node = active_worker_cfg['cpus_per_node']
+            threads_per_process = 1
 
         job_namd = qdyn_namd(
             parameters=input.namd_input,
@@ -972,8 +961,8 @@ class MainWorkflow:
             VBM=prev_output['VBM'],
             CBM=prev_output['CBM'],
             nodes=nodes,
-            ntasks_per_node=ntasks_per_node,
-            cpus_per_task=cpus_per_task,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
@@ -983,14 +972,14 @@ class MainWorkflow:
                 active_worker_name,
                 active_worker_cfg,
                 ['namd'],
-                omp_threads=cpus_per_task,
+                omp_threads=threads_per_process,
             ),
-            resources=self._build_resources(
-                resource_worker,
+            resources=build_qresources(
+                self._get_worker_resources(resource_worker),
                 None,
                 nodes=nodes,
-                ntasks_per_node=ntasks_per_node,
-                cpus_per_task=cpus_per_task,
+                processes_per_node=processes_per_node,
+                threads_per_process=threads_per_process,
             ),
         )
         return [job_namd]
