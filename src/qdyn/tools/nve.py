@@ -11,7 +11,7 @@ import numpy as np
 from qdyn.tools.nvt import add_constraints
 
 from ..input import NVEInputT
-from ..params import params_default, md_tracks, md_ase_formats
+from ..params import params_default, TRAJ_FNAME_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import (
     extract_md_data_from_oszicar,
@@ -112,7 +112,7 @@ def qdyn_nve(
             "last portion of the trajectory. Please check the output files."
         )
 
-    track_name = md_tracks.get(software_lower)
+    track_name = TRAJ_FNAME_MAPPING.get(software_lower)
     if track_name is None:
         raise ValueError(f"Unsupported software: {software_lower}")
     # if os.path.isfile(track_name):
@@ -128,7 +128,7 @@ def qdyn_nve(
         'images': images,
         # 'strus': strus_list,
         'traj_path': str(
-            Path.cwd() / md_tracks[software_lower]
+            Path.cwd() / TRAJ_FNAME_MAPPING[software_lower]
         ),  # constraints information may also remain in some software's trajectory files, may raise error when changing to dict.
     }
 

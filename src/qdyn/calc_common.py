@@ -6,41 +6,42 @@ from ase import Atoms
 import ase.io
 from typing import Any
 
-from .params import md_tracks, md_ase_formats
+from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
 
-def write_strus(software: str, structures: list[Atoms], directory: str = '.') -> str:
+def write_strus(software: str, structures: list[Atoms], out_dir: str = '.') -> str:
     """Write structures to a trajectory file in software-native format.
 
     Args:
         software: Software name ('vasp', 'cp2k', etc.).
         structures: List of ASE Atoms objects to write.
-        directory: Directory to write the trajectory file into. Default is
+        out_dir: Directory to write the trajectory file into. Default is
             current directory.
 
     Returns:
         Path to the written trajectory file.
     """
-    track_name = md_tracks.get(software)
+    track_name = TRAJ_FNAME_MAPPING.get(software)
     if track_name is None:
         raise ValueError(f"Unsupported software: {software}")
-    ase_format = md_ase_formats.get(software)
+    ase_format = TRAJ_FORMAT_MAPPING.get(software)
     if ase_format is None:
         raise ValueError(f"Unsupported software: {software}")
-    track_file = os.path.join(directory, track_name)
+    track_file = os.path.join(out_dir, track_name)
     ase.io.write(track_file, structures, format=ase_format)
     return track_file
 
 
 def read_strus(
-    software: str,
-    directory: str = '.',
+    stru_format: str,
+    out_dir: str = '.',
     traj_path: str | None = None,
 ) -> list[Atoms]:
     """Read structures from trajectory file.
 
     Args:
-        software: Software name ('vasp', 'cp2k', etc.).
-        directory: Directory containing the trajectory file (used when
+        stru_format: Trajectory format alias or ASE format string
+            (e.g. 'vasp-xdatcar', 'extxyz', 'lammps-data').
+        out_dir: Directory containing the trajectory file (used when
             traj_path is None).
         traj_path: Explicit path to the trajectory file. If given,
             directory is ignored.
@@ -49,27 +50,27 @@ def read_strus(
         List of ASE Atoms objects representing the structures.
     """
     if traj_path is None:
-        track_name = md_tracks.get(software)
+        track_name = TRAJ_FNAME_MAPPING.get(stru_format)
         if track_name is None:
-            raise ValueError(f"Unsupported software: {software}")
-        traj_path = os.path.join(directory, track_name)
-    ase_format = md_ase_formats.get(software)
-    if ase_format is None:
-        raise ValueError(f"Unsupported software: {software}")
-    return ase.io.read(traj_path, format=ase_format, index=':')
+            raise ValueError(
+                f"Cannot infer trajectory filename from stru_format '{stru_format}'. "
+                "Please provide traj_path explicitly."
+            )
+        traj_path = os.path.join(out_dir, track_name)
+    return ase.io.read(traj_path, format=stru_format, index=':')
 
 
-def write_stru(software: str, structure: Atoms, output_path: os.PathLike):
+def write_stru(software: str, structure: Atoms, out_dir: str | Path) -> None:
     """Write ASE Atoms object to a structure file.
 
     Args:
         software: Software name ('vasp', 'cp2k', etc.).
         structure: ASE Atoms object to write.
-        output_path: Path to output structure file.
+        out_dir: Path to output structure file.
     """
     if software == 'vasp':
         ase.io.write(
-            os.path.join(output_path, "POSCAR"), structure, vasp5=True, direct=True
+            os.path.join(out_dir, "POSCAR"), structure, vasp5=True, direct=True
         )
     else:
         raise ValueError(f"Unsupported software: {software}")

@@ -303,11 +303,7 @@ def _extract_structure_metadata(
             traj_path = Path(data_dir) / "trajs" / input.stru_hash
             if traj_path.is_file():
                 try:
-                    from .params import md_ase_formats
-                    ase_fmt = md_ase_formats.get(
-                        input.stru_format, input.stru_format
-                    )
-                    atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+                    atoms = ase.io.read(str(traj_path), format=input.stru_format, index=0)
                     formula = atoms.get_chemical_formula()
                     num_atoms = len(atoms)
                 except Exception:
@@ -647,9 +643,9 @@ async def upload(
     # delete it and return an error — don't keep garbage files on disk.
     summary = {}
     if file_type == "trajectory":
-        from .params import md_ase_formats
+        from .params import TRAJ_FORMAT_MAPPING
         parsed = False
-        for fmt in md_ase_formats.values():
+        for fmt in TRAJ_FORMAT_MAPPING.values():
             try:
                 atoms = ase.io.read(str(final_path), format=fmt, index=0)
                 summary = {
@@ -666,7 +662,7 @@ async def upload(
         if not parsed:
             # Unrecognizable file — clean up and reject
             final_path.unlink(missing_ok=True)
-            tried = ', '.join(f'{k} ({v})' for k, v in md_ase_formats.items())
+            tried = ', '.join(f'{k} ({v})' for k, v in TRAJ_FORMAT_MAPPING.items())
             raise HTTPException(
                 status_code=422,
                 detail=f"File is not a valid trajectory. "
@@ -701,9 +697,9 @@ def check_hash(
     # delete it and report as not existing — forces a clean re-upload.
     summary = {}
     if exists and file_type == "trajectory":
-        from .params import md_ase_formats
+        from .params import TRAJ_FORMAT_MAPPING
         parsed = False
-        for fmt in md_ase_formats.values():
+        for fmt in TRAJ_FORMAT_MAPPING.values():
             try:
                 atoms = ase.io.read(str(file_path), format=fmt, index=0)
                 summary = {

@@ -77,14 +77,17 @@ params_default = {
 import re
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
-md_tracks = {
+TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
 }
 
 # ASE format strings for reading/writing trajectory files per software.
 # Used by read_strus(), write_strus(), and upload validation.
-md_ase_formats = {
+TRAJ_FORMAT_MAPPING = {
     'vasp': 'vasp-xdatcar',
+    # COMPATIBLE USES BELOW
+    'extxyz': 'extxyz',
+    'xyz': 'xyz',
 }
 
 backup_files = {

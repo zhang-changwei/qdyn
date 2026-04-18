@@ -9,7 +9,6 @@ import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
 from .input import InputT
-from .params import md_ase_formats
 
 SUPPORTED_SOFTWARE = ["vasp", "vasp_ae", "abacus", "python", "namd"]
 SOFTWARE_MAPPING = {
@@ -95,7 +94,7 @@ def _warn_and_fill_default_leaf(
 
 
 def load_config(
-    config_path: os.PathLike,
+    config_path: str | Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     # The config file is readout from app.state / QDYN_CONFIG / default in lifespan.
     if not Path(config_path).is_file():
@@ -457,15 +456,9 @@ def validate_workflow_input(
         stru_path = user_data_dir / "trajs" / stru_hash
         if not stru_path.is_file():
             raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
-        ase_format = md_ase_formats.get(stru_format)
-        if ase_format is None:
-            raise ValidationError(
-                f"Unsupported trajectory format: '{stru_format}'. "
-                f"Supported: {', '.join(md_ase_formats.keys())}"
-            )
         try:
-            ase.io.read(stru_path, format=ase_format, index=0)
+            ase.io.read(stru_path, format=stru_format, index=0)
         except Exception as exc:
             raise ValidationError(
-                f"Structure with hash '{stru_hash}' could not be parsed by ASE with format '{ase_format}'."
+                f"Structure with hash '{stru_hash}' could not be parsed by ASE with format '{stru_format}'."
             ) from exc

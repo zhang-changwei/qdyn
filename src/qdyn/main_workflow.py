@@ -25,7 +25,7 @@ from jobflow_remote import JobController
 from .errors import ConfigError, ResumeError, ValidationError, QueryError
 from .input import InputT
 from .validation import load_config, validate_workflow_input
-from .calc_common import write_strus
+from .calc_common import write_strus, TRAJ_FORMAT_MAPPING
 
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
@@ -54,7 +54,7 @@ _REMOTE_WORKER_TYPES = {"remote", "separated_transfer"}
 
 class MainWorkflow:
 
-    def __init__(self, config_path: os.PathLike):
+    def __init__(self, config_path: str | Path):
         self.config, self.jf_config = load_config(config_path)
         self.task_ids: List[str] = []
         # {'task_id': {'step': [job_uuid1, job_uuid2, ...]}}
@@ -701,13 +701,13 @@ class MainWorkflow:
 
         if 'nve' in jobs:
             traj_path = jobs['nve'][0].output['traj_path']
-            traj_format = software
+            traj_format = TRAJ_FORMAT_MAPPING[software]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = software
+                traj_format = TRAJ_FORMAT_MAPPING[software]
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
@@ -781,13 +781,13 @@ class MainWorkflow:
         assert input.prenamd_input is not None
         if 'nve' in jobs:
             traj_path = jobs['nve'][0].output['traj_path']
-            traj_format = software
+            traj_format = TRAJ_FORMAT_MAPPING[software]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = software
+                traj_format = TRAJ_FORMAT_MAPPING[software]
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
