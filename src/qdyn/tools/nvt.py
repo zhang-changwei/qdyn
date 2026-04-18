@@ -14,7 +14,7 @@ from jobflow import job  # type: ignore
 
 from ..input import NVTInputT
 from ..params import params_default, backup_files
-from ..input_prepare import prepare_vasp_inputs
+from ..input_prepare import DFTInputs
 from ..output_postprocess import (
     extract_md_data_from_oszicar,
     check_scf_convergence,
@@ -253,13 +253,16 @@ def _prepare_nvt_input(
         input['TEBEG'] = parameters.temp_begin
         input['TEEND'] = parameters.temp_end
         input['EDIFF'] = parameters.scf_thr
-        prepare_vasp_inputs(
+        dftinputs = DFTInputs(
+            software='vasp',
             structure=structure,
             pp_path=pp_path,
+            orb_path=orb_path,
             kspacing=parameters.kspacing,
-            incar_dict=input,
-            incar_params=parameters.parameters,
+            inputs_dict=input,
+            inputs_params=parameters.parameters,
         )
+        dftinputs.write()
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for NVT input preparation yet."

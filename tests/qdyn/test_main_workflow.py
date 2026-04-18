@@ -3,9 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from qdyn.input import BasicInputT, InputT, SchedulerConfigT
+from qdyn.errors import ValidationError
+from qdyn.input import BasicInputT, InputT, SchedulerConfigT, SCFInputT
 from qdyn.main_workflow import MainWorkflow, ConfigError
-from qdyn.validation import load_config, validate_and_fill_runtime_config
+from qdyn.validation import (
+    load_config,
+    validate_and_fill_runtime_config,
+    validate_workflow_input,
+)
 
 
 def _make_manager() -> MainWorkflow:
@@ -64,6 +69,18 @@ def test_get_pool_workers():
     manager = _make_manager()
     workers = manager._get_pool_workers("local_slurm")
     assert workers == ["local_slurm_001", "local_slurm_002", "local_slurm_003"]
+
+
+def test_get_worker_resources_falls_back_to_pool_worker_config():
+    manager = _make_manager()
+    manager.config["worker_pools"]["local_slurm"]["worker"]["resources"] = {
+        "partition": "chu",
+        "account": "proj",
+    }
+
+    resources = manager._get_worker_resources("local_slurm")
+
+    assert resources == {"partition": "chu", "account": "proj"}
 
 
 def test_submit_uses_pool_dispatch(monkeypatch):
@@ -132,3 +149,39 @@ def test_load_config_requires_worker_pools(tmp_path: Path):
     with pytest.raises(ConfigError, match="Missing 'worker_pools'"):
         cfg, jf_cfg = load_config(qdyn_config)
         validate_and_fill_runtime_config(cfg, jf_cfg)
+
+
+def test_validate_workflow_input_requires_fused_inputs(tmp_path: Path):
+    payload = InputT(
+        basic_input=BasicInputT(),
+        scheduler_config=SchedulerConfigT(),
+        scf_input=SCFInputT(),
+        steps=["fused_scf_prenamd"],
+    )
+    worker_cfg = {
+        "installed": {
+            "vasp": True,
+            "vasp_ae": False,
+            "abacus": False,
+            "python": True,
+            "namd": True,
+        }
+    }
+    config = {"basic": {"user_data": str(tmp_path)}}
+
+    with pytest.raises(
+        ValidationError,
+        match="Step 'fused_scf_prenamd' requires 'prenamd_input'",
+    ):
+        validate_workflow_input(
+            payload,
+            method="namd",
+            stru="",
+            stru_format="vasp",
+            stru_hash="",
+            resume=False,
+            prev_task_id="",
+            known_task_ids=[],
+            config=config,
+            worker_cfg=worker_cfg,
+        )

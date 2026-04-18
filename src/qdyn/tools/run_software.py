@@ -1,9 +1,14 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
-def run_software(software: str, nprocs: int, monitor: Callable | None = None, **kwargs) -> None:
+def run_software(
+    software: str,
+    nprocs: int,
+    monitor: Callable | None = None,
+    **kwargs: Any,
+) -> None:
     """Run the specified software with appropriate settings.
 
     Args:
@@ -18,7 +23,7 @@ def run_software(software: str, nprocs: int, monitor: Callable | None = None, **
         raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
 
-def run_vasp(nprocs: int, is_alle: bool | None = False, **kwargs) -> None:
+def run_vasp(nprocs: int, is_alle: bool | None = False, **kwargs: Any) -> None:
     """Run VASP calculation using mpirun.
 
     Args:
@@ -45,11 +50,14 @@ def run_vasp(nprocs: int, is_alle: bool | None = False, **kwargs) -> None:
             vasp_exe = 'vasp_std'
 
     # Launch VASP
-    if "omp" in kwargs:
-        result = subprocess.run([f'OMP_NUM_THREADS={kwargs["omp"]}', 
-                                 'mpirun', '-np', str(nprocs), vasp_exe])
-    else:
-        result = subprocess.run(['mpirun', '-np', str(nprocs), vasp_exe])
+    env = os.environ.copy()
+    if "omp" in kwargs and kwargs["omp"] is not None:
+        env["OMP_NUM_THREADS"] = str(kwargs["omp"])
+
+    result = subprocess.run(
+        ['mpirun', '-np', str(nprocs), vasp_exe],
+        env=env,
+    )
     if result.returncode != 0:
         # Read queue.err for real error details
         err_hint = ""

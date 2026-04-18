@@ -4,6 +4,7 @@ import logging
 import shutil
 from copy import deepcopy
 from pathlib import Path
+from collections.abc import Generator
 from typing import Dict, List, Tuple, Any, TYPE_CHECKING
 
 import matplotlib
@@ -35,7 +36,7 @@ def qdyn_fused_scf_prenamd(
     orb_path: str,
     traj_file_path: str,
     traj_format: str,
-    cpus_per_node: int,
+    total_cpus: int,
     omp_software: int = 1,
     omp_python: int = 1,
     plot: bool = False,
@@ -66,7 +67,7 @@ def qdyn_fused_scf_prenamd(
             traj_format=traj_format,
             frame_start=frame_start,
             frame_end=frame_end,
-            cpus_per_node=cpus_per_node,
+            total_cpus=total_cpus,
             omp_software=omp_software,
             omp_python=omp_python,
             prepare_input_only=prepare_input_only,
@@ -75,13 +76,14 @@ def qdyn_fused_scf_prenamd(
         outs.append(j.output["tdolap_path"])
 
     # collect canac ouputs
+    last_batch_job = jobs[-1]
     j = qdyn_cat_canac_outputs(
         tdolap_paths=outs,
         md_dt=prenamd_input.md_dt,
         surface_hopping=prenamd_input.surface_hopping,
-        VBM=j["VBM"],
-        CBM=j["CBM"],
-        nproc=cpus_per_node // omp_python,
+        VBM=last_batch_job.output["VBM"],
+        CBM=last_batch_job.output["CBM"],
+        nproc=max(1, total_cpus // omp_python),
         plot=plot,
     )
     jobs.append(j)
@@ -100,17 +102,15 @@ def qdyn_fused_scf_prenamd_task(
     traj_format: str,
     frame_start: int,
     frame_end: int,
-    cpus_per_node: int,
+    total_cpus: int,
     omp_software: int = 1,
     omp_python: int = 4,
     prepare_input_only: bool = False,
 ) -> dict:
-    pp_path = str(Path(pp_path).expanduser().resolve())
-    orb_path = str(Path(orb_path).expanduser().resolve())
-    
+
     all_strus = read_strus(traj_format, traj_file_path=traj_file_path)
     software_lower = software.lower()
-    nprocs = cpus_per_node // omp_python
+    nprocs = total_cpus // omp_python
     scf_step = scf_input.scf_step
     if scf_step < 0:
         scf_step = len(all_strus)
@@ -185,7 +185,7 @@ def qdyn_fused_scf_prenamd_task(
                 # Run VASP
                 run_software(
                     software=software_lower, 
-                    nprocs=cpus_per_node // omp_software, 
+                    nprocs=total_cpus // omp_software, 
                     is_alle=scf_input.is_alle,
                     omp=omp_software
                 )
@@ -220,7 +220,7 @@ def qdyn_fused_scf_prenamd_task(
             )
             bmin = parse_band_index(prenamd_input.bmin, vbm, nbands)
             bmax = parse_band_index(prenamd_input.bmax, vbm, nbands)
-            canac = extract_tdolaps(
+            canac: Generator[dict[str, Any] | None, None, None] = extract_tdolaps(
                 run_dirs=subdirs,
                 software=software_lower,  # type: ignore
                 is_gamma_ver=dftinputs.gamma,
@@ -246,7 +246,9 @@ def qdyn_fused_scf_prenamd_task(
                     os.remove(fpath)
 
     # tdolap output
-    out: dict[str, Any] = next(canac, None) 
+    out = next(canac, None)
+    if out is None:
+        raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
     # Ensure generator is exhausted
     next(canac, None)
 
@@ -275,7 +277,7 @@ def qdyn_cat_canac_outputs(
     for store_path in tdolap_paths:
         data = np.load(store_path)
         check_list.append(data["success"])
-        tdolaps.append(data["olaps"])
+        tdolaps.append(data["tdolaps"])
         eigenvalues.append(data["eigenvalues"])
 
     check_list = np.concatenate(check_list, axis=0)

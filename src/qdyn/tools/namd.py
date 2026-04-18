@@ -41,11 +41,10 @@ def qdyn_namd(
     bmin = parse_band_index(parameters.bmin, VBM, 2147483647)
     bmax = parse_band_index(parameters.bmax, VBM, 2147483647)
 
-    eigenvalues = np.loadtxt("EIGTXT")
-    nsw, nbasis = eigenvalues.shape
-
     # EIGTXT and NATXT
     save_hfnamd_inputs(nac_path, bmin, bmax)
+    eigenvalues = np.loadtxt("EIGTXT")
+    nsw, nbasis = eigenvalues.shape
 
     # DEPHTIME
     if sh == 'DISH':

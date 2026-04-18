@@ -1,5 +1,6 @@
 import logging
 import multiprocessing
+from collections.abc import Generator
 from pathlib import Path
 import os
 import re
@@ -35,7 +36,7 @@ def extract_tdolaps(
     nproc: int = 1,
     dirs_sorted: bool = False,
     generator: bool = False,
-):
+) -> Generator[dict[str, Any] | None, None, None]:
     # input validation
     nbasis = bmax - bmin + 1
     
@@ -166,6 +167,19 @@ def extract_tdolaps(
         "tdolaps": tdolaps,
         "eigenvalues": eigenvalues,
     }
+
+
+def collect_tdolap_output(
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    out: dict[str, Any] | None = None
+    for item in extract_tdolaps(*args, **kwargs):
+        if item is not None:
+            out = item
+    if out is None:
+        raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
+    return out
 
 
 def extract_nacs(

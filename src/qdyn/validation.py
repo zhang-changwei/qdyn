@@ -20,6 +20,22 @@ SOFTWARE_MAPPING = {
     "namd": "namd",
 }
 
+
+def _expand_steps_for_validation(steps: Collection[str]) -> list[str]:
+    expanded: list[str] = []
+    has_fused = "fused_scf_prenamd" in steps
+    if has_fused and ("scf" in steps or "pre_namd" in steps):
+        raise ValidationError(
+            "Step 'fused_scf_prenamd' cannot be used together with 'scf' or 'pre_namd'."
+        )
+
+    for step in steps:
+        if step == "fused_scf_prenamd":
+            expanded.extend(["scf", "pre_namd"])
+        else:
+            expanded.append(step)
+    return expanded
+
 def _require_mapping(node: Any, err_msg: str) -> dict[str, Any]:
     """Ensure the node is a mapping and return it."""
     if not isinstance(node, dict):
@@ -367,14 +383,34 @@ def validate_workflow_input(
             "Currently only the combination of software='vasp' and method='namd' is supported.\n"
             f"Got software='{software}', method='{method}'."
         )
-    installed = worker_cfg["installed"]
+    installed_cfg = worker_cfg["installed"]
+    installed = [key for key, enabled in installed_cfg.items() if enabled]
     if software not in [SOFTWARE_MAPPING[s] for s in installed]:
         raise ValidationError(
             f"Software '{software}' is not installed on the worker."
         )
+    required_inputs = {
+        "nvt": ("nvt_input",),
+        "nve": ("nve_input",),
+        "scf": ("scf_input",),
+        "pre_namd": ("prenamd_input",),
+        "namd": ("namd_input",),
+        "fused_scf_prenamd": ("scf_input", "prenamd_input"),
+    }
+    for step in input.steps:
+        for field_name in required_inputs.get(step, ()):
+            if getattr(input, field_name) is None:
+                raise ValidationError(
+                    f"Step '{step}' requires '{field_name}' to be provided."
+                )
+
     # vasp_ae specific
-    if (software == "vasp" and "scf" in input.steps and 
-        input.scf_input is not None and input.scf_input.is_alle):
+    if (
+        software == "vasp"
+        and ("scf" in input.steps or "fused_scf_prenamd" in input.steps)
+        and input.scf_input is not None
+        and input.scf_input.is_alle
+    ):
 
         if "vasp_ae" not in installed:
             raise ValidationError(
@@ -385,7 +421,7 @@ def validate_workflow_input(
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
 
-    valid_steps = {"nvt", "nve", "scf", "pre_namd", "namd"}
+    valid_steps = {"nvt", "nve", "scf", "pre_namd", "namd", "fused_scf_prenamd"}
     unknown = set(input.steps) - valid_steps  # type: ignore[arg-type]
     if unknown:
         raise ValidationError(
@@ -394,7 +430,8 @@ def validate_workflow_input(
 
     if method == "namd":
         key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
-        step_int = sorted(key_map[s] for s in input.steps)
+        expanded_steps = _expand_steps_for_validation(input.steps)
+        step_int = sorted(key_map[s] for s in expanded_steps)
         for i in range(1, len(step_int)):
             if step_int[i] != step_int[i - 1] + 1:
                 raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")

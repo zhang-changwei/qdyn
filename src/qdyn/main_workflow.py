@@ -12,7 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
-from typing import Any, Tuple, Dict, List, Literal
+from typing import Any, Tuple, Dict, List, Literal, Sequence
 
 from ase import Atoms
 import ase.io
@@ -26,10 +26,12 @@ from .errors import ConfigError, ResumeError, ValidationError, QueryError
 from .input import InputT
 from .params import md_tracks
 from .validation import load_config, validate_workflow_input
+from .calc_common import write_strus
 
 from .tools.nvt import qdyn_nvt
 from .tools.nve import qdyn_nve
 from .tools.scf import qdyn_scf
+from .tools.fused_scf_prenamd import qdyn_fused_scf_prenamd
 from .tools.prepare_namd import qdyn_pre_namd
 from .tools.namd import qdyn_namd
 
@@ -340,7 +342,7 @@ class MainWorkflow:
             return jf_workers[worker_name]["resources"]
 
         # Fallback: pool-based config — use worker.resources from qdyn.yaml
-        pool_def = self.config['worker_pools']["resources"]
+        pool_def = self.config['worker_pools'][worker_name]
         return pool_def["worker"]["resources"]
 
     def _get_exec_config(
@@ -401,6 +403,599 @@ class MainWorkflow:
         cmd += [src, f"{target}:{dst}"]
         return cmd
 
+    def _get_first_step(
+        self, steps: list[str], method: Literal['namd', 'n2amd']
+    ) -> str:
+        if method != 'namd':
+            raise NotImplementedError(f"Method '{method}' is not supported yet.")
+        key_map = {
+            'nvt': 0,
+            'nve': 1,
+            'scf': 2,
+            'fused_scf_prenamd': 2,
+            'pre_namd': 3,
+            'namd': 4,
+        }
+        return min(steps, key=lambda step: key_map[step])
+
+    @staticmethod
+    def _should_run_step(step: str, steps: Sequence[str], flag: str) -> bool:
+        return step in steps or flag == f'gen_input_{step}'
+
+    @staticmethod
+    def _advance_prepare_flag(
+        flag: str, steps: Sequence[str], current_step: str, next_step: str
+    ) -> str:
+        if next_step and current_step in steps and next_step not in steps:
+            return f'gen_input_{next_step}'
+        return flag
+
+    def _build_exec_config(
+        self,
+        worker_name: str,
+        worker_cfg: Dict[str, Any],
+        software_names: list[str],
+        *,
+        omp_threads: int | None = None,
+    ) -> ExecutionConfig:
+        modules: list[str] = []
+        export: dict[str, Any] = {}
+        pre_run_parts: list[str] = []
+
+        for software_name in software_names:
+            modules.extend(
+                self._get_exec_config(worker_name, worker_cfg, software_name, 'modules')
+            )
+            export.update(
+                self._get_exec_config(worker_name, worker_cfg, software_name, 'export')
+            )
+            pre_run = self._get_exec_config(
+                worker_name, worker_cfg, software_name, 'pre_run'
+            )
+            if pre_run:
+                pre_run_parts.append(pre_run)
+
+        if omp_threads is not None:
+            export['OMP_NUM_THREADS'] = str(omp_threads)
+
+        return ExecutionConfig(
+            modules=list(dict.fromkeys(modules)),
+            export=export,
+            pre_run='\n'.join(pre_run_parts),
+            post_run=None,
+        )
+
+    def _build_resources(
+        self,
+        resource_worker: str,
+        base_resources: Dict[str, Any] | None = None,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        resources = {**self._get_worker_resources(resource_worker)}
+        if base_resources is not None:
+            resources.update(base_resources)
+        resources.update(overrides)
+        return resources
+
+    def _write_user_trajectory(
+        self,
+        *,
+        software: str,
+        stru: str,
+        stru_format: str,
+        effective_worker_name: str,
+    ) -> tuple[str, str]:
+        strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
+        work_dir = self._get_worker_work_dir(effective_worker_name)
+
+        if self._is_remote_worker(effective_worker_name):
+            stru_id = str(uuid.uuid4())
+            stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
+            remote_host = (
+                self.jf_config['workers'].get(effective_worker_name, {}).get('host', '')
+            )
+
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    local_file = write_strus(software, strus_ase, tmpdir)
+                    track_filename = os.path.basename(local_file)
+                    traj_file_path = f"{stru_dir_remote}/{track_filename}"
+
+                    subprocess.run(
+                        self._get_ssh_cmd(
+                            effective_worker_name,
+                            f'mkdir -p {stru_dir_remote}',
+                        ),
+                        check=True,
+                        timeout=30,
+                    )
+                    subprocess.run(
+                        self._get_scp_cmd(
+                            effective_worker_name,
+                            local_file,
+                            traj_file_path,
+                        ),
+                        check=True,
+                        timeout=60,
+                    )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as exc:
+                raise ConfigError(
+                    f"Failed to upload trajectory to remote worker "
+                    f"'{effective_worker_name}' (host={remote_host}). "
+                    f"Check SSH connectivity and work_dir permissions. "
+                    f"Target: {stru_dir_remote}"
+                ) from exc
+        else:
+            stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
+            stru_dir.mkdir(parents=True, exist_ok=True)
+            traj_file_path = write_strus(software, strus_ase, str(stru_dir))
+
+        return traj_file_path, stru_format
+
+    def step_nvt(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        stru: str,
+        stru_format: str,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        software = input.basic_input.software
+        assert input.nvt_input is not None
+        if is_first_step and resume:
+            try:
+                prev_job_uuid = self.job_ids[prev_task_id]['nvt'][0]
+                structure = self.get_job_output(prev_job_uuid)['stru']
+            except Exception as exc:
+                raise ResumeError(
+                    "Previous job for step 'nvt' not found or has no output. "
+                    "Cannot resume nvt."
+                ) from exc
+        elif stru:
+            structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore[arg-type]
+            if structure.get('constraints') is not None:
+                structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+        else:
+            raise ValidationError(
+                "No structure provided for the nvt step. \n"
+                "Provide a structure string or set resume=True with a valid prev_task_id."
+            )
+
+        nodes = (
+            input.nvt_input.nodes
+            if input.nvt_input.nodes is not None
+            else effective_worker_cfg['nvt'][software]['nodes']
+        )
+        ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
+        cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
+
+        job_nvt = qdyn_nvt(
+            software=software,
+            parameters=input.nvt_input,
+            pp_path=effective_worker_cfg["pp_path"][software],
+            orb_path=effective_worker_cfg["orb_path"][software],
+            structure=structure,
+            nodes=nodes,
+            ntasks_per_node=ntasks_per_node,
+            cpus_per_task=cpus_per_task,
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+        job_nvt = set_run_config(
+            job_nvt,
+            exec_config=self._build_exec_config(
+                effective_worker_name,
+                effective_worker_cfg,
+                [software],
+            ),
+            resources=self._build_resources(
+                resource_worker,
+                effective_worker_cfg['nvt'][software],
+                nodes=nodes,
+            ),
+        )
+        return [job_nvt]
+
+    def step_nve(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        stru: str,
+        stru_format: str,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        software = input.basic_input.software
+        assert input.nve_input is not None
+        if 'nvt' in jobs:
+            structure = jobs['nvt'][0].output['stru']
+        elif is_first_step and resume:
+            try:
+                prev_job_uuid = self.job_ids[prev_task_id]['nvt'][0]
+                structure = self.get_job_output(prev_job_uuid)['stru']
+            except Exception as exc:
+                raise ResumeError(
+                    "Previous job for step 'nvt' not found or has no output. "
+                    "Cannot resume nve."
+                ) from exc
+        elif stru:
+            structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore[arg-type]
+            if structure.get('constraints') is not None:
+                structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+        else:
+            raise ValidationError(
+                "No structure provided for NVE step. \n"
+                "Provide a structure string or set resume=True with a valid prev_task_id."
+            )
+
+        nodes = (
+            input.nve_input.nodes
+            if input.nve_input.nodes is not None
+            else effective_worker_cfg['nve'][software]['nodes']
+        )
+        ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
+        cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
+
+        job_nve = qdyn_nve(
+            software=software,
+            parameters=input.nve_input,
+            pp_path=effective_worker_cfg["pp_path"][software],
+            orb_path=effective_worker_cfg["orb_path"][software],
+            structure=structure,
+            nodes=nodes,
+            ntasks_per_node=ntasks_per_node,
+            cpus_per_task=cpus_per_task,
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+        job_nve = set_run_config(
+            job_nve,
+            exec_config=self._build_exec_config(
+                effective_worker_name,
+                effective_worker_cfg,
+                [software],
+            ),
+            resources=self._build_resources(
+                resource_worker,
+                effective_worker_cfg['nve'][software],
+                nodes=nodes,
+            ),
+        )
+        return [job_nve]
+
+    def step_scf(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        stru: str,
+        stru_format: str,
+        stru_hash: str,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        software = input.basic_input.software
+        assert input.scf_input is not None
+        if software == 'abacus':
+            return []
+
+        if 'nve' in jobs:
+            traj_file_path = jobs['nve'][0].output['traj_file_path']
+            traj_format = software
+        elif is_first_step and resume:
+            try:
+                prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
+                nve_output = self.get_job_output(prev_job_uuid)
+                traj_file_path = nve_output['traj_file_path']
+                traj_format = software
+            except Exception as exc:
+                raise ResumeError(
+                    "Previous job for step 'nve' not found or has no output. "
+                    "Cannot resume scf."
+                ) from exc
+        elif stru_hash:
+            data_dir = Path(self.config['basic']['user_data']).resolve()
+            traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
+            traj_format = stru_format
+        else:
+            raise ValidationError(
+                "SCF step requires NVE output. Include 'nve' in steps, "
+                "or set resume=True with a prev_task_id that has NVE results."
+            )
+
+        nodes = (
+            input.scf_input.nodes
+            if input.scf_input.nodes is not None
+            else effective_worker_cfg['scf'][software]['nodes']
+        )
+        ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
+        cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
+
+        jobs_scf = qdyn_scf(
+            software=software,
+            parameters=input.scf_input,
+            pp_path=effective_worker_cfg["pp_path"][software],
+            orb_path=effective_worker_cfg["orb_path"][software],
+            traj_file_path=traj_file_path, # type: ignore
+            traj_format=traj_format,
+            nodes=nodes,
+            ntasks_per_node=ntasks_per_node,
+            cpus_per_task=cpus_per_task,
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+        for idx, job_scf in enumerate(jobs_scf):
+            jobs_scf[idx] = set_run_config(
+                job_scf,
+                exec_config=self._build_exec_config(
+                    effective_worker_name,
+                    effective_worker_cfg,
+                    [software],
+                ),
+                resources=self._build_resources(
+                    resource_worker,
+                    effective_worker_cfg['scf'][software],
+                    nodes=nodes,
+                ),
+            )
+        return jobs_scf
+
+    def step_fused_scf_prenamd(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        stru: str,
+        stru_format: str,
+        stru_hash: str,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        software = input.basic_input.software
+        assert input.scf_input is not None
+        assert input.prenamd_input is not None
+        if 'nve' in jobs:
+            traj_file_path = jobs['nve'][0].output['traj_file_path']
+            traj_format = software
+        elif is_first_step and resume:
+            try:
+                prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
+                nve_output = self.get_job_output(prev_job_uuid)
+                traj_file_path = nve_output['traj_file_path']
+                traj_format = software
+            except Exception as exc:
+                raise ResumeError(
+                    "Previous job for step 'nve' not found or has no output. "
+                    "Cannot resume fused_scf_prenamd."
+                ) from exc
+        elif stru_hash:
+            data_dir = Path(self.config['basic']['user_data']).resolve()
+            traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
+            traj_format = stru_format
+        else:
+            raise ValidationError(
+                "FUSED_SCF_PRENAMD step requires NVE output. Include 'nve' in steps, "
+                "or set resume=True with a prev_task_id that has NVE results."
+            )
+
+        nodes = 1
+        if (input.scf_input.nodes is not None and 
+            input.scf_input.nodes > 1):
+            logging.warning(
+                "FUSED_SCF_PRENAMD step is designed to run on a single node. "
+                "Overriding nodes to 1 for this step."
+            )
+        ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
+        cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
+        total_cpus = nodes * ntasks_per_node * cpus_per_task
+        nproc = max(1, min(8, total_cpus))
+        omp_python = max(1, total_cpus // nproc)
+
+        jobs_fused = qdyn_fused_scf_prenamd(
+            software=software,
+            scf_input=input.scf_input,
+            prenamd_input=input.prenamd_input,
+            pp_path=effective_worker_cfg["pp_path"][software],
+            orb_path=effective_worker_cfg["orb_path"][software],
+            traj_file_path=traj_file_path, # type: ignore
+            traj_format=traj_format,
+            total_cpus=total_cpus,
+            omp_software=cpus_per_task,
+            omp_python=omp_python,
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+
+        for idx, fused_job in enumerate(jobs_fused):
+            software_names = ['python'] if idx == len(jobs_fused) - 1 else [software, 'python']
+            jobs_fused[idx] = set_run_config(
+                fused_job,
+                exec_config=self._build_exec_config(
+                    effective_worker_name,
+                    effective_worker_cfg,
+                    software_names,
+                    omp_threads=omp_python,
+                ),
+                resources=self._build_resources(
+                    resource_worker,
+                    effective_worker_cfg['scf'][software],
+                    nodes=nodes,
+                ),
+            )
+        return jobs_fused
+
+    def step_pre_namd(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        software = input.basic_input.software
+        assert input.prenamd_input is not None
+        prev_step = 'scf' if software != 'abacus' else 'nve'
+        if prev_step in jobs:
+            run_dirs = [jobs[prev_step][idx].output['run_dir'] for idx in range(len(jobs[prev_step]))]
+        elif is_first_step and resume:
+            try:
+                run_dirs = []
+                for prev_job_uuid in self.job_ids[prev_task_id][prev_step]:
+                    output = self.get_job_output(prev_job_uuid)
+                    run_dirs.append(output['run_dir'])
+            except Exception as exc:
+                raise ResumeError(
+                    f"Previous job(s) for step '{prev_step}' not found or has no output. "
+                    f"Cannot resume pre_namd."
+                ) from exc
+        else:
+            raise ValidationError(
+                f"PRE_NAMD step requires '{prev_step}' output. Include '{prev_step}' "
+                f"in steps, or set resume=True with a prev_task_id that has "
+                f"'{prev_step}' results."
+            )
+
+        ncpus = effective_worker_cfg['cpus_per_node']
+        omp_threads = max(1, min(4, ncpus))
+        job_pre_namd = qdyn_pre_namd(
+            software=software,
+            parameters=input.prenamd_input,
+            run_dirs=run_dirs,
+            nproc=max(1, ncpus // omp_threads),
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+        job_pre_namd = set_run_config(
+            job_pre_namd,
+            exec_config=self._build_exec_config(
+                effective_worker_name,
+                effective_worker_cfg,
+                ['python'],
+                omp_threads=omp_threads,
+            ),
+            resources=self._build_resources(
+                resource_worker,
+                None,
+                nodes=1,
+                ntasks_per_node=1,
+                cpus_per_task=ncpus,
+            ),
+        )
+        return [job_pre_namd]
+
+    def step_namd(
+        self,
+        *,
+        input: InputT,
+        jobs: Dict[str, List[Job | Flow]],
+        is_first_step: bool,
+        resume: bool,
+        prev_task_id: str,
+        effective_worker_name: str,
+        effective_worker_cfg: Dict[str, Any],
+        resource_worker: str,
+        prepare_input_only: bool,
+    ) -> list[Job | Flow]:
+        assert input.namd_input is not None
+        if 'fused_scf_prenamd' in jobs:
+            prev_output = jobs['fused_scf_prenamd'][-1].output
+        elif 'pre_namd' in jobs:
+            prev_output = jobs['pre_namd'][0].output
+        elif is_first_step and resume:
+            prev_step = (
+                'fused_scf_prenamd'
+                if 'fused_scf_prenamd' in self.job_ids.get(prev_task_id, {})
+                else 'pre_namd'
+            )
+            try:
+                prev_job_uuid = self.job_ids[prev_task_id][prev_step][-1]
+                prev_output = self.get_job_output(prev_job_uuid)
+            except Exception as exc:
+                raise ResumeError(
+                    f"Previous job for step '{prev_step}' not found or has no output. "
+                    f"Cannot resume namd."
+                ) from exc
+        else:
+            raise ValidationError(
+                "NAMD step requires PRE_NAMD or FUSED_SCF_PRENAMD output. "
+                "Include 'pre_namd'/'fused_scf_prenamd' in steps, or set "
+                "resume=True with a prev_task_id that has those results."
+            )
+
+        if input.namd_input.surface_hopping == 'FSSH':
+            nodes = 1
+            ntasks_per_node = 1
+            cpus_per_task = effective_worker_cfg['cpus_per_node']
+        else:
+            nodes = (
+                input.namd_input.nodes
+                if input.namd_input.nodes is not None
+                else 1
+            )
+            ntasks_per_node = effective_worker_cfg['cpus_per_node']
+            cpus_per_task = 1
+
+        job_namd = qdyn_namd(
+            parameters=input.namd_input,
+            nac_path=prev_output['nac_path'],
+            deph_path=prev_output['deph_path'],
+            VBM=prev_output['VBM'],
+            CBM=prev_output['CBM'],
+            nodes=nodes,
+            ntasks_per_node=ntasks_per_node,
+            cpus_per_task=cpus_per_task,
+            plot=input.basic_input.plot,
+            prepare_input_only=prepare_input_only,
+        )
+        job_namd = set_run_config(
+            job_namd,
+            exec_config=self._build_exec_config(
+                effective_worker_name,
+                effective_worker_cfg,
+                ['namd'],
+                omp_threads=cpus_per_task,
+            ),
+            resources=self._build_resources(
+                resource_worker,
+                None,
+                nodes=nodes,
+                ntasks_per_node=ntasks_per_node,
+                cpus_per_task=cpus_per_task,
+            ),
+        )
+        return [job_namd]
+
     # ------------------------------------------------------------------
     # Core logic
     # ------------------------------------------------------------------
@@ -455,514 +1050,124 @@ class MainWorkflow:
             worker_cfg=effective_worker_cfg,
         )
 
-        if method == 'namd':
-            key_map = {'nvt': 0, 'nve': 1, 'scf': 2, 'pre_namd': 3, 'namd': 4}
-            inv_map = {v: k for k, v in key_map.items()}
-            step_int = [key_map[step] for step in input.steps]
-            step_int.sort()
-            first_step = inv_map[step_int[0]]
-        else:
-            raise NotImplementedError(f"Method '{method}' is not supported yet.")
+        first_step = self._get_first_step(input.steps, method)
 
-        # step 1: NVT
-        if (
-            'nvt' in input.steps or flag == 'gen_input_nvt'
-        ) and input.nvt_input is not None:
-            prev_step = ''
+        if self._should_run_step('nvt', input.steps, flag) and input.nvt_input is not None:
             next_step = 'nve'
-            if prev_step in input.steps:
-                structure = jobs[prev_step][0].output['stru']
-            elif first_step == 'nvt' and resume:
-                try:
-                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    structure = self.get_job_output(prev_job_uuid)['stru']
-                except Exception as exc:
-                    raise ResumeError(
-                        f"Previous job for step '{prev_step}' not found or has no output. "
-                        f"Cannot resume nvt."
-                    ) from exc
-            elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore
-                if structure.get('constraints') is not None:
-                    structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore
-            else:
-                raise ValidationError(
-                    "No structure provided for the nvt step. \n"
-                    "Provide a structure string or set resume=True with a valid prev_task_uuid."
-                )
-
-            nodes = (
-                input.nvt_input.nodes
-                if input.nvt_input.nodes is not None
-                else effective_worker_cfg['nvt'][software]['nodes']
-            )
-            assert (
-                nodes > 0
-            ), "[NVT] nodes must be a positive integer or omitted to use the default."
-            ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
-            cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
-            pp_path = effective_worker_cfg["pp_path"][software]
-            orb_path = effective_worker_cfg["orb_path"][software]
-
-            job_nvt = qdyn_nvt(
-                software=software,
-                parameters=input.nvt_input,
-                pp_path=pp_path,
-                orb_path=orb_path,
-                structure=structure,
-                nodes=nodes,
-                ntasks_per_node=ntasks_per_node,
-                cpus_per_task=cpus_per_task,
-                plot=input.basic_input.plot,
+            jobs['nvt'] = self.step_nvt(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'nvt',
+                stru=stru,
+                stru_format=stru_format,
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
-            job_nvt = set_run_config(
-                job_nvt,
-                exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'modules'
-                    ),
-                    export=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'export'
-                    ),
-                    pre_run=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'pre_run'
-                    ),
-                    post_run=None,
-                ),
-                resources={
-                    **self._get_worker_resources(resource_worker),
-                    **effective_worker_cfg['nvt'][software],
-                    'nodes': nodes,
-                },
+            flag = self._advance_prepare_flag(flag, input.steps, 'nvt', next_step)
+
+        if self._should_run_step('nve', input.steps, flag) and input.nve_input is not None:
+            next_step = (
+                'fused_scf_prenamd'
+                if 'fused_scf_prenamd' in input.steps
+                else 'scf'
             )
-            jobs['nvt'] = [job_nvt]
-
-            # update flag
-            is_last_step = (
-                True if next_step not in input.steps and 'nvt' in input.steps else False
-            )
-            if is_last_step:
-                flag = f'gen_input_{next_step}'
-
-        # step 2: NVE
-        if (
-            'nve' in input.steps or flag == 'gen_input_nve'
-        ) and input.nve_input is not None:
-            prev_step = 'nvt'
-            next_step = 'scf'
-            if prev_step in input.steps:
-                structure = jobs[prev_step][0].output['stru']
-            elif first_step == 'nve' and resume:
-                try:
-                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    structure = self.get_job_output(prev_job_uuid)['stru']
-                except Exception as exc:
-                    raise ResumeError(
-                        f"Previous job for step '{prev_step}' not found or has no output. "
-                        f"Cannot resume nve."
-                    ) from exc
-            elif stru:
-                structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore
-                if structure.get('constraints') is not None:
-                    structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore
-            else:
-                raise ValidationError(
-                    "No structure provided for NVE step. \n"
-                    "Provide a structure string or set resume=True with a valid prev_task_id."
-                )
-
-            nodes = (
-                input.nve_input.nodes
-                if input.nve_input.nodes is not None
-                else effective_worker_cfg['nve'][software]['nodes']
-            )
-            assert (
-                nodes > 0
-            ), "[NVE] nodes must be a positive integer or omitted to use the default."
-            ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
-            cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
-            pp_path = effective_worker_cfg["pp_path"][software]
-            orb_path = effective_worker_cfg["orb_path"][software]
-
-            job_nve = qdyn_nve(
-                software=software,
-                parameters=input.nve_input,
-                pp_path=pp_path,
-                orb_path=orb_path,
-                structure=structure,
-                nodes=nodes,
-                ntasks_per_node=ntasks_per_node,
-                cpus_per_task=cpus_per_task,
-                plot=input.basic_input.plot,
+            jobs['nve'] = self.step_nve(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'nve',
+                stru=stru,
+                stru_format=stru_format,
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
-            job_nve = set_run_config(
-                job_nve,
-                exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'modules'
-                    ),
-                    export=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'export'
-                    ),
-                    pre_run=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, software, 'pre_run'
-                    ),
-                    post_run=None,
-                ),
-                resources={
-                    **self._get_worker_resources(resource_worker),
-                    **effective_worker_cfg['nve'][software],
-                    'nodes': nodes,
-                },
+            flag = self._advance_prepare_flag(flag, input.steps, 'nve', next_step)
+
+        if self._should_run_step('scf', input.steps, flag) and input.scf_input is not None:
+            next_step = 'pre_namd'
+            jobs_scf = self.step_scf(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'scf',
+                stru=stru,
+                stru_format=stru_format,
+                stru_hash=stru_hash,
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
+                prepare_input_only=bool(flag),
             )
-            jobs['nve'] = [job_nve]
-
-            # update flag
-            is_last_step = (
-                True if next_step not in input.steps and 'nve' in input.steps else False
-            )
-            if is_last_step:
-                flag = f'gen_input_{next_step}'
-
-        # step 3: SCF
-        if (
-            'scf' in input.steps or flag == 'gen_input_scf'
-        ) and input.scf_input is not None:
-            if software == 'abacus':
-                # no need for scf calc if using abacus
-                pass
-            else:
-                prev_step = 'nve'
-                next_step = 'pre_namd'
-                if prev_step in input.steps:
-                    # NVE in the same flow: OutputReference resolves to traj path
-                    traj_file_path = jobs[prev_step][0].output['traj_file_path']
-                    traj_format = input.basic_input.software
-                elif first_step == 'scf' and resume:
-                    # Resume SCF from a previous task
-                    try:
-                        prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                        nve_output = self.get_job_output(prev_job_uuid)
-                        if 'traj_file_path' in nve_output:
-                            traj_file_path = nve_output['traj_file_path']
-                        else:
-                            # NVE output before traj_file_path was added
-                            traj_file_path = os.path.join(
-                                nve_output['run_dir'],
-                                md_tracks[software.lower()],
-                            )
-                        traj_format = input.basic_input.software
-                    except Exception as exc:
-                        raise ResumeError(
-                            f"Previous job for step '{prev_step}' not found or has no output. "
-                            f"Cannot resume scf."
-                        ) from exc
-                elif stru_hash:
-                    data_dir = Path(self.config['basic']['user_data']).resolve()
-                    traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
-                    traj_format = stru_format
-                elif stru:
-                    # User-provided structure text: write to trajectory file
-                    strus_ase = ase.io.read(
-                        io.StringIO(stru), format=stru_format, index=':'
-                    )
-                    work_dir = self._get_worker_work_dir(effective_worker_name)
-
-                    if self._is_remote_worker(effective_worker_name):
-                        # Remote worker: write locally then scp to remote host
-                        import tempfile
-
-                        stru_id = str(uuid.uuid4())
-                        stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
-                        remote_host = (
-                            self.jf_config['workers']
-                            .get(effective_worker_name, {})
-                            .get('host', '')
-                        )
-
-                        try:
-                            with tempfile.TemporaryDirectory() as tmpdir:
-                                local_file = write_strus(software, strus_ase, tmpdir)
-                                track_filename = os.path.basename(local_file)
-                                traj_file_path = f"{stru_dir_remote}/{track_filename}"
-
-                                subprocess.run(
-                                    self._get_ssh_cmd(
-                                        effective_worker_name,
-                                        f'mkdir -p {stru_dir_remote}',
-                                    ),
-                                    check=True,
-                                    timeout=30,
-                                )
-                                subprocess.run(
-                                    self._get_scp_cmd(
-                                        effective_worker_name,
-                                        local_file,
-                                        traj_file_path,
-                                    ),
-                                    check=True,
-                                    timeout=60,
-                                )
-                        except (
-                            subprocess.CalledProcessError,
-                            subprocess.TimeoutExpired,
-                        ) as exc:
-                            raise ConfigError(
-                                f"Failed to upload trajectory to remote worker "
-                                f"'{effective_worker_name}' (host={remote_host}). "
-                                f"Check SSH connectivity and work_dir permissions. "
-                                f"Target: {stru_dir_remote}"
-                            ) from exc
-                    else:
-                        # Local worker: write directly to work_dir
-                        stru_dir = (
-                            Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
-                        )
-                        stru_dir.mkdir(parents=True, exist_ok=True)
-                        traj_file_path = write_strus(software, strus_ase, str(stru_dir))
-
-                    traj_format = stru_format
-                else:
-                    raise ValidationError(
-                        "SCF step requires NVE output. Include 'nve' in steps, "
-                        "or set resume=True with a prev_task_id that has NVE results."
-                    )
-
-                nodes = (
-                    input.scf_input.nodes
-                    if input.scf_input.nodes is not None
-                    else effective_worker_cfg['scf'][software]['nodes']
-                )
-                assert (
-                    nodes > 0
-                ), "[SCF] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = effective_worker_cfg['scf'][software][
-                    'ntasks_per_node'
-                ]
-                cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
-                pp_path = effective_worker_cfg["pp_path"][software]
-                orb_path = effective_worker_cfg["orb_path"][software]
-
-                jobs_scf = qdyn_scf(
-                    software=software,
-                    parameters=input.scf_input,
-                    pp_path=pp_path,
-                    orb_path=orb_path,
-                    traj_file_path=traj_file_path,
-                    traj_format=traj_format,
-                    nodes=nodes,
-                    ntasks_per_node=ntasks_per_node,
-                    cpus_per_task=cpus_per_task,
-                    plot=input.basic_input.plot,
-                    prepare_input_only=bool(flag),
-                )
-                for i in range(len(jobs_scf)):
-                    jobs_scf[i] = set_run_config(
-                        jobs_scf[i],
-                        exec_config=ExecutionConfig(
-                            modules=self._get_exec_config(
-                                effective_worker_name,
-                                effective_worker_cfg,
-                                software,
-                                'modules',
-                            ),
-                            export=self._get_exec_config(
-                                effective_worker_name,
-                                effective_worker_cfg,
-                                software,
-                                'export',
-                            ),
-                            pre_run=self._get_exec_config(
-                                effective_worker_name,
-                                effective_worker_cfg,
-                                software,
-                                'pre_run',
-                            ),
-                            post_run=None,
-                        ),
-                        resources={
-                            **self._get_worker_resources(resource_worker),
-                            **effective_worker_cfg['scf'][software],
-                            'nodes': nodes,
-                        },
-                    )
+            # ABACUS does not need a separate SCF job before PRE_NAMD, so
+            # step_scf() returns an empty list and we should not register it.
+            if jobs_scf:
                 jobs['scf'] = jobs_scf
+            flag = self._advance_prepare_flag(flag, input.steps, 'scf', next_step)
 
-                # update flag
-                is_last_step = (
-                    True
-                    if next_step not in input.steps and 'scf' in input.steps
-                    else False
-                )
-                if is_last_step:
-                    flag = f'gen_input_{next_step}'
-
-        # step 4: PRE_NAMD
         if (
-            'pre_namd' in input.steps or flag == 'gen_input_pre_namd'
-        ) and input.prenamd_input is not None:
-            prev_step = 'scf' if software != 'abacus' else 'nve'
+            self._should_run_step('fused_scf_prenamd', input.steps, flag)
+            and input.scf_input is not None
+            and input.prenamd_input is not None
+        ):
             next_step = 'namd'
-            if prev_step in input.steps:
-                run_dirs = []
-                for idx in range(len(jobs[prev_step])):
-                    run_dirs.append(jobs[prev_step][idx].output['run_dir'])
-            elif first_step == 'pre_namd' and resume:
-                try:
-                    prev_jobs = self.job_ids[prev_task_id][prev_step]
-                    run_dirs = []
-                    for prev_job_uuid in prev_jobs:
-                        output = self.get_job_output(prev_job_uuid)
-                        run_dirs.append(output['run_dir'])
-                except Exception as exc:
-                    raise ResumeError(
-                        f"Previous job(s) for step '{prev_step}' not found or has no output. "
-                        f"Cannot resume pre_namd."
-                    ) from exc
-            else:
-                raise ValidationError(
-                    f"PRE_NAMD step requires '{prev_step}' output. Include '{prev_step}' "
-                    f"in steps, or set resume=True with a prev_task_id that has "
-                    f"'{prev_step}' results."
-                )
-
-            ncpus = effective_worker_cfg['cpus_per_node']
-            job_pre_namd = qdyn_pre_namd(
-                software=software,
-                parameters=input.prenamd_input,
-                run_dirs=run_dirs,
-                nproc=ncpus // 4,
-                plot=input.basic_input.plot,
+            jobs['fused_scf_prenamd'] = self.step_fused_scf_prenamd(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'fused_scf_prenamd',
+                stru=stru,
+                stru_format=stru_format,
+                stru_hash=stru_hash,
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
-            job_pre_namd = set_run_config(
-                job_pre_namd,
-                exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, 'python', 'modules'
-                    ),
-                    export={
-                        **self._get_exec_config(
-                            effective_worker_name,
-                            effective_worker_cfg,
-                            'python',
-                            'export',
-                        ),
-                        'OMP_NUM_THREADS': '4',
-                    },
-                    pre_run=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, 'python', 'pre_run'
-                    ),
-                    post_run=None,
-                ),
-                resources={
-                    **self._get_worker_resources(resource_worker),
-                    'nodes': 1,
-                    'ntasks_per_node': 1,
-                    'cpus_per_task': ncpus,
-                },
+            flag = self._advance_prepare_flag(
+                flag, input.steps, 'fused_scf_prenamd', next_step
             )
-            jobs['pre_namd'] = [job_pre_namd]
 
-            # update flag
-            is_last_step = (
-                True
-                if next_step not in input.steps and 'pre_namd' in input.steps
-                else False
-            )
-            if is_last_step:
-                flag = f'gen_input_{next_step}'
-
-        # step 4: NAMD
         if (
-            'namd' in input.steps or flag == 'gen_input_namd'
-        ) and input.namd_input is not None:
-            prev_step = 'pre_namd'
-            next_step = ''
-            if prev_step in input.steps:
-                prev_output = jobs[prev_step][0].output
-            elif first_step == 'namd' and resume:
-                try:
-                    prev_job_uuid = self.job_ids[prev_task_id][prev_step][0]
-                    prev_output = self.get_job_output(prev_job_uuid)
-                except Exception as exc:
-                    raise ResumeError(
-                        f"Previous job for step '{prev_step}' not found or has no output. "
-                        f"Cannot resume namd."
-                    ) from exc
-            else:
-                raise ValidationError(
-                    "NAMD step requires PRE_NAMD output. Include 'pre_namd' in steps, "
-                    "or set resume=True with a prev_task_id that has PRE_NAMD results."
-                )
-            eigtxt = prev_output['EIGTXT']
-            natxt = prev_output['NATXT']
-            dephtime = prev_output['DEPHTIME']
-
-            if input.namd_input.surface_hopping == 'FSSH':
-                nodes = 1
-                ntasks_per_node = 1
-                cpus_per_task = effective_worker_cfg['cpus_per_node']
-            else:
-                nodes = (
-                    input.namd_input.nodes if input.namd_input.nodes is not None else 1
-                )
-                assert (
-                    nodes > 0
-                ), "[NAMD] nodes must be a positive integer or omitted to use the default."
-                ntasks_per_node = effective_worker_cfg['cpus_per_node']
-                cpus_per_task = 1
-
-            job_namd = qdyn_namd(
-                parameters=input.namd_input,
-                eigtxt=eigtxt,
-                natxt=natxt,
-                dephtime=dephtime,
-                nodes=nodes,
-                ntasks_per_node=ntasks_per_node,
-                cpus_per_task=cpus_per_task,
-                plot=input.basic_input.plot,
+            self._should_run_step('pre_namd', input.steps, flag)
+            and input.prenamd_input is not None
+        ):
+            next_step = 'namd'
+            jobs['pre_namd'] = self.step_pre_namd(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'pre_namd',
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
-            job_namd = set_run_config(
-                job_namd,
-                exec_config=ExecutionConfig(
-                    modules=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, 'namd', 'modules'
-                    ),
-                    export={
-                        **self._get_exec_config(
-                            effective_worker_name,
-                            effective_worker_cfg,
-                            'namd',
-                            'export',
-                        ),
-                        'OMP_NUM_THREADS': str(cpus_per_task),
-                    },
-                    pre_run=self._get_exec_config(
-                        effective_worker_name, effective_worker_cfg, 'namd', 'pre_run'
-                    ),
-                    post_run=None,
-                ),
-                resources={
-                    **self._get_worker_resources(resource_worker),
-                    'nodes': nodes,
-                    'ntasks_per_node': ntasks_per_node,
-                    'cpus_per_task': cpus_per_task,
-                },
-            )
-            jobs['namd'] = [job_namd]
+            flag = self._advance_prepare_flag(flag, input.steps, 'pre_namd', next_step)
 
-            # update flag
-            is_last_step = (
-                True
-                if next_step not in input.steps and 'namd' in input.steps
-                else False
+        if self._should_run_step('namd', input.steps, flag) and input.namd_input is not None:
+            next_step = ''
+            jobs['namd'] = self.step_namd(
+                input=input,
+                jobs=jobs,
+                is_first_step=first_step == 'namd',
+                resume=resume,
+                prev_task_id=prev_task_id,
+                effective_worker_name=effective_worker_name,
+                effective_worker_cfg=effective_worker_cfg,
+                resource_worker=resource_worker,
+                prepare_input_only=bool(flag),
             )
-            if is_last_step:
-                flag = f'gen_input_{next_step}'
+            flag = self._advance_prepare_flag(flag, input.steps, 'namd', next_step)
 
         if not jobs:
             raise ValidationError(

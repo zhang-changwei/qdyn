@@ -12,7 +12,7 @@ from qdyn.tools.nvt import add_constraints
 
 from ..input import NVEInputT
 from ..params import params_default, md_tracks, md_ase_formats
-from ..input_prepare import prepare_vasp_inputs
+from ..input_prepare import DFTInputs
 from ..output_postprocess import (
     extract_md_data_from_oszicar,
     check_scf_convergence,
@@ -156,13 +156,16 @@ def _prepare_nve_input(
         input['NSW'] = parameters.md_step
         input['EDIFF'] = parameters.scf_thr
 
-        prepare_vasp_inputs(
+        dftinputs = DFTInputs(
+            software='vasp',
             structure=structure,
             pp_path=pp_path,
+            orb_path=orb_path,
             kspacing=parameters.kspacing,
-            incar_dict=input,
-            incar_params=parameters.parameters,
+            inputs_dict=input,
+            inputs_params=parameters.parameters,
         )
+        dftinputs.write()
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for NVE input preparation yet."

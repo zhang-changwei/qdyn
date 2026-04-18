@@ -13,7 +13,7 @@ from jobflow import job
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
 from ..output_postprocess import extract_wht_with_cache, extract_band_edges
-from .canac import extract_tdolaps, extract_nacs
+from .canac import collect_tdolap_output, extract_nacs
 from .dephase import calculate_dephasing_time
 
 
@@ -94,7 +94,7 @@ def qdyn_pre_namd(
     bmin = parse_band_index(parameters.bmin, vbm, nbands)
     bmax = parse_band_index(parameters.bmax, vbm, nbands)
 
-    for out_traj in extract_tdolaps(
+    out_traj = collect_tdolap_output(
         run_dirs=all_scf_dirs,
         software=software_lower,  # type: ignore
         is_gamma_ver=is_gamma_ver,
@@ -105,11 +105,12 @@ def qdyn_pre_namd(
         ispin=parameters.adv.ispin,
         nproc=nproc,
         dirs_sorted=True,
-    ):
-        pass
+    )
 
-    # symlink tdolap file to run_dir
-    os.symlink(out_traj['tdolap_path'], run_dirs[0])
+    tdolap_link = Path(run_dirs[0]) / Path(out_traj['tdolap_path']).name
+    if tdolap_link.exists() or tdolap_link.is_symlink():
+        tdolap_link.unlink()
+    tdolap_link.symlink_to(Path(out_traj['tdolap_path']).resolve())
 
     tdolap_data = np.load(out_traj['tdolap_path'])
     out_nac = extract_nacs(
