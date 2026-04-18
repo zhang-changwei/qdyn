@@ -34,29 +34,29 @@ def write_strus(software: str, structures: list[Atoms], directory: str = '.') ->
 def read_strus(
     software: str,
     directory: str = '.',
-    traj_file_path: str | None = None,
+    traj_path: str | None = None,
 ) -> list[Atoms]:
     """Read structures from trajectory file.
 
     Args:
         software: Software name ('vasp', 'cp2k', etc.).
         directory: Directory containing the trajectory file (used when
-            traj_file_path is None).
-        traj_file_path: Explicit path to the trajectory file. If given,
+            traj_path is None).
+        traj_path: Explicit path to the trajectory file. If given,
             directory is ignored.
 
     Returns:
         List of ASE Atoms objects representing the structures.
     """
-    if traj_file_path is None:
+    if traj_path is None:
         track_name = md_tracks.get(software)
         if track_name is None:
             raise ValueError(f"Unsupported software: {software}")
-        traj_file_path = os.path.join(directory, track_name)
+        traj_path = os.path.join(directory, track_name)
     ase_format = md_ase_formats.get(software)
     if ase_format is None:
         raise ValueError(f"Unsupported software: {software}")
-    return ase.io.read(traj_file_path, format=ase_format, index=':')
+    return ase.io.read(traj_path, format=ase_format, index=':')
 
 
 def write_stru(software: str, structure: Atoms, output_path: os.PathLike):

@@ -34,7 +34,7 @@ def qdyn_fused_scf_prenamd(
     prenamd_input: PreNAMDInputT,
     pp_path: str,
     orb_path: str,
-    traj_file_path: str,
+    traj_path: str,
     traj_format: str,
     total_cpus: int,
     omp_software: int = 1,
@@ -63,7 +63,7 @@ def qdyn_fused_scf_prenamd(
             prenamd_input=prenamd_input,
             pp_path=pp_path,
             orb_path=orb_path,
-            traj_file_path=traj_file_path,
+            traj_path=traj_path,
             traj_format=traj_format,
             frame_start=frame_start,
             frame_end=frame_end,
@@ -98,7 +98,7 @@ def qdyn_fused_scf_prenamd_task(
     prenamd_input: PreNAMDInputT,
     pp_path: str,
     orb_path: str,
-    traj_file_path: str,
+    traj_path: str,
     traj_format: str,
     frame_start: int,
     frame_end: int,
@@ -108,7 +108,7 @@ def qdyn_fused_scf_prenamd_task(
     prepare_input_only: bool = False,
 ) -> dict:
 
-    all_strus = read_strus(traj_format, traj_file_path=traj_file_path)
+    all_strus = read_strus(traj_format, traj_path=traj_path)
     software_lower = software.lower()
     nprocs = total_cpus // omp_python
     scf_step = scf_input.scf_step

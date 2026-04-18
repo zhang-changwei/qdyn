@@ -43,7 +43,7 @@ def qdyn_scf(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    traj_file_path: str,
+    traj_path: str,
     traj_format: str = 'vasp-xdatcar',
     nodes: int = 1,
     ntasks_per_node: int = 1,
@@ -62,7 +62,7 @@ def qdyn_scf(
             batch_size.
         pp_path: Path to pseudopotential files.
         orb_path: Path to orbital files.
-        traj_file_path: Path to the trajectory file (e.g. XDATCAR for VASP).
+        traj_path: Path to the trajectory file (e.g. XDATCAR for VASP).
         traj_format: Format of the trajectory file.
         nodes: Number of nodes.
         ntasks_per_node: MPI tasks per node.
@@ -92,7 +92,7 @@ def qdyn_scf(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            traj_file_path=traj_file_path,
+            traj_path=traj_path,
             traj_format=traj_format,
             frame_start=frame_start,
             frame_end=frame_end,
@@ -112,7 +112,7 @@ def qdyn_scf_task(
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    traj_file_path: str,
+    traj_path: str,
     traj_format: str = 'vasp-xdatcar',
     frame_start: int = 0,
     frame_end: int = 0,
@@ -135,7 +135,7 @@ def qdyn_scf_task(
         parameters: SCF parameters.
         pp_path: Pseudopotential path.
         orb_path: Orbital file path.
-        traj_file_path: Path to the trajectory file (e.g. XDATCAR for VASP).
+        traj_path: Path to the trajectory file (e.g. XDATCAR for VASP).
         traj_format: Format of the trajectory file (e.g. 'vasp-xdatcar').
         frame_start: Global frame index of the first structure (0-based).
         frame_end: Global frame index of the last structure (0-based).
@@ -157,7 +157,7 @@ def qdyn_scf_task(
     nprocs = nodes * ntasks_per_node
     scf_step = parameters.scf_step
 
-    all_strus = read_strus(traj_format, traj_file_path=traj_file_path)
+    all_strus = read_strus(traj_format, traj_path=traj_path)
     selected_structures = all_strus[-scf_step:]
     batch_structures = selected_structures[frame_start:frame_end]
     n_frames = len(batch_structures)

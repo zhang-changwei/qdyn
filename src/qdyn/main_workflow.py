@@ -24,7 +24,6 @@ from jobflow_remote import JobController
 
 from .errors import ConfigError, ResumeError, ValidationError, QueryError
 from .input import InputT
-from .params import md_tracks
 from .validation import load_config, validate_workflow_input
 from .calc_common import write_strus
 
@@ -404,7 +403,7 @@ class MainWorkflow:
         return cmd
 
     def _get_first_step(
-        self, steps: list[str], method: Literal['namd', 'n2amd']
+        self, steps: Sequence[str], method: Literal['namd', 'n2amd']
     ) -> str:
         if method != 'namd':
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
@@ -483,27 +482,27 @@ class MainWorkflow:
         software: str,
         stru: str,
         stru_format: str,
-        effective_worker_name: str,
+        active_worker_name: str,
     ) -> tuple[str, str]:
         strus_ase = ase.io.read(io.StringIO(stru), format=stru_format, index=':')
-        work_dir = self._get_worker_work_dir(effective_worker_name)
+        work_dir = self._get_worker_work_dir(active_worker_name)
 
-        if self._is_remote_worker(effective_worker_name):
+        if self._is_remote_worker(active_worker_name):
             stru_id = str(uuid.uuid4())
             stru_dir_remote = f"{work_dir}/user_trajectories/{stru_id}"
             remote_host = (
-                self.jf_config['workers'].get(effective_worker_name, {}).get('host', '')
+                self.jf_config['workers'].get(active_worker_name, {}).get('host', '')
             )
 
             try:
                 with tempfile.TemporaryDirectory() as tmpdir:
                     local_file = write_strus(software, strus_ase, tmpdir)
                     track_filename = os.path.basename(local_file)
-                    traj_file_path = f"{stru_dir_remote}/{track_filename}"
+                    traj_path = f"{stru_dir_remote}/{track_filename}"
 
                     subprocess.run(
                         self._get_ssh_cmd(
-                            effective_worker_name,
+                            active_worker_name,
                             f'mkdir -p {stru_dir_remote}',
                         ),
                         check=True,
@@ -511,9 +510,9 @@ class MainWorkflow:
                     )
                     subprocess.run(
                         self._get_scp_cmd(
-                            effective_worker_name,
+                            active_worker_name,
                             local_file,
-                            traj_file_path,
+                            traj_path,
                         ),
                         check=True,
                         timeout=60,
@@ -524,16 +523,16 @@ class MainWorkflow:
             ) as exc:
                 raise ConfigError(
                     f"Failed to upload trajectory to remote worker "
-                    f"'{effective_worker_name}' (host={remote_host}). "
+                    f"'{active_worker_name}' (host={remote_host}). "
                     f"Check SSH connectivity and work_dir permissions. "
                     f"Target: {stru_dir_remote}"
                 ) from exc
         else:
             stru_dir = Path(work_dir) / "user_trajectories" / str(uuid.uuid4())
             stru_dir.mkdir(parents=True, exist_ok=True)
-            traj_file_path = write_strus(software, strus_ase, str(stru_dir))
+            traj_path = write_strus(software, strus_ase, str(stru_dir))
 
-        return traj_file_path, stru_format
+        return traj_path, stru_format
 
     def step_nvt(
         self,
@@ -545,8 +544,8 @@ class MainWorkflow:
         stru_format: str,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -574,16 +573,16 @@ class MainWorkflow:
         nodes = (
             input.nvt_input.nodes
             if input.nvt_input.nodes is not None
-            else effective_worker_cfg['nvt'][software]['nodes']
+            else active_worker_cfg['nvt'][software]['nodes']
         )
-        ntasks_per_node = effective_worker_cfg['nvt'][software]['ntasks_per_node']
-        cpus_per_task = effective_worker_cfg['nvt'][software]['cpus_per_task']
+        ntasks_per_node = active_worker_cfg['nvt'][software]['ntasks_per_node']
+        cpus_per_task = active_worker_cfg['nvt'][software]['cpus_per_task']
 
         job_nvt = qdyn_nvt(
             software=software,
             parameters=input.nvt_input,
-            pp_path=effective_worker_cfg["pp_path"][software],
-            orb_path=effective_worker_cfg["orb_path"][software],
+            pp_path=active_worker_cfg["pp_path"][software],
+            orb_path=active_worker_cfg["orb_path"][software],
             structure=structure,
             nodes=nodes,
             ntasks_per_node=ntasks_per_node,
@@ -594,13 +593,13 @@ class MainWorkflow:
         job_nvt = set_run_config(
             job_nvt,
             exec_config=self._build_exec_config(
-                effective_worker_name,
-                effective_worker_cfg,
+                active_worker_name,
+                active_worker_cfg,
                 [software],
             ),
             resources=self._build_resources(
                 resource_worker,
-                effective_worker_cfg['nvt'][software],
+                active_worker_cfg['nvt'][software],
                 nodes=nodes,
             ),
         )
@@ -616,8 +615,8 @@ class MainWorkflow:
         stru_format: str,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -647,16 +646,16 @@ class MainWorkflow:
         nodes = (
             input.nve_input.nodes
             if input.nve_input.nodes is not None
-            else effective_worker_cfg['nve'][software]['nodes']
+            else active_worker_cfg['nve'][software]['nodes']
         )
-        ntasks_per_node = effective_worker_cfg['nve'][software]['ntasks_per_node']
-        cpus_per_task = effective_worker_cfg['nve'][software]['cpus_per_task']
+        ntasks_per_node = active_worker_cfg['nve'][software]['ntasks_per_node']
+        cpus_per_task = active_worker_cfg['nve'][software]['cpus_per_task']
 
         job_nve = qdyn_nve(
             software=software,
             parameters=input.nve_input,
-            pp_path=effective_worker_cfg["pp_path"][software],
-            orb_path=effective_worker_cfg["orb_path"][software],
+            pp_path=active_worker_cfg["pp_path"][software],
+            orb_path=active_worker_cfg["orb_path"][software],
             structure=structure,
             nodes=nodes,
             ntasks_per_node=ntasks_per_node,
@@ -667,13 +666,13 @@ class MainWorkflow:
         job_nve = set_run_config(
             job_nve,
             exec_config=self._build_exec_config(
-                effective_worker_name,
-                effective_worker_cfg,
+                active_worker_name,
+                active_worker_cfg,
                 [software],
             ),
             resources=self._build_resources(
                 resource_worker,
-                effective_worker_cfg['nve'][software],
+                active_worker_cfg['nve'][software],
                 nodes=nodes,
             ),
         )
@@ -690,8 +689,8 @@ class MainWorkflow:
         stru_hash: str,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -701,13 +700,13 @@ class MainWorkflow:
             return []
 
         if 'nve' in jobs:
-            traj_file_path = jobs['nve'][0].output['traj_file_path']
+            traj_path = jobs['nve'][0].output['traj_path']
             traj_format = software
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
-                traj_file_path = nve_output['traj_file_path']
+                traj_path = nve_output['traj_path']
                 traj_format = software
             except Exception as exc:
                 raise ResumeError(
@@ -716,7 +715,7 @@ class MainWorkflow:
                 ) from exc
         elif stru_hash:
             data_dir = Path(self.config['basic']['user_data']).resolve()
-            traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
+            traj_path = str(data_dir / "trajs" / f"{stru_hash}")
             traj_format = stru_format
         else:
             raise ValidationError(
@@ -727,17 +726,17 @@ class MainWorkflow:
         nodes = (
             input.scf_input.nodes
             if input.scf_input.nodes is not None
-            else effective_worker_cfg['scf'][software]['nodes']
+            else active_worker_cfg['scf'][software]['nodes']
         )
-        ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
-        cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
+        ntasks_per_node = active_worker_cfg['scf'][software]['ntasks_per_node']
+        cpus_per_task = active_worker_cfg['scf'][software]['cpus_per_task']
 
         jobs_scf = qdyn_scf(
             software=software,
             parameters=input.scf_input,
-            pp_path=effective_worker_cfg["pp_path"][software],
-            orb_path=effective_worker_cfg["orb_path"][software],
-            traj_file_path=traj_file_path, # type: ignore
+            pp_path=active_worker_cfg["pp_path"][software],
+            orb_path=active_worker_cfg["orb_path"][software],
+            traj_path=traj_path, # type: ignore
             traj_format=traj_format,
             nodes=nodes,
             ntasks_per_node=ntasks_per_node,
@@ -749,13 +748,13 @@ class MainWorkflow:
             jobs_scf[idx] = set_run_config(
                 job_scf,
                 exec_config=self._build_exec_config(
-                    effective_worker_name,
-                    effective_worker_cfg,
+                    active_worker_name,
+                    active_worker_cfg,
                     [software],
                 ),
                 resources=self._build_resources(
                     resource_worker,
-                    effective_worker_cfg['scf'][software],
+                    active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
             )
@@ -772,8 +771,8 @@ class MainWorkflow:
         stru_hash: str,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -781,13 +780,13 @@ class MainWorkflow:
         assert input.scf_input is not None
         assert input.prenamd_input is not None
         if 'nve' in jobs:
-            traj_file_path = jobs['nve'][0].output['traj_file_path']
+            traj_path = jobs['nve'][0].output['traj_path']
             traj_format = software
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
-                traj_file_path = nve_output['traj_file_path']
+                traj_path = nve_output['traj_path']
                 traj_format = software
             except Exception as exc:
                 raise ResumeError(
@@ -796,7 +795,7 @@ class MainWorkflow:
                 ) from exc
         elif stru_hash:
             data_dir = Path(self.config['basic']['user_data']).resolve()
-            traj_file_path = str(data_dir / "trajs" / f"{stru_hash}")
+            traj_path = str(data_dir / "trajs" / f"{stru_hash}")
             traj_format = stru_format
         else:
             raise ValidationError(
@@ -811,8 +810,8 @@ class MainWorkflow:
                 "FUSED_SCF_PRENAMD step is designed to run on a single node. "
                 "Overriding nodes to 1 for this step."
             )
-        ntasks_per_node = effective_worker_cfg['scf'][software]['ntasks_per_node']
-        cpus_per_task = effective_worker_cfg['scf'][software]['cpus_per_task']
+        ntasks_per_node = active_worker_cfg['scf'][software]['ntasks_per_node']
+        cpus_per_task = active_worker_cfg['scf'][software]['cpus_per_task']
         total_cpus = nodes * ntasks_per_node * cpus_per_task
         nproc = max(1, min(8, total_cpus))
         omp_python = max(1, total_cpus // nproc)
@@ -821,9 +820,9 @@ class MainWorkflow:
             software=software,
             scf_input=input.scf_input,
             prenamd_input=input.prenamd_input,
-            pp_path=effective_worker_cfg["pp_path"][software],
-            orb_path=effective_worker_cfg["orb_path"][software],
-            traj_file_path=traj_file_path, # type: ignore
+            pp_path=active_worker_cfg["pp_path"][software],
+            orb_path=active_worker_cfg["orb_path"][software],
+            traj_path=traj_path, # type: ignore
             traj_format=traj_format,
             total_cpus=total_cpus,
             omp_software=cpus_per_task,
@@ -837,14 +836,14 @@ class MainWorkflow:
             jobs_fused[idx] = set_run_config(
                 fused_job,
                 exec_config=self._build_exec_config(
-                    effective_worker_name,
-                    effective_worker_cfg,
+                    active_worker_name,
+                    active_worker_cfg,
                     software_names,
                     omp_threads=omp_python,
                 ),
                 resources=self._build_resources(
                     resource_worker,
-                    effective_worker_cfg['scf'][software],
+                    active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
             )
@@ -858,8 +857,8 @@ class MainWorkflow:
         is_first_step: bool,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -886,7 +885,7 @@ class MainWorkflow:
                 f"'{prev_step}' results."
             )
 
-        ncpus = effective_worker_cfg['cpus_per_node']
+        ncpus = active_worker_cfg['cpus_per_node']
         omp_threads = max(1, min(4, ncpus))
         job_pre_namd = qdyn_pre_namd(
             software=software,
@@ -899,8 +898,8 @@ class MainWorkflow:
         job_pre_namd = set_run_config(
             job_pre_namd,
             exec_config=self._build_exec_config(
-                effective_worker_name,
-                effective_worker_cfg,
+                active_worker_name,
+                active_worker_cfg,
                 ['python'],
                 omp_threads=omp_threads,
             ),
@@ -922,8 +921,8 @@ class MainWorkflow:
         is_first_step: bool,
         resume: bool,
         prev_task_id: str,
-        effective_worker_name: str,
-        effective_worker_cfg: Dict[str, Any],
+        active_worker_name: str,
+        active_worker_cfg: Dict[str, Any],
         resource_worker: str,
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
@@ -956,14 +955,14 @@ class MainWorkflow:
         if input.namd_input.surface_hopping == 'FSSH':
             nodes = 1
             ntasks_per_node = 1
-            cpus_per_task = effective_worker_cfg['cpus_per_node']
+            cpus_per_task = active_worker_cfg['cpus_per_node']
         else:
             nodes = (
                 input.namd_input.nodes
                 if input.namd_input.nodes is not None
                 else 1
             )
-            ntasks_per_node = effective_worker_cfg['cpus_per_node']
+            ntasks_per_node = active_worker_cfg['cpus_per_node']
             cpus_per_task = 1
 
         job_namd = qdyn_namd(
@@ -981,8 +980,8 @@ class MainWorkflow:
         job_namd = set_run_config(
             job_namd,
             exec_config=self._build_exec_config(
-                effective_worker_name,
-                effective_worker_cfg,
+                active_worker_name,
+                active_worker_cfg,
                 ['namd'],
                 omp_threads=cpus_per_task,
             ),
@@ -1031,10 +1030,10 @@ class MainWorkflow:
         jobs: Dict[str, List[Job | Flow]] = {}
         software = input.basic_input.software
         flag = ''
-        effective_worker_name = worker_name or self.active_pool_name
-        effective_worker_cfg = worker_cfg or self.pool_worker_cfg
+        active_worker_name = worker_name or self.active_pool_name
+        active_worker_cfg = worker_cfg or self.pool_worker_cfg
         # For resource lookups, prefer the runtime worker (has exact jf config)
-        resource_worker = runtime_worker or effective_worker_name
+        resource_worker = runtime_worker or active_worker_name
 
         # pre-flight validation
         validate_workflow_input(
@@ -1047,7 +1046,7 @@ class MainWorkflow:
             prev_task_id,
             known_task_ids=self.task_ids,
             config=self.config,
-            worker_cfg=effective_worker_cfg,
+            worker_cfg=active_worker_cfg,
         )
 
         first_step = self._get_first_step(input.steps, method)
@@ -1062,8 +1061,8 @@ class MainWorkflow:
                 stru_format=stru_format,
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1083,8 +1082,8 @@ class MainWorkflow:
                 stru_format=stru_format,
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1101,8 +1100,8 @@ class MainWorkflow:
                 stru_hash=stru_hash,
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1127,8 +1126,8 @@ class MainWorkflow:
                 stru_hash=stru_hash,
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1147,8 +1146,8 @@ class MainWorkflow:
                 is_first_step=first_step == 'pre_namd',
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1162,8 +1161,8 @@ class MainWorkflow:
                 is_first_step=first_step == 'namd',
                 resume=resume,
                 prev_task_id=prev_task_id,
-                effective_worker_name=effective_worker_name,
-                effective_worker_cfg=effective_worker_cfg,
+                active_worker_name=active_worker_name,
+                active_worker_cfg=active_worker_cfg,
                 resource_worker=resource_worker,
                 prepare_input_only=bool(flag),
             )
@@ -1214,13 +1213,13 @@ class MainWorkflow:
         self._ensure_job_controller()
 
         # Resolve pool context.
-        effective_pool = pool_name
-        effective_worker_name, effective_worker_cfg = self._resolve_worker_context(
-            effective_pool
+        active_pool = pool_name
+        active_worker_name, active_worker_cfg = self._resolve_worker_context(
+            active_pool
         )
 
         # Determine the worker name passed to submit_flow().
-        submit_worker = runtime_worker or effective_worker_name
+        submit_worker = runtime_worker or active_worker_name
 
         jobs = self.main_workflow(
             input=input,
@@ -1230,8 +1229,8 @@ class MainWorkflow:
             stru_hash=stru_hash,
             resume=resume,
             prev_task_id=prev_task_id,
-            worker_name=effective_worker_name,
-            worker_cfg=effective_worker_cfg,
+            worker_name=active_worker_name,
+            worker_cfg=active_worker_cfg,
             runtime_worker=runtime_worker,
         )
         jobs_flatten = []

@@ -424,12 +424,12 @@ async def _locked_dispatch(
     acquires the lock and calls ``workflow.submit()`` directly with the
     pre-selected worker.
 
-    Returns ``(effective_worker, job_ids)`` on success, or
+    Returns ``(active_worker, job_ids)`` on success, or
     ``(None, None)`` if submission fails.
     """
     async with dispatch_lock:
         # Submit via jobflow-remote (synchronous, offloaded to thread).
-        final_task_id, job_ids, effective_worker = await asyncio.to_thread(
+        final_task_id, job_ids, active_worker = await asyncio.to_thread(
             workflow.submit,
             input=input_obj,
             method=method,
@@ -444,4 +444,4 @@ async def _locked_dispatch(
             runtime_worker=target_worker,
         )
 
-        return effective_worker, job_ids
+        return active_worker, job_ids

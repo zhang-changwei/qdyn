@@ -114,7 +114,7 @@ def test_submit_uses_pool_dispatch(monkeypatch):
         steps=["nvt"],
     )
 
-    task_id, job_ids, effective_worker = manager.submit(
+    task_id, job_ids, active_worker = manager.submit(
         payload,
         pool_name="local_slurm",
         runtime_worker="local_slurm_002",
@@ -124,7 +124,7 @@ def test_submit_uses_pool_dispatch(monkeypatch):
 
     assert task_id == "task-1"
     assert job_ids == {"nvt": ["job-1"]}
-    assert effective_worker == "local_slurm_002"
+    assert active_worker == "local_slurm_002"
     assert captured["worker_name"] == "local_slurm"
     assert captured["runtime_worker"] == "local_slurm_002"
     assert captured["submitted_worker"] == "local_slurm_002"

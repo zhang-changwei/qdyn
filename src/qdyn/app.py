@@ -351,7 +351,7 @@ def _sync_dispatch(
         runtime_worker = worker
 
     # Submit via jobflow-remote
-    final_task_id, job_ids, effective_worker = m.submit(
+    final_task_id, job_ids, active_worker = m.submit(
         input=input_obj,
         method=method,
         stru=input_obj.stru,
@@ -375,7 +375,7 @@ def _sync_dispatch(
         formula=formula,
         num_atoms=num_atoms,
         prev_task_id=prev_task_id if resume and prev_task_id else None,
-        worker=effective_worker,
+        worker=active_worker,
         pool_name=pool_name,
     )
 

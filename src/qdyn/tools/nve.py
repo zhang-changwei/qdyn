@@ -127,7 +127,7 @@ def qdyn_nve(
         'md_files': md_file,
         'images': images,
         # 'strus': strus_list,
-        'traj_file_path': str(
+        'traj_path': str(
             Path.cwd() / md_tracks[software_lower]
         ),  # constraints information may also remain in some software's trajectory files, may raise error when changing to dict.
     }
