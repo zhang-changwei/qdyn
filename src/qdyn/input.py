@@ -191,6 +191,53 @@ class PreNAMDInputT(BaseModel):
     )
 
 
+class SelDynInputT(BaseModel):
+    constraint_layers: List[int] | None = Field(
+        default=None,
+        description="Number of surface layers to fix (counting from 1 from bottom to top.). "
+        "Leave empty for no constraints. Not useful when the structure file has already "
+        "included constraints, which will be applied directly. Format: e.g. '1-3 5' or "
+        "[1,2,3,5] means fixing layers 1 to 3 and layer 5 from bottom to top.",
+        json_schema_extra=ADVANCED_GROUP,
+    )
+    layer_direction: (
+        Literal['000', '001', '010', '011', '100', '101', '110', '111'] | None
+    ) = Field(
+        default=None,
+        description="Miller indices of the crystal surface. Required if constraint_layers is set.",
+        json_schema_extra=ADVANCED_GROUP,
+    )
+    total_layers: int | None = Field(
+        default=None,
+        description="Total number of surface layers. Required if constraint_layers is set, "
+        "for correct constraint application. Leave empty for no constraints.",
+        json_schema_extra=ADVANCED_GROUP,
+    )
+
+    @field_validator('constraint_layers', mode='before')
+    @classmethod
+    def parse_constraint_layers(cls, v: str | List[int] | None) -> List[int] | None:
+
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return v
+
+        stripped = v.strip()
+        if stripped == '':
+            return None
+
+        result: List[int] = []
+        for part in stripped.split():
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                result.extend(range(start, end + 1))
+            else:
+                result.append(int(part))
+
+        return sorted(set(result))
+
+
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
 
@@ -249,21 +296,9 @@ class NVTInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
-    constraint_layers: str | None = Field(
-        default=None,
-        description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
-        json_schema_extra=ADVANCED_GROUP,
-    )
-    layer_direction: Literal['000', '001', '010', '011', 
-                             '100', '101', '110', '111'] | None = Field(
-        default=None,
-        description="Miller indices of the crystal surface. Required if constraint_layers is set.",
-        json_schema_extra=ADVANCED_GROUP,
-    )
-    total_layers: int | None = Field(
-        default=None,
-        description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
-        json_schema_extra=ADVANCED_GROUP,
+    sel: SelDynInputT = Field(
+        default_factory=SelDynInputT,
+        json_schema_extra={"group": "advanced"},
     )
 
     parameters: str = Field(
@@ -321,21 +356,9 @@ class NVEInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
-    constraint_layers: str | None = Field(
-        default=None,
-        description="Number of surface layers to fix (counting from 1 from bottom to top.). Leave empty for no constraints. Not useful when the structure file has already included constraints, which will be applied directly. Format: e.g. '1-3 5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
-        json_schema_extra=ADVANCED_GROUP,
-    )
-    layer_direction: Literal['000', '001', '010', '011', 
-                             '100', '101', '110', '111'] | None = Field(
-        default=None,
-        description="Miller indices of the crystal surface. Required if constraint_layers is set.",
-        json_schema_extra=ADVANCED_GROUP,
-    )
-    total_layers: int | None = Field(
-        default=None,
-        description="Total number of surface layers. Required if constraint_layers is set, for correct constraint application. Leave empty for no constraints.",
-        json_schema_extra=ADVANCED_GROUP,
+    sel: SelDynInputT = Field(
+        default_factory=SelDynInputT,
+        json_schema_extra={"group": "advanced"},
     )
 
     parameters: str = Field(
@@ -436,4 +459,3 @@ class InputT(BaseModel):
                 'stru_hash must be a 32-character lowercase hex string (MD5 digest)'
             )
         return v
-
