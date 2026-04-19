@@ -41,8 +41,7 @@
             </div>
           </div>
           <div class="task-option-meta">
-            <span v-if="task.formula" class="formula">{{ task.formula }}</span>
-            <span v-else class="formula unknown">Unknown</span>
+            <span class="formula">{{ getTaskDisplayName(task) }}</span>
             <span class="created">{{ formatDate(task.created_at) }}</span>
           </div>
           <div class="task-option-steps">
@@ -68,8 +67,8 @@
         <span class="summary-value monospace">{{ selectedTask.task_id }}</span>
       </div>
       <div class="summary-row">
-        <span class="summary-label">Formula</span>
-        <span class="summary-value">{{ selectedTask.formula || 'Unknown' }}</span>
+        <span class="summary-label">Name</span>
+        <span class="summary-value">{{ getTaskDisplayName(selectedTask) }}</span>
       </div>
       <div class="summary-row">
         <span class="summary-label">Status</span>
@@ -122,6 +121,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Monitor } from '@element-plus/icons-vue'
+import { getTaskDisplayName } from '@/utils/task-display'
 import type { TaskSummary } from '@/api/types'
 
 const props = withDefaults(defineProps<{
@@ -175,7 +175,7 @@ function truncateId(id: string): string {
 }
 
 function formatOptionLabel(task: TaskSummary): string {
-  const name = task.formula || truncateId(task.task_id)
+  const name = getTaskDisplayName(task)
   return `${name} — ${task.derived_status}`
 }
 

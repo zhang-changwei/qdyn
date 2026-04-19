@@ -99,7 +99,8 @@ export const useTasksStore = defineStore('tasks', () => {
 
   /**
    * Fetch all jobs status for a task
-   * Updates both currentJobsStatus and currentTask state on success
+   * Updates both currentJobsStatus and currentTask state on success.
+   * Uses spread merge to preserve task_name/formula from previous state.
    */
   async function fetchJobsStatus(taskId: string): Promise<TaskJobsStatusResponse> {
     loading.value = true
@@ -108,8 +109,10 @@ export const useTasksStore = defineStore('tasks', () => {
     try {
       const response = await getTaskJobsStatus(taskId)
       currentJobsStatus.value = response
-      // Also update currentTask to keep status in sync
+      // Merge to preserve existing metadata fields not always returned
       if (currentTask.value) {
+        currentTask.value = { ...currentTask.value, ...response }
+      } else {
         currentTask.value = response
       }
       return response
@@ -125,13 +128,16 @@ export const useTasksStore = defineStore('tasks', () => {
   /**
    * Fetch all jobs status for a task silently (for polling).
    * Does NOT update loading or error state.
+   * Uses spread merge to preserve task_name/formula from previous state.
    */
   async function fetchJobsStatusSilent(taskId: string): Promise<TaskJobsStatusResponse> {
     try {
       const response = await getTaskJobsStatus(taskId)
       currentJobsStatus.value = response
-      // Also update currentTask to keep status in sync
+      // Merge to preserve existing metadata fields not always returned
       if (currentTask.value) {
+        currentTask.value = { ...currentTask.value, ...response }
+      } else {
         currentTask.value = response
       }
       return response
