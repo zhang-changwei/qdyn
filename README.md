@@ -39,6 +39,8 @@ jf job list
 
 # How to contribute
 
+See `CONTRIBUTING.md` for coding style, docstring rules, and commit conventions.
+
 ```bash
 # clone the repo
 git clone https://github.com/zhang-changwei/qdyn.git
