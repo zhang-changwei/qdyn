@@ -702,12 +702,13 @@ def extract_from_vasp_outcar(
 
         if occupation > 0.5:
             vbm = band_idx
-        elif cbm == 0:
+        else:
             cbm = band_idx
+            break
 
     if vbm == 0:
         raise RuntimeError("Could not determine VBM from OUTCAR eigenvalues.")
-    if cbm == 0:
+    if cbm != vbm + 1:
         cbm = vbm + 1
 
     return vbm, cbm, NBANDS

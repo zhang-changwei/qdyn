@@ -283,6 +283,4 @@ def _normalize_band_index(band_index: int, nband: int, name: str) -> int:
         return band_index - 1
     if 0 <= band_index < nband:
         return band_index
-    raise IndexError(
-        f"{name}={band_index} is out of range for nband={nband}."
-    )
+    raise IndexError(f"{name}={band_index} is out of range for nband={nband}.")
