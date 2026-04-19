@@ -12,7 +12,7 @@ import numpy as np
 from jobflow import job
 
 from ..input import PreNAMDInputT
-from ..output_postprocess import extract_wht_with_cache, extract_band_edges
+from ..output_postprocess import extract_wht_with_cache, extract_vbmcbm
 from .canac import extract_eigvals_and_nacs
 from .dephase import calculate_dephasing_time
 
@@ -62,7 +62,7 @@ def qdyn_pre_namd(
     # (different batches may have different run_dir UUIDs)
     all_scf_dirs.sort(key=lambda x: int(os.path.basename(x).split('scf_')[-1]))
 
-    vbm, cbm = extract_band_edges(
+    vbm, cbm = extract_vbmcbm(
         software=software_lower,
         dir_path=all_scf_dirs[0],
         whichK=parameters.adv.ikpt,
@@ -291,6 +291,4 @@ def _normalize_band_index(band_index: int, nband: int, name: str) -> int:
         return band_index - 1
     if 0 <= band_index < nband:
         return band_index
-    raise IndexError(
-        f"{name}={band_index} is out of range for nband={nband}."
-    )
+    raise IndexError(f"{name}={band_index} is out of range for nband={nband}.")

@@ -262,16 +262,15 @@ def qdyn_scf_task(
             logging.error(f"SCF calculation failed for frame {global_idx}: {e}")
             _set_status(subdir, STATUS_FAIL)
             failed.append(global_idx)
-            # Don't propagate CHGCAR from failed calculation
-            prev_chgcar = None
+            break
 
         finally:
             os.chdir(task_dir)
 
     if successful < n_frames:
         raise ValueError(
-            f"SCF calculation failed for {len(failed)} out of {n_frames} frames in this batch."
-            f"Failed frame indices: {failed}. Please check the respective subdirectories for details."
+            f"SCF calculation failed in frame indice: {failed}. Please check the "
+            "respective subdirectories for details."
         )
 
     # frame_end is exclusive, so actual last frame index is frame_end - 1
