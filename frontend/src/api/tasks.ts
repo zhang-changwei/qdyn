@@ -168,6 +168,17 @@ export async function deleteTask(taskId: string): Promise<void> {
 }
 
 /**
+ * Rename a task (update display name)
+ */
+export async function renameTask(taskId: string, taskName: string | null): Promise<{ task_name: string | null }> {
+  const response = await http.patch<ApiResponse<{ task_name: string | null }>>(
+    `/frontend/tasks/${taskId}/name`,
+    { task_name: taskName }
+  )
+  return normalizeResponse(response.data)
+}
+
+/**
  * Cancel a queued task (remove from waiting queue)
  * Calls DELETE /queue/{taskId}
  */

@@ -11,7 +11,7 @@
     <input
       ref="fileInputRef"
       type="file"
-      accept=".poscar,.vasp,.POSCAR,text/*,*/*"
+      accept="*/*"
       hidden
       @change="handleFileChange"
     />

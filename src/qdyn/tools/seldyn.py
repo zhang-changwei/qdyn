@@ -60,3 +60,58 @@ def auto_tolerance(
         f"Final layer distances: {mid:.4f}, layers found: {n}."
     )
     return low, geometry.get_layers(structure, miller, tolerance=low)
+
+
+def extract_constraint_mask(atoms: Atoms) -> list[bool] | None:
+    """Extract a per-atom boolean constraint mask from ASE constraints.
+
+    Reads existing constraints (FixAtoms, FixCartesian, FixedLine,
+    FixedPlane, etc.) already set on the Atoms object.
+
+    Handles FixAtoms (fully constrained) and partial constraints
+    where any axis being constrained marks the atom as True.
+
+    Returns None if there are no constraints at all.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        ASE Atoms object, possibly with constraints set (e.g. from
+        selective dynamics in a POSCAR file).
+
+    Returns
+    -------
+    list[bool] | None
+        Per-atom constraint mask, or None if no constraints exist.
+    """
+    if not atoms.constraints:
+        return None
+
+    n_atoms = len(atoms)
+    mask = [False] * n_atoms
+    has_any = False
+
+    for constraint in atoms.constraints:
+        if isinstance(constraint, FixAtoms):
+            # FixAtoms stores constrained atom indices
+            for idx in constraint.index:
+                if 0 <= idx < n_atoms:
+                    mask[idx] = True
+                    has_any = True
+        elif hasattr(constraint, "index"):
+            # Partial constraints (FixCartesian, FixedLine, FixedPlane, etc.)
+            # have an .index attribute (single int or array).
+            # Any axis constrained -> atom marked True.
+            indices = constraint.index
+            if hasattr(indices, "__iter__"):
+                for idx in indices:
+                    if 0 <= idx < n_atoms:
+                        mask[idx] = True
+                        has_any = True
+            else:
+                idx = int(indices)
+                if 0 <= idx < n_atoms:
+                    mask[idx] = True
+                    has_any = True
+
+    return mask if has_any else None

@@ -198,7 +198,11 @@ class SelDynInputT(BaseModel):
         "Leave empty for no constraints. Not useful when the structure file has already "
         "included constraints, which will be applied directly. Format: e.g. '1-3 5' or "
         "[1,2,3,5] means fixing layers 1 to 3 and layer 5 from bottom to top.",
-        json_schema_extra=ADVANCED_GROUP,
+        json_schema_extra={
+            **ADVANCED_GROUP,
+            "widget": "text",
+            "placeholder": "e.g. 1-3 5",
+        },
     )
     layer_direction: (
         Literal['000', '001', '010', '011', '100', '101', '110', '111'] | None

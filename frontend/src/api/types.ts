@@ -273,6 +273,18 @@ export interface ValidatePoscarRequest {
 }
 
 /**
+ * Format-agnostic structure data for 3D rendering.
+ * Decoupled from file format. Backend parses via ASE and outputs this.
+ */
+export interface StructurePreviewPayload {
+  species: string[]
+  cart_coords: number[][]
+  lattice: number[][]
+  pbc: boolean[]
+  constraint_mask: boolean[] | null
+}
+
+/**
  * POSCAR validation response
  */
 export interface ValidatePoscarResponse {
@@ -285,6 +297,8 @@ export interface ValidatePoscarResponse {
     formula: string
     lattice: number[][]
   }
+  /** 3D structure preview data for rendering */
+  preview?: StructurePreviewPayload | null
 }
 
 // ============================================
@@ -475,6 +489,13 @@ export interface JobMdTimeseriesResponse {
 // Input Types (matching backend Pydantic models)
 // ============================================
 
+/** Selective dynamics input parameters */
+export interface SelDynInput {
+  constraint_layers?: string | null
+  layer_direction?: string | null
+  total_layers?: number | null
+}
+
 /** NVT input parameters */
 export interface NVTInput {
   nodes?: number | null
@@ -485,6 +506,7 @@ export interface NVTInput {
   temp_begin: number
   temp_end: number
   scf_thr: number
+  sel?: SelDynInput
   parameters: string
 }
 
@@ -495,7 +517,26 @@ export interface NVEInput {
   md_dt: number
   md_step: number
   scf_thr: number
+  sel?: SelDynInput
   parameters: string
+}
+
+/** Request payload for computing constraint mask.
+ *  Either stru_content or task_id must be provided. */
+export interface ComputeConstraintMaskRequest {
+  stru_content?: string
+  stru_format?: string
+  task_id?: string
+  constraint_layers: string
+  layer_direction: string
+  total_layers: number
+}
+
+/** Response from constraint mask computation */
+export interface ComputeConstraintMaskResponse {
+  constraint_mask: boolean[]
+  source: 'file' | 'layers'
+  warning: string | null
 }
 
 /** SCF input parameters */

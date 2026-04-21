@@ -13,14 +13,19 @@ from functools import wraps
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError as PydanticValidationError
 from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
+from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
 from .models import (
+    ComputeConstraintMaskRequest,
+    ComputeConstraintMaskResponse,
     ContinueResultResponse,
+    RenameTaskRequest,
     JobErrorResponse,
     JobFilesResponse,
     JobImagesResponse,
@@ -184,6 +189,49 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         detail = service.get_task_detail(task_id, manager_getter)
         return detail
+
+    # -------------------------------------------------------------------------
+    # GET /frontend/tasks/{task_id}/structure-preview - On-demand structure preview
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/tasks/{task_id}/structure-preview",
+        summary="Get task structure preview",
+        description=(
+            "Compute structure preview on-demand for a task. "
+            "Resolution order: queued payload -> first job run directory -> "
+            "prev_task_id chain (max 10 hops)."
+        ),
+    )
+    def get_task_structure_preview(
+        task_id: str,
+        raw: bool = Query(
+            False,
+            description="If true, return raw preview without enriching "
+            "with layer-based constraints from task parameters.",
+        ),
+        username: str = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        """Compute structure preview on-demand for a task.
+
+        Resolution order:
+        1. Queued task: read input.stru + input.stru_format from queue payload
+        2. Running/completed task: read structure file from first job's run directory
+        3. Resume task with no own structure: trace prev_task_id chain (max 10 hops)
+
+        Returns StructurePreviewPayload or null (wrapped in success response).
+        """
+        verify_task_ownership_local(task_id, username)
+
+        manager = manager_getter()
+        preview = service.compute_structure_preview(
+            task_id, manager, enrich_constraints=not raw
+        )
+        if preview is None:
+            logger.info("structure-preview for %s: no preview found", task_id)
+        else:
+            logger.info("structure-preview for %s: %d atoms", task_id, len(preview.species))
+        return success_response(preview.model_dump() if preview else None)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/status - All job statuses
@@ -435,6 +483,39 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         return Response(status_code=204)
 
     # -------------------------------------------------------------------------
+    # PATCH /frontend/tasks/{task_id}/name - Rename a task
+    # -------------------------------------------------------------------------
+
+    @router.patch(
+        "/tasks/{task_id}/name",
+        summary="Rename a task",
+        description="Update the display name of a task.",
+    )
+    @handle_query_errors
+    def rename_task(
+        task_id: str,
+        req: RenameTaskRequest,
+        username: str = Depends(get_current_user),
+    ):
+        """
+        Update the task_name in local metadata.
+
+        Args:
+            task_id: The task identifier.
+            req: New task name (or null to clear).
+
+        Returns:
+            Success response with the updated name.
+        """
+        verify_task_ownership_local(task_id, username)
+
+        name = req.task_name.strip() if req.task_name else None
+        if not qdyndb.update_task_name(task_id, name):
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        return success_response({"task_name": name})
+
+    # -------------------------------------------------------------------------
     # POST /frontend/structures/validate - POSCAR validation
     # -------------------------------------------------------------------------
 
@@ -474,6 +555,17 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                     "Failed to parse structure: ASE returned None",
                 )
 
+            # Build 3D preview payload (best-effort; failure does not block validation)
+            preview = None
+            try:
+                from .structure_preview import build_preview
+
+                preview = build_preview(payload.content, fmt="vasp")
+            except Exception as preview_exc:
+                logger.warning(
+                    "Structure preview generation failed: %s", preview_exc,
+                )
+
             # Extract basic info for the response
             result = StructureValidationResponse(
                 valid=True,
@@ -482,6 +574,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                     formula=atoms.get_chemical_formula(),
                     lattice=atoms.cell.array.tolist(),
                 ),
+                preview=preview,
             )
             return success_response(result.model_dump())
 
@@ -490,6 +583,149 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 "PARSE_ERROR",
                 f"Failed to parse structure: {str(exc)}",
             )
+
+    # -------------------------------------------------------------------------
+    # POST /frontend/compute-constraint-mask - Real-time constraint preview
+    # -------------------------------------------------------------------------
+
+    @router.post(
+        "/compute-constraint-mask",
+        response_model=ComputeConstraintMaskResponse,
+        summary="Compute per-atom constraint mask",
+        description=(
+            "Compute a per-atom boolean constraint mask for structure preview. "
+            "If the structure file already contains ASE constraints (e.g. selective "
+            "dynamics), those take priority and are returned with source='file'. "
+            "Otherwise, the mask is computed from the layer parameters."
+        ),
+    )
+    def compute_constraint_mask(
+        req: ComputeConstraintMaskRequest,
+        username: str = Depends(get_current_user),
+    ) -> ComputeConstraintMaskResponse:
+        """Compute per-atom constraint mask for real-time preview.
+
+        Supports two structure resolution paths:
+        - stru_content: parse raw file content (normal upload mode)
+        - task_id: resolve structure server-side (resume mode)
+
+        Follows the same priority as the runtime NVT/NVE logic:
+        file-level constraints take precedence over layer-based constraints.
+
+        Args:
+            req: The constraint mask computation request payload.
+
+        Returns:
+            A ComputeConstraintMaskResponse with the computed mask.
+
+        Raises:
+            HTTPException: 422 if constraint parameters are invalid,
+                structure cannot be resolved, or layer detection fails.
+        """
+        import io
+
+        import ase.io
+
+        from ..input import SelDynInputT
+        from ..tools.seldyn import add_constraints, extract_constraint_mask
+
+        atoms = None
+
+        if req.stru_content:
+            # Path A: Parse structure from raw file content
+            try:
+                atoms = ase.io.read(
+                    io.StringIO(req.stru_content), format=req.stru_format,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Failed to parse structure: {exc}",
+                )
+        elif req.task_id:
+            # Path B: Resolve structure from task (resume mode)
+            # Use enrich_constraints=False to get raw preview — constraint_mask
+            # here is ONLY from file-level constraints (selective dynamics),
+            # not from the parent task's constraint_layers parameters.
+            verify_task_ownership_local(req.task_id, username)
+            manager = manager_getter()
+            preview = service.compute_structure_preview(
+                req.task_id, manager, enrich_constraints=False
+            )
+            if preview is not None:
+                # File-level constraints take priority (same as runtime)
+                if preview.constraint_mask is not None:
+                    return ComputeConstraintMaskResponse(
+                        constraint_mask=preview.constraint_mask,
+                        source="file",
+                        warning=(
+                            "Structure file already contains constraints "
+                            "(e.g. selective dynamics). These take priority over "
+                            "layer-based constraint parameters."
+                        ),
+                    )
+
+                from ase import Atoms
+
+                try:
+                    atoms = Atoms(
+                        symbols=preview.species,
+                        positions=preview.cart_coords,
+                        cell=preview.lattice,
+                        pbc=preview.pbc,
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Failed to reconstruct Atoms from task preview: {exc}",
+                    )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Either stru_content or task_id must be provided.",
+            )
+
+        if atoms is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Failed to resolve structure: no structure data available.",
+            )
+
+        # Check file-level constraints (same priority as runtime)
+        file_mask = extract_constraint_mask(atoms)
+        if file_mask is not None:
+            return ComputeConstraintMaskResponse(
+                constraint_mask=file_mask,
+                source="file",
+                warning=(
+                    "Structure file already contains constraints "
+                    "(e.g. selective dynamics). These take priority over "
+                    "layer-based constraint parameters."
+                ),
+            )
+
+        # Compute layer-based constraint mask via add_constraints + readback
+        try:
+            from copy import deepcopy
+
+            sel = SelDynInputT(
+                constraint_layers=req.constraint_layers,
+                layer_direction=req.layer_direction,
+                total_layers=req.total_layers,
+            )
+            atoms_copy = deepcopy(atoms)
+            add_constraints(atoms_copy, sel)
+            mask = extract_constraint_mask(atoms_copy)
+        except (ValueError, PydanticValidationError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            )
+
+        return ComputeConstraintMaskResponse(
+            constraint_mask=mask or [False] * len(atoms),
+            source="layers",
+        )
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files - List job files

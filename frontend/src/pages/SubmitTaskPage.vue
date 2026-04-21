@@ -107,6 +107,16 @@
           :selected-pool="selectedPool"
           @task-selected="handleResumeTaskSelected"
         />
+        <StructureViewer v-if="structurePreview" :preview="structurePreview" class="structure-preview" />
+        <el-alert
+          v-if="fileHasConstraints"
+          type="info"
+          :closable="false"
+          show-icon
+          class="constraint-file-hint"
+        >
+          Structure file already contains fixed atoms (selective dynamics). Constraint Layers will be ignored.
+        </el-alert>
       </el-card>
 
       <!-- Step selection section — shown first so user picks steps before uploading -->
@@ -143,6 +153,16 @@
           show-icon
           class="validation-alert"
         />
+        <StructureViewer v-if="structurePreview" :preview="structurePreview" class="structure-preview" />
+        <el-alert
+          v-if="fileHasConstraints"
+          type="info"
+          :closable="false"
+          show-icon
+          class="constraint-file-hint"
+        >
+          Structure file already contains fixed atoms (selective dynamics). Constraint Layers will be ignored.
+        </el-alert>
       </el-card>
 
       <!-- Trajectory upload (SCF first step) -->
@@ -357,12 +377,13 @@ import PoscarUploader from '@/components/PoscarUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
 import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
-import { validatePoscar } from '@/api/structures'
+import StructureViewer from '@/components/StructureViewer.vue'
+import { validatePoscar, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
-import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
+import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
 // Step configuration: maps step name to formData key and schema key
 const STEP_CONFIG: Record<string, {
@@ -384,7 +405,19 @@ const submitting = ref(false)
 const poscarContent = ref('')
 const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
+const structurePreview = ref<StructurePreviewPayload | null>(null)
+const basePreview = ref<StructurePreviewPayload | null>(null)
 const schemas = ref<StepInputSchemas | null>(null)
+
+// Constraint mask debounce state
+let constraintDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let constraintRequestId = 0 // monotonic counter to discard stale responses
+/** Whether the uploaded structure file has built-in constraints (selective dynamics). */
+const fileHasConstraints = computed(() => {
+  const mask = basePreview.value?.constraint_mask
+  return Array.isArray(mask) && mask.some(Boolean)
+})
+const CONSTRAINT_DEBOUNCE_MS = 400
 
 // Pool status
 const poolStatus = ref<PoolStatusResponse | null>(null)
@@ -432,6 +465,58 @@ const isSubmitDisabled = computed(() => {
   }
   return false
 })
+
+/**
+ * Extract constraint parameters from the currently active step (NVT or NVE).
+ * Returns null if no relevant step is selected.
+ */
+const activeConstraintParams = computed(() => {
+  const steps = formData.steps
+  // Only NVT and NVE have constraint parameters (nested under sel)
+  for (const step of steps) {
+    if (step === 'nvt') {
+      const input = formData.nvt_input as Record<string, unknown>
+      const sel = (input?.sel as Record<string, unknown>) ?? {}
+      return {
+        constraint_layers: (sel?.constraint_layers as string) ?? '',
+        layer_direction: (sel?.layer_direction as string) ?? '',
+        total_layers: sel?.total_layers as number | null | undefined,
+      }
+    }
+    if (step === 'nve') {
+      const input = formData.nve_input as Record<string, unknown>
+      const sel = (input?.sel as Record<string, unknown>) ?? {}
+      return {
+        constraint_layers: (sel?.constraint_layers as string) ?? '',
+        layer_direction: (sel?.layer_direction as string) ?? '',
+        total_layers: sel?.total_layers as number | null | undefined,
+      }
+    }
+  }
+  return null
+})
+
+/**
+ * Local gate: check if constraint parameters are complete and syntactically
+ * plausible before sending a request to the backend.
+ * Avoids spamming the API with half-typed inputs.
+ */
+function isConstraintParamsReady(params: {
+  constraint_layers: string
+  layer_direction: string
+  total_layers: number | null | undefined
+}): boolean {
+  // All three parameters must be present
+  if (!params.constraint_layers || !params.layer_direction) return false
+  if (params.total_layers == null || params.total_layers < 1) return false
+  // total_layers must be a positive integer
+  if (!Number.isInteger(params.total_layers)) return false
+  // constraint_layers must match backend parse_constraint_layers_spec() syntax:
+  // space-separated tokens, each a number or tight dash range (no spaces around dash)
+  // Valid: "1-3 5", "1 2 3"  Invalid: "1 - 3", "1-", "-3"
+  if (!/^\d+(?:-\d+)?(?:\s+\d+(?:-\d+)?)*$/.test(params.constraint_layers.trim())) return false
+  return true
+}
 
 onMounted(async () => {
   // Fetch pool info
@@ -549,20 +634,104 @@ watch(selectedPool, (newPool, oldPool) => {
 })
 
 // ---------------------------------------------------------------------------
+// Constraint mask real-time computation
+// ---------------------------------------------------------------------------
+
+/**
+ * Watch constraint parameters AND basePreview, debounce API calls to compute
+ * the constraint mask for the 3D preview.
+ *
+ * Triggers when:
+ * - User changes constraint_layers / layer_direction / total_layers in form
+ * - A new structure is uploaded (basePreview changes)
+ *
+ * Uses constraintRequestId to discard stale responses after rapid changes.
+ */
+watch(
+  [activeConstraintParams, basePreview] as const,
+  ([params, base]) => {
+    // Clear any pending debounce timer
+    if (constraintDebounceTimer !== null) {
+      clearTimeout(constraintDebounceTimer)
+      constraintDebounceTimer = null
+    }
+
+    // If no constraint params or params incomplete, revert to basePreview
+    if (!params || !isConstraintParamsReady(params)) {
+      if (base) {
+        structurePreview.value = { ...base }
+      }
+      return
+    }
+
+    // Need either uploaded content or a resume task to compute against
+    if (!poscarContent.value && !selectedResumeTask.value) return
+    if (!base) return
+
+    // Bump request ID and capture it for staleness check
+    const myRequestId = ++constraintRequestId
+
+    // Debounce the API call
+    constraintDebounceTimer = setTimeout(async () => {
+      constraintDebounceTimer = null
+      try {
+        // Build request: use stru_content if available, otherwise task_id
+        const requestPayload: ComputeConstraintMaskRequest = poscarContent.value
+          ? {
+              stru_content: poscarContent.value,
+              stru_format: 'vasp',
+              constraint_layers: params.constraint_layers,
+              layer_direction: params.layer_direction,
+              total_layers: params.total_layers!,
+            }
+          : {
+              task_id: selectedResumeTask.value!.task_id,
+              constraint_layers: params.constraint_layers,
+              layer_direction: params.layer_direction,
+              total_layers: params.total_layers!,
+            }
+        const result = await computeConstraintMask(requestPayload)
+        // Only apply if this is still the latest request
+        if (constraintRequestId !== myRequestId) return
+        if (basePreview.value) {
+          structurePreview.value = {
+            ...basePreview.value,
+            constraint_mask: result.constraint_mask,
+          }
+        }
+      } catch {
+        // Silently degrade — do not toast or disrupt user input flow.
+        if (constraintRequestId !== myRequestId) return
+        if (basePreview.value) {
+          structurePreview.value = { ...basePreview.value }
+        }
+      }
+    }, CONSTRAINT_DEBOUNCE_MS)
+  },
+  { deep: true }
+)
+
+// ---------------------------------------------------------------------------
 // POSCAR upload handlers (existing)
 // ---------------------------------------------------------------------------
 
 async function handlePoscarLoaded(content: string): Promise<void> {
   poscarContent.value = content
   poscarVersion.value++ // Increment version to track this request
+  constraintRequestId++ // Invalidate any in-flight constraint requests
   const currentVersion = poscarVersion.value
   poscarValidation.value = null
+  structurePreview.value = null
+  basePreview.value = null
 
   try {
     const result = await validatePoscar(content)
     // Only update validation if this is the latest request
     if (poscarVersion.value === currentVersion) {
       poscarValidation.value = result
+      const preview = result.preview ?? null
+      basePreview.value = preview
+      structurePreview.value = preview
     }
   } catch (error) {
     // Only update error if this is the latest request
@@ -571,6 +740,8 @@ async function handlePoscarLoaded(content: string): Promise<void> {
         valid: false,
         error: error instanceof Error ? error.message : 'Validation failed'
       }
+      basePreview.value = null
+      structurePreview.value = null
     }
   }
 }
@@ -578,7 +749,10 @@ async function handlePoscarLoaded(content: string): Promise<void> {
 function handlePoscarCleared(): void {
   poscarContent.value = ''
   poscarValidation.value = null
-  poscarVersion.value++ // Increment version to invalidate pending validations
+  basePreview.value = null
+  structurePreview.value = null
+  poscarVersion.value++
+  constraintRequestId++ // Invalidate any in-flight constraint requests
 }
 
 // ---------------------------------------------------------------------------
@@ -743,11 +917,14 @@ async function fetchResumeTasks(): Promise<void> {
 
 function handleModeChange(mode: string | number | boolean): void {
   formData.taskName = ''
+  constraintRequestId++ // Invalidate any in-flight constraint requests
   if (mode === 'resume') {
     // Clear new-task state, load resume candidates
     formData.steps = []
     selectedResumeTaskId.value = null
     selectedResumeTask.value = null
+    basePreview.value = null
+    structurePreview.value = null
     clearTrajFile()
     fetchResumeTasks()
   } else {
@@ -757,13 +934,18 @@ function handleModeChange(mode: string | number | boolean): void {
     formData.steps = []
     poscarContent.value = ''
     poscarValidation.value = null
+    basePreview.value = null
+    structurePreview.value = null
     poscarVersion.value++
     clearTrajFile()
   }
 }
 
-function handleResumeTaskSelected(task: TaskSummary | null): void {
+async function handleResumeTaskSelected(task: TaskSummary | null): Promise<void> {
   selectedResumeTask.value = task
+  constraintRequestId++ // Invalidate in-flight constraint requests
+  poscarVersion.value++ // Use as stale guard for resume preview requests
+  const currentVersion = poscarVersion.value
   // Auto-initialize steps to resume_next_step when a task is selected
   if (task?.resume_next_step) {
     formData.steps = [task.resume_next_step]
@@ -773,6 +955,22 @@ function handleResumeTaskSelected(task: TaskSummary | null): void {
   // Inherit task_name from the previous task only if user hasn't typed one
   if (!formData.taskName.trim()) {
     formData.taskName = task?.task_name || task?.formula || ''
+  }
+  // Fetch structure preview from the parent task
+  if (task) {
+    try {
+      const preview = await getTaskStructurePreview(task.task_id, { raw: true })
+      if (poscarVersion.value !== currentVersion) return // stale
+      basePreview.value = preview
+      structurePreview.value = preview
+    } catch {
+      if (poscarVersion.value !== currentVersion) return
+      basePreview.value = null
+      structurePreview.value = null
+    }
+  } else {
+    basePreview.value = null
+    structurePreview.value = null
   }
 }
 
@@ -1114,5 +1312,13 @@ async function handleSubmit(): Promise<void> {
 .task-name-input {
   margin-top: 16px;
   margin-bottom: 0;
+}
+
+.structure-preview {
+  margin-top: 16px;
+}
+
+.constraint-file-hint {
+  margin-top: 8px;
 }
 </style>

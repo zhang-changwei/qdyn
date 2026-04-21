@@ -14,7 +14,26 @@
           Back
         </el-button>
         <div class="header-info">
-          <h2 class="task-id">Task: {{ truncatedTaskId }}</h2>
+          <div class="task-name-row">
+            <template v-if="editingName">
+              <el-input
+                ref="nameInputRef"
+                v-model="editNameValue"
+                size="large"
+                :maxlength="50"
+                show-word-limit
+                class="name-edit-input"
+                @keyup.enter="saveTaskName"
+                @keyup.escape="cancelEditName"
+              />
+              <el-button type="primary" size="small" @click="saveTaskName" :loading="savingName">Save</el-button>
+              <el-button size="small" @click="cancelEditName">Cancel</el-button>
+            </template>
+            <template v-else>
+              <h2 class="task-id" @click="startEditName" title="Click to rename">{{ taskDisplayName }}</h2>
+              <el-icon class="edit-name-icon" @click="startEditName"><Edit /></el-icon>
+            </template>
+          </div>
           <StatusBadge :status="task.derived_status" />
           <el-tag
             v-if="task.prev_task_id"
@@ -63,6 +82,17 @@
           </el-button>
         </div>
       </div>
+
+      <!-- 3D structure preview -->
+      <el-card v-if="structurePreview" class="structure-card">
+        <template #header>
+          <span class="card-title">Structure Preview</span>
+        </template>
+        <StructureViewer
+          :preview="structurePreview"
+          height="350px"
+        />
+      </el-card>
 
       <!-- Workflow progress timeline -->
       <el-card class="timeline-card">
@@ -549,17 +579,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Document, Download, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
+import { ArrowLeft, Document, Download, Edit, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, continueTask, deleteTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { getTaskStructurePreview } from '@/api/structures'
+import { getTaskDisplayName } from '@/utils/task-display'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
+import StructureViewer from '@/components/StructureViewer.vue'
 import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
-import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse } from '@/api/types'
+import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse, StructurePreviewPayload } from '@/api/types'
 
 const POLL_INTERVAL_MS = 30_000
 const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB
@@ -617,6 +650,64 @@ const truncatedTaskId = computed((): string => {
   if (id.length <= 20) return id
   return `${id.slice(0, 12)}...${id.slice(-8)}`
 })
+
+/** Task display name: task_name > formula > truncated task_id */
+const taskDisplayName = computed((): string => {
+  if (task.value) {
+    return getTaskDisplayName(task.value)
+  }
+  return truncatedTaskId.value
+})
+
+// Inline task name editing
+const editingName = ref(false)
+const editNameValue = ref('')
+const savingName = ref(false)
+const nameInputRef = ref<InstanceType<typeof import('element-plus')['ElInput']> | null>(null)
+
+function startEditName(): void {
+  editNameValue.value = task.value?.task_name || ''
+  editingName.value = true
+  nextTick(() => nameInputRef.value?.focus())
+}
+
+function cancelEditName(): void {
+  editingName.value = false
+}
+
+async function saveTaskName(): Promise<void> {
+  const name = editNameValue.value.trim() || null
+  savingName.value = true
+  try {
+    await renameTask(taskId.value, name)
+    // Update the local store so display refreshes immediately
+    if (tasksStore.currentTask) {
+      tasksStore.currentTask = { ...tasksStore.currentTask, task_name: name }
+    }
+    editingName.value = false
+  } catch {
+    ElMessage.error('Failed to rename task')
+  } finally {
+    savingName.value = false
+  }
+}
+
+/** Structure preview data (fetched on-demand from dedicated endpoint) */
+const structurePreview = ref<StructurePreviewPayload | null>(null)
+let previewRequestId = 0 // monotonic counter to discard stale responses on route change
+
+async function fetchStructurePreview() {
+  const myRequestId = ++previewRequestId
+  try {
+    const result = await getTaskStructurePreview(taskId.value)
+    if (previewRequestId !== myRequestId) return // stale — route changed during fetch
+    structurePreview.value = result
+  } catch {
+    if (previewRequestId !== myRequestId) return
+    // Non-critical: preview unavailable does not block task detail
+    structurePreview.value = null
+  }
+}
 
 // Phase ordering: nvt < nve < scf < pre_namd < namd
 const PHASE_ORDER: Record<string, number> = {
@@ -688,6 +779,7 @@ async function loadTaskData(): Promise<void> {
 
 onMounted(async () => {
   await loadTaskData()
+  fetchStructurePreview()  // fire-and-forget: non-blocking
   startPolling()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('focus', handleFocus)
@@ -697,7 +789,10 @@ onMounted(async () => {
 // Reload when navigating between tasks (e.g. "Resumed from" link)
 watch(taskId, async () => {
   stopPolling()
+  previewRequestId++ // invalidate any in-flight preview request
+  structurePreview.value = null
   await loadTaskData()
+  fetchStructurePreview()
   startPolling()
 })
 
@@ -1283,14 +1378,43 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   flex-shrink: 0;
 }
 
+.task-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .task-id {
   margin: 0;
   font-size: 18px;
   font-family: monospace;
+  cursor: pointer;
+}
+
+.task-id:hover {
+  color: var(--el-color-primary);
+}
+
+.edit-name-icon {
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+
+.edit-name-icon:hover {
+  color: var(--el-color-primary);
+}
+
+.name-edit-input {
+  width: 300px;
 }
 
 .card-title {
   font-weight: 600;
+}
+
+.structure-card {
+  margin-bottom: 24px;
 }
 
 .timeline-card {
