@@ -163,6 +163,7 @@ def qdyn_fused_scf_prenamd_task(
 
     # Run SCF calculations sequentially with CHGCAR passing
     is_first_step = True
+    out = None
     for idx_start in range(0, n_frames, nprocs):
         # scf block
         for subdir in subdirs[idx_start : idx_start + nprocs]:
@@ -237,7 +238,9 @@ def qdyn_fused_scf_prenamd_task(
                 generator=True,
             )
             is_first_step = False
-        next(canac, None)
+        canac_result = next(canac, None)
+        if canac_result is not None:
+            out = canac_result
 
         # remove large out files
         idx_l = max(0, idx_start - 1)
@@ -249,7 +252,8 @@ def qdyn_fused_scf_prenamd_task(
                     os.remove(fpath)
 
     # tdolap output
-    out = next(canac, None)
+    if out is None:
+        out = next(canac, None)
     if out is None:
         raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
     # Ensure generator is exhausted
