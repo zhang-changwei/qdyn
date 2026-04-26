@@ -8,10 +8,13 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+import 'element-plus/theme-chalk/dark/css-vars.css'
+import './styles/qdyn-theme.css'
 
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
+import { useThemeStore } from './stores/theme'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -25,6 +28,9 @@ app.use(ElementPlus)
 // restored the token from localStorage before guards execute.
 const authStore = useAuthStore()
 authStore.init()
+
+// Initialize theme (applies dark class + data-theme attribute to <html>)
+useThemeStore()
 
 // Install router after auth state is restored
 app.use(router)

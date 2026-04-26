@@ -1,0 +1,642 @@
+/* ============================================================================
+   QDYN Design System — Theme Override for Element Plus
+   Defines brand tokens (light + dark), remaps Element Plus CSS variables,
+   and provides self-hosted font declarations.
+   Load AFTER element-plus/dist/index.css.
+   ============================================================================ */
+
+/* ---------- Self-hosted fonts ---------- */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-400.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-500.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Newsreader';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/newsreader-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Newsreader';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/newsreader-italic-latin.ttf') format('truetype');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---------- QDYN Design Tokens + Element Plus overrides (LIGHT) ---------- */
+:root,
+html[data-theme="light"] {
+  /* --- QDYN brand tokens --- */
+  --ink-0: #ffffff;
+  --ink-50: #f7f8fa;
+  --ink-100: #eef0f4;
+  --ink-200: #dde1e8;
+  --ink-300: #c2c8d2;
+  --ink-400: #8a93a3;
+  --ink-500: #5b6473;
+  --ink-600: #3e4654;
+  --ink-700: #262d3a;
+  --ink-800: #161b25;
+  --ink-900: #0c1018;
+
+  --brand-primary: #3a4ea6;
+  --brand-primary-hover: #324391;
+  --brand-primary-press: #2a386f;
+  --brand-primary-soft: #e8ecf9;
+  --brand-primary-fg-on: #ffffff;
+
+  --phosphor: #1abc9c;
+  --phosphor-soft: #d6f3ec;
+  --phosphor-strong: #128f76;
+
+  --success-fg: #1a7f4f;
+  --success-bg: #e2f2eb;
+  --success-border: #a4d2bb;
+
+  --warning-fg: #b8741b;
+  --warning-bg: #faedd7;
+  --warning-border: #e8c692;
+
+  --danger-fg: #c0392b;
+  --danger-bg: #fbe6e3;
+  --danger-border: #ecb2ab;
+
+  --info-fg: #5b6b7d;
+  --info-bg: #eef1f5;
+  --info-border: #c8cfd9;
+
+  --bg-page: #f4f5f8;
+  --bg-surface: #ffffff;
+  --bg-surface-alt: #fafbfc;
+  --bg-elevated: #ffffff;
+  --bg-skeleton: #eef0f4;
+  --bg-overlay: rgba(15, 20, 30, 0.45);
+
+  --fg-primary: var(--ink-800);
+  --fg-secondary: var(--ink-600);
+  --fg-tertiary: var(--ink-500);
+  --fg-placeholder: var(--ink-400);
+  --fg-on-brand: #ffffff;
+
+  --border-default: #dde1e8;
+  --border-strong: #c2c8d2;
+  --border-subtle: #eef0f4;
+  --border-focus: var(--brand-primary);
+
+  --shadow-floating: 0 4px 16px rgba(20, 30, 50, 0.10), 0 1px 2px rgba(20, 30, 50, 0.04);
+  --shadow-hover: 0 2px 8px rgba(20, 30, 50, 0.08);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --font-display: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-28: 28px;
+  --fs-36: 36px;
+
+  --text-display: 600 36px/1.15 var(--font-display);
+  --text-h1: 600 28px/1.2 var(--font-sans);
+  --text-h2: 600 22px/1.3 var(--font-sans);
+  --text-h3: 600 18px/1.35 var(--font-sans);
+  --text-h4: 600 16px/1.4 var(--font-sans);
+  --text-body: 400 14px/1.6 var(--font-sans);
+  --text-body-strong: 500 14px/1.6 var(--font-sans);
+  --text-body-lg: 400 16px/1.55 var(--font-sans);
+  --text-small: 400 13px/1.5 var(--font-sans);
+  --text-caption: 400 12px/1.45 var(--font-sans);
+  --text-overline: 600 12px/1.3 var(--font-sans);
+  --text-code: 400 13px/1.5 var(--font-mono);
+  --text-mono-sm: 400 12px/1.45 var(--font-mono);
+
+  --ease-standard: cubic-bezier(.2, .6, .2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+
+  /* --- Element Plus variable overrides (light) --- */
+
+  /* Core colors */
+  --el-color-white: #ffffff;
+  --el-color-black: #000000;
+
+  /* Primary */
+  --el-color-primary: #3a4ea6;
+  --el-color-primary-light-1: #4d5fae;
+  --el-color-primary-light-2: #6171b7;
+  --el-color-primary-light-3: #7583c0;
+  --el-color-primary-light-4: #8894c9;
+  --el-color-primary-light-5: #9ca6d2;
+  --el-color-primary-light-6: #b0b8db;
+  --el-color-primary-light-7: #c3c9e4;
+  --el-color-primary-light-8: #d7dbed;
+  --el-color-primary-light-9: #ebedf6;
+  --el-color-primary-dark-2: #2e3e84;
+
+  /* Success */
+  --el-color-success: #1a7f4f;
+  --el-color-success-light-1: #308b60;
+  --el-color-success-light-2: #479872;
+  --el-color-success-light-3: #5ea583;
+  --el-color-success-light-4: #75b295;
+  --el-color-success-light-5: #8cbfa7;
+  --el-color-success-light-6: #a3cbb8;
+  --el-color-success-light-7: #bad8ca;
+  --el-color-success-light-8: #d1e5db;
+  --el-color-success-light-9: #e8f2ed;
+  --el-color-success-dark-2: #14653f;
+
+  /* Warning */
+  --el-color-warning: #b8741b;
+  --el-color-warning-light-1: #bf8131;
+  --el-color-warning-light-2: #c68f48;
+  --el-color-warning-light-3: #cd9d5f;
+  --el-color-warning-light-4: #d4ab76;
+  --el-color-warning-light-5: #dbb98d;
+  --el-color-warning-light-6: #e2c7a3;
+  --el-color-warning-light-7: #e9d5ba;
+  --el-color-warning-light-8: #f0e3d1;
+  --el-color-warning-light-9: #f7f1e8;
+  --el-color-warning-dark-2: #935c15;
+
+  /* Danger */
+  --el-color-danger: #c0392b;
+  --el-color-danger-light-1: #c64c40;
+  --el-color-danger-light-2: #cc6055;
+  --el-color-danger-light-3: #d2746a;
+  --el-color-danger-light-4: #d9887f;
+  --el-color-danger-light-5: #df9c95;
+  --el-color-danger-light-6: #e5afaa;
+  --el-color-danger-light-7: #ecc3bf;
+  --el-color-danger-light-8: #f2d7d4;
+  --el-color-danger-light-9: #f8ebe9;
+  --el-color-danger-dark-2: #992d22;
+
+  /* Error (same as danger) */
+  --el-color-error: #c0392b;
+  --el-color-error-light-1: #c64c40;
+  --el-color-error-light-2: #cc6055;
+  --el-color-error-light-3: #d2746a;
+  --el-color-error-light-4: #d9887f;
+  --el-color-error-light-5: #df9c95;
+  --el-color-error-light-6: #e5afaa;
+  --el-color-error-light-7: #ecc3bf;
+  --el-color-error-light-8: #f2d7d4;
+  --el-color-error-light-9: #f8ebe9;
+  --el-color-error-dark-2: #992d22;
+
+  /* Info */
+  --el-color-info: #5b6b7d;
+  --el-color-info-light-1: #6b798a;
+  --el-color-info-light-2: #7b8897;
+  --el-color-info-light-3: #8c97a4;
+  --el-color-info-light-4: #9ca6b1;
+  --el-color-info-light-5: #adb5be;
+  --el-color-info-light-6: #bdc3cb;
+  --el-color-info-light-7: #cdd2d8;
+  --el-color-info-light-8: #dee1e5;
+  --el-color-info-light-9: #eef0f2;
+  --el-color-info-dark-2: #485564;
+
+  /* Backgrounds */
+  --el-bg-color: var(--bg-surface);
+  --el-bg-color-page: var(--bg-page);
+  --el-bg-color-overlay: var(--bg-elevated);
+
+  /* Text */
+  --el-text-color-primary: var(--fg-primary);
+  --el-text-color-regular: var(--fg-secondary);
+  --el-text-color-secondary: var(--fg-tertiary);
+  --el-text-color-placeholder: var(--fg-placeholder);
+  --el-text-color-disabled: var(--ink-400);
+
+  /* Borders */
+  --el-border-color: var(--border-default);
+  --el-border-color-light: var(--border-subtle);
+  --el-border-color-lighter: var(--ink-100);
+  --el-border-color-extra-light: var(--ink-50);
+  --el-border-color-dark: var(--border-strong);
+  --el-border-color-darker: var(--ink-400);
+  --el-border-color-hover: var(--brand-primary);
+
+  /* Fill */
+  --el-fill-color: var(--ink-100);
+  --el-fill-color-light: var(--ink-50);
+  --el-fill-color-lighter: var(--bg-surface-alt);
+  --el-fill-color-extra-light: var(--bg-page);
+  --el-fill-color-dark: var(--ink-200);
+  --el-fill-color-darker: var(--ink-300);
+  --el-fill-color-blank: var(--bg-surface);
+
+  /* Disabled */
+  --el-disabled-bg-color: var(--bg-page);
+  --el-disabled-text-color: var(--ink-400);
+  --el-disabled-border-color: var(--ink-200);
+
+  /* Shadows */
+  --el-box-shadow: var(--shadow-floating);
+  --el-box-shadow-light: var(--shadow-floating);
+  --el-box-shadow-lighter: var(--shadow-hover);
+  --el-box-shadow-dark: 0 6px 24px rgba(20, 30, 50, 0.15), 0 2px 4px rgba(20, 30, 50, 0.06);
+
+  /* Overlay / mask */
+  --el-overlay-color: var(--bg-overlay);
+  --el-overlay-color-light: rgba(15, 20, 30, 0.30);
+  --el-overlay-color-lighter: rgba(15, 20, 30, 0.15);
+  --el-mask-color: var(--bg-overlay);
+  --el-mask-color-extra-light: rgba(15, 20, 30, 0.15);
+
+  /* Font */
+  --el-font-family: var(--font-sans);
+  --el-font-size-extra-large: var(--fs-22);
+  --el-font-size-large: var(--fs-18);
+  --el-font-size-medium: var(--fs-16);
+  --el-font-size-base: var(--fs-14);
+  --el-font-size-small: var(--fs-13);
+  --el-font-size-extra-small: var(--fs-12);
+  --el-font-weight-primary: 500;
+
+  /* Radius */
+  --el-border-radius-base: var(--radius-sm);
+  --el-border-radius-small: 2px;
+  --el-border-radius-round: 20px;
+  --el-border-radius-circle: 100%;
+
+  /* RGB variants (used by EP for rgba() internally) */
+  --el-color-primary-rgb: 58, 78, 166;
+  --el-color-success-rgb: 26, 127, 79;
+  --el-color-warning-rgb: 184, 116, 27;
+  --el-color-danger-rgb: 192, 57, 43;
+  --el-color-error-rgb: 192, 57, 43;
+  --el-color-info-rgb: 91, 107, 125;
+
+  /* Component-level overrides */
+  --el-card-bg-color: var(--bg-surface);
+  --el-table-bg-color: var(--bg-surface);
+  --el-table-tr-bg-color: var(--bg-surface);
+  --el-table-row-hover-bg-color: var(--bg-surface-alt);
+  --el-table-header-bg-color: var(--bg-surface-alt);
+  --el-table-border-color: var(--border-subtle);
+  --el-table-text-color: var(--fg-primary);
+  --el-table-header-text-color: var(--fg-secondary);
+  --el-table-current-row-bg-color: var(--brand-primary-soft);
+  --el-table-expanded-cell-bg-color: var(--bg-surface);
+  --el-dialog-bg-color: var(--bg-elevated);
+  --el-dialog-title-font-size: var(--fs-18);
+  --el-messagebox-title-color: var(--fg-primary);
+  --el-messagebox-content-color: var(--fg-secondary);
+  --el-message-bg-color: var(--bg-elevated);
+  --el-message-border-color: var(--border-default);
+  --el-message-text-color: var(--fg-primary);
+  --el-popover-bg-color: var(--bg-elevated);
+  --el-popover-border-color: var(--border-default);
+  --el-empty-fill-color-0: var(--ink-100);
+  --el-empty-fill-color-1: var(--ink-200);
+  --el-empty-fill-color-2: var(--ink-50);
+  --el-empty-fill-color-3: var(--bg-surface);
+  --el-empty-fill-color-4: var(--ink-100);
+  --el-empty-fill-color-5: var(--ink-200);
+  --el-empty-fill-color-6: var(--ink-50);
+  --el-empty-fill-color-7: var(--bg-surface);
+  --el-empty-fill-color-8: var(--ink-100);
+  --el-empty-fill-color-9: var(--ink-50);
+  --el-skeleton-color: var(--bg-skeleton);
+  --el-skeleton-to-color: var(--bg-surface-alt);
+
+  /* Transition */
+  --el-transition-duration: var(--dur-base);
+  --el-transition-duration-fast: var(--dur-fast);
+}
+
+/* ---------- QDYN Design Tokens + Element Plus overrides (DARK) ---------- */
+html.dark,
+html[data-theme="dark"] {
+  /* --- QDYN brand tokens (dark) --- */
+  --ink-0: #0c1018;
+  --ink-50: #11161f;
+  --ink-100: #161b25;
+  --ink-200: #1e2531;
+  --ink-300: #2a3240;
+  --ink-400: #4a5468;
+  --ink-500: #7e879a;
+  --ink-600: #aab2c0;
+  --ink-700: #d0d5dd;
+  --ink-800: #e8eaef;
+  --ink-900: #f5f6f8;
+
+  --brand-primary: #7c8fe0;
+  --brand-primary-hover: #93a3e8;
+  --brand-primary-press: #6878c2;
+  --brand-primary-soft: #1f2540;
+  --brand-primary-fg-on: #0c1018;
+
+  --phosphor: #4dd5b8;
+  --phosphor-soft: #143229;
+  --phosphor-strong: #82e5ce;
+
+  --success-fg: #5ec995;
+  --success-bg: #14291f;
+  --success-border: #2c5a43;
+
+  --warning-fg: #e0a04e;
+  --warning-bg: #2d2113;
+  --warning-border: #5e4321;
+
+  --danger-fg: #e57369;
+  --danger-bg: #2c1714;
+  --danger-border: #5c2d27;
+
+  --info-fg: #a5b1c1;
+  --info-bg: #1c2230;
+  --info-border: #3a4254;
+
+  --bg-page: #0c1018;
+  --bg-surface: #161b25;
+  --bg-surface-alt: #1a2030;
+  --bg-elevated: #1e2531;
+  --bg-skeleton: #1e2531;
+  --bg-overlay: rgba(0, 0, 0, 0.55);
+
+  --fg-primary: var(--ink-800);
+  --fg-secondary: var(--ink-600);
+  --fg-tertiary: var(--ink-500);
+  --fg-placeholder: var(--ink-400);
+  --fg-on-brand: #0c1018;
+
+  --border-default: #2a3240;
+  --border-strong: #3a4458;
+  --border-subtle: #1e2531;
+  --border-focus: var(--brand-primary);
+
+  --shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.30);
+
+  /* --- Element Plus variable overrides (dark) --- */
+
+  /* Primary */
+  --el-color-primary: #7c8fe0;
+  --el-color-primary-light-1: #7082cc;
+  --el-color-primary-light-2: #6575b8;
+  --el-color-primary-light-3: #5a68a4;
+  --el-color-primary-light-4: #4f5c90;
+  --el-color-primary-light-5: #444f7c;
+  --el-color-primary-light-6: #384268;
+  --el-color-primary-light-7: #2d3654;
+  --el-color-primary-light-8: #222940;
+  --el-color-primary-light-9: #171c2c;
+  --el-color-primary-dark-2: #96a5e6;
+
+  /* Success */
+  --el-color-success: #5ec995;
+  --el-color-success-light-1: #55b688;
+  --el-color-success-light-2: #4da47c;
+  --el-color-success-light-3: #45916f;
+  --el-color-success-light-4: #3d7f63;
+  --el-color-success-light-5: #356c56;
+  --el-color-success-light-6: #2c5a4a;
+  --el-color-success-light-7: #24473d;
+  --el-color-success-light-8: #1c3531;
+  --el-color-success-light-9: #142224;
+  --el-color-success-dark-2: #7ed3aa;
+
+  /* Warning */
+  --el-color-warning: #e0a04e;
+  --el-color-warning-light-1: #ca9148;
+  --el-color-warning-light-2: #b58343;
+  --el-color-warning-light-3: #a0743d;
+  --el-color-warning-light-4: #8b6638;
+  --el-color-warning-light-5: #765833;
+  --el-color-warning-light-6: #60492d;
+  --el-color-warning-light-7: #4b3b28;
+  --el-color-warning-light-8: #362c22;
+  --el-color-warning-light-9: #211e1d;
+  --el-color-warning-dark-2: #e6b371;
+
+  /* Danger */
+  --el-color-danger: #e57369;
+  --el-color-danger-light-1: #cf6960;
+  --el-color-danger-light-2: #b95f58;
+  --el-color-danger-light-3: #a35550;
+  --el-color-danger-light-4: #8e4b48;
+  --el-color-danger-light-5: #784140;
+  --el-color-danger-light-6: #623738;
+  --el-color-danger-light-7: #4d2d30;
+  --el-color-danger-light-8: #372328;
+  --el-color-danger-light-9: #211920;
+  --el-color-danger-dark-2: #ea8f87;
+
+  /* Error */
+  --el-color-error: #e57369;
+  --el-color-error-light-1: #cf6960;
+  --el-color-error-light-2: #b95f58;
+  --el-color-error-light-3: #a35550;
+  --el-color-error-light-4: #8e4b48;
+  --el-color-error-light-5: #784140;
+  --el-color-error-light-6: #623738;
+  --el-color-error-light-7: #4d2d30;
+  --el-color-error-light-8: #372328;
+  --el-color-error-light-9: #211920;
+  --el-color-error-dark-2: #ea8f87;
+
+  /* Info */
+  --el-color-info: #a5b1c1;
+  --el-color-info-light-1: #95a0b0;
+  --el-color-info-light-2: #86909f;
+  --el-color-info-light-3: #77808e;
+  --el-color-info-light-4: #67707d;
+  --el-color-info-light-5: #58606c;
+  --el-color-info-light-6: #49505b;
+  --el-color-info-light-7: #39404a;
+  --el-color-info-light-8: #2a3039;
+  --el-color-info-light-9: #1b2028;
+  --el-color-info-dark-2: #b7c0cd;
+
+  /* Backgrounds */
+  --el-bg-color: var(--bg-surface);
+  --el-bg-color-page: var(--bg-page);
+  --el-bg-color-overlay: var(--bg-elevated);
+
+  /* Text */
+  --el-text-color-primary: var(--fg-primary);
+  --el-text-color-regular: var(--fg-secondary);
+  --el-text-color-secondary: var(--fg-tertiary);
+  --el-text-color-placeholder: var(--fg-placeholder);
+  --el-text-color-disabled: var(--ink-400);
+
+  /* Borders */
+  --el-border-color: var(--border-default);
+  --el-border-color-light: var(--border-subtle);
+  --el-border-color-lighter: var(--ink-200);
+  --el-border-color-extra-light: var(--ink-100);
+  --el-border-color-dark: var(--border-strong);
+  --el-border-color-darker: var(--ink-500);
+  --el-border-color-hover: var(--brand-primary);
+
+  /* Fill */
+  --el-fill-color: var(--ink-200);
+  --el-fill-color-light: var(--ink-100);
+  --el-fill-color-lighter: var(--bg-surface-alt);
+  --el-fill-color-extra-light: var(--ink-50);
+  --el-fill-color-dark: var(--ink-300);
+  --el-fill-color-darker: var(--ink-400);
+  --el-fill-color-blank: var(--bg-surface);
+
+  /* Disabled */
+  --el-disabled-bg-color: var(--ink-200);
+  --el-disabled-text-color: var(--ink-400);
+  --el-disabled-border-color: var(--ink-300);
+
+  /* Shadows */
+  --el-box-shadow: var(--shadow-floating);
+  --el-box-shadow-light: var(--shadow-floating);
+  --el-box-shadow-lighter: var(--shadow-hover);
+  --el-box-shadow-dark: 0 6px 24px rgba(0, 0, 0, 0.50), 0 2px 4px rgba(0, 0, 0, 0.25);
+
+  /* Overlay / mask */
+  --el-overlay-color: var(--bg-overlay);
+  --el-overlay-color-light: rgba(0, 0, 0, 0.40);
+  --el-overlay-color-lighter: rgba(0, 0, 0, 0.25);
+  --el-mask-color: var(--bg-overlay);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.25);
+
+  /* RGB variants (dark) */
+  --el-color-primary-rgb: 124, 143, 224;
+  --el-color-success-rgb: 94, 201, 149;
+  --el-color-warning-rgb: 224, 160, 78;
+  --el-color-danger-rgb: 229, 115, 105;
+  --el-color-error-rgb: 229, 115, 105;
+  --el-color-info-rgb: 165, 177, 193;
+
+  /* Component-level overrides (dark) */
+  --el-card-bg-color: var(--bg-surface);
+  --el-table-bg-color: var(--bg-surface);
+  --el-table-tr-bg-color: var(--bg-surface);
+  --el-table-row-hover-bg-color: var(--bg-surface-alt);
+  --el-table-header-bg-color: var(--bg-surface-alt);
+  --el-table-border-color: var(--border-subtle);
+  --el-table-text-color: var(--fg-primary);
+  --el-table-header-text-color: var(--fg-secondary);
+  --el-table-current-row-bg-color: var(--brand-primary-soft);
+  --el-table-expanded-cell-bg-color: var(--bg-surface);
+  --el-dialog-bg-color: var(--bg-elevated);
+  --el-dialog-title-font-size: var(--fs-18);
+  --el-messagebox-title-color: var(--fg-primary);
+  --el-messagebox-content-color: var(--fg-secondary);
+  --el-message-bg-color: var(--bg-elevated);
+  --el-message-border-color: var(--border-default);
+  --el-message-text-color: var(--fg-primary);
+  --el-popover-bg-color: var(--bg-elevated);
+  --el-popover-border-color: var(--border-default);
+  --el-empty-fill-color-0: var(--ink-300);
+  --el-empty-fill-color-1: var(--ink-400);
+  --el-empty-fill-color-2: var(--ink-200);
+  --el-empty-fill-color-3: var(--bg-surface);
+  --el-empty-fill-color-4: var(--ink-300);
+  --el-empty-fill-color-5: var(--ink-400);
+  --el-empty-fill-color-6: var(--ink-200);
+  --el-empty-fill-color-7: var(--bg-surface);
+  --el-empty-fill-color-8: var(--ink-300);
+  --el-empty-fill-color-9: var(--ink-200);
+  --el-skeleton-color: var(--bg-skeleton);
+  --el-skeleton-to-color: var(--ink-300);
+}
+
+/* Dark mode: primary button text contrast fix */
+html.dark .el-button--primary {
+  --el-button-text-color: var(--brand-primary-fg-on);
+  --el-button-hover-text-color: var(--brand-primary-fg-on);
+  --el-button-active-text-color: var(--brand-primary-fg-on);
+  --el-button-disabled-text-color: var(--ink-400);
+}
+
+/* ---------- Global resets ---------- */
+html, body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: var(--brand-primary-soft);
+  color: var(--brand-primary);
+}
+
+/* ---------- Phosphor pulse (live/running indicators) ---------- */
+@keyframes qdyn-phosphor-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.qdyn-pulse {
+  animation: qdyn-phosphor-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---------- Utility classes ---------- */
+.font-mono {
+  font-family: var(--font-mono) !important;
+}
+
+.font-display {
+  font-family: var(--font-display) !important;
+}
