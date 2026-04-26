@@ -121,7 +121,7 @@
           <el-table-column prop="index" label="#" width="60" />
           <el-table-column label="Job Name" min-width="200">
             <template #default="{ row }">
-              {{ jobDisplayName(row.name) }}
+              <span class="job-name-cell">{{ jobDisplayName(row.name) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="Status" width="120">
@@ -1367,32 +1367,32 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 
 <style scoped>
 .task-detail-page {
-  padding: 24px;
+  padding: var(--space-6);
   max-width: 1000px;
   margin: 0 auto;
 }
 
 .skeleton-container {
-  padding: 24px;
+  padding: var(--space-6);
 }
 
 .detail-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .header-info {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   flex: 1;
 }
 
 .header-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
@@ -1404,23 +1404,22 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 
 .task-id {
   margin: 0;
-  font-size: 18px;
-  font-family: monospace;
+  font: var(--text-h2);
   cursor: pointer;
 }
 
 .task-id:hover {
-  color: var(--el-color-primary);
+  color: var(--brand-primary);
 }
 
 .edit-name-icon {
   cursor: pointer;
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
+  color: var(--fg-tertiary);
+  font-size: var(--fs-14);
 }
 
 .edit-name-icon:hover {
-  color: var(--el-color-primary);
+  color: var(--brand-primary);
 }
 
 .name-edit-input {
@@ -1428,23 +1427,29 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .card-title {
-  font-weight: 600;
+  font: var(--text-h3);
 }
 
 .structure-card {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
 }
 
 .timeline-card {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
 }
 
 .jobs-card {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-6);
+}
+
+/* Job name column in the job table */
+.jobs-card :deep(.el-table) .job-name-cell {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
 }
 
 .no-error {
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
 }
 
 /* Error detail styles */
@@ -1452,20 +1457,20 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   padding: 12px 16px;
   margin: 0 16px 8px;
   background-color: var(--el-color-danger-light-9);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border-left: 3px solid var(--el-color-danger);
 }
 
 .error-loading {
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 .error-message {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .error-content {
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 
 .traceback-collapse {
@@ -1473,39 +1478,39 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .traceback-pre {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
   background-color: var(--el-fill-color-light);
-  padding: 12px;
-  border-radius: 4px;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
   margin: 0;
   max-height: 400px;
   overflow-y: auto;
 }
 
 .error-unavailable {
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 
 /* Expand row content */
 .expand-content {
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
 }
 
 .uuid-section {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .uuid-text {
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--el-text-color-regular);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--fg-secondary);
   user-select: all;
 }
 
@@ -1513,16 +1518,23 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   margin-bottom: 10px;
 }
 
+/* Time descriptions within expand rows */
+.time-section :deep(.el-descriptions__content),
+.time-section :deep(.el-descriptions__label) {
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
+}
+
 .resume-tag {
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
 
 .resume-link {
-  color: var(--el-color-primary);
+  color: var(--brand-primary);
   text-decoration: none;
-  margin-left: 4px;
-  font-family: monospace;
-  font-size: 12px;
+  margin-left: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
 }
 
 .resume-link:hover {
@@ -1530,13 +1542,18 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .progress-section {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
+}
+
+/* Phosphor color override for RUNNING job progress bars */
+.progress-section :deep(.el-progress-bar__inner) {
+  background-color: var(--phosphor);
 }
 
 .images-section {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--el-border-color-lighter);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border-subtle);
 }
 
 .progress-details {
@@ -1546,13 +1563,13 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .scf-estep-detail {
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px dashed var(--el-border-color-lighter);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--border-subtle);
 }
 
 .failed-frames-section {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .failed-frames-list {
@@ -1566,8 +1583,8 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .images-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  padding: 8px 0;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
 }
 
 .image-card {
@@ -1579,16 +1596,16 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .result-image {
   width: 300px;
   height: 220px;
-  border-radius: 4px;
-  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
 }
 
 .image-caption {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 12px;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-12);
 }
 
 .image-name {
@@ -1596,16 +1613,17 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--el-text-color-regular);
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
 }
 
 /* Files section in expand row */
 .files-section {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .files-table {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 .files-table :deep(.el-table__body-wrapper) {
@@ -1619,71 +1637,71 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .file-name-text {
-  font-family: monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
   word-break: break-all;
 }
 
 .file-size-text {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   white-space: nowrap;
 }
 
 .file-action-cell {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   justify-content: flex-end;
 }
 
 .large-file-warning {
-  color: var(--el-color-warning);
-  font-size: 16px;
+  color: var(--warning-fg);
+  font-size: var(--fs-16);
 }
 
 /* Input parameters section */
 /* Skeleton placeholder for lazy-loaded sections within an expanded row */
 .section-skeleton {
-  margin: 8px 0;
-  padding: 8px 0;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) 0;
 }
 
 .input-params-section {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .incar-table :deep(.el-descriptions__label) {
-  font-family: monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
   font-weight: 600;
   min-width: 120px;
 }
 
 .incar-table :deep(.el-descriptions__content) {
-  font-family: monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
 }
 
 .incar-key-with-desc {
-  border-bottom: 1px dashed var(--el-text-color-secondary);
+  border-bottom: 1px dashed var(--fg-tertiary);
   cursor: help;
 }
 
 .kpoints-pre {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
   line-height: 1.5;
   white-space: pre-wrap;
   background-color: var(--el-fill-color-light);
   padding: 10px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin: 0;
 }
 
 /* Subdirectory section styles */
 .subdirs-section {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .subdir-collapse {
@@ -1693,7 +1711,7 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .subdir-collapse :deep(.el-collapse-item__header) {
   height: 36px;
   line-height: 36px;
-  font-size: 13px;
+  font-size: var(--fs-13);
   background-color: transparent;
 }
 
@@ -1704,13 +1722,13 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 .subdir-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
 }
 
 .subdir-name {
-  font-family: monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
   font-weight: 500;
 }
 
@@ -1719,13 +1737,13 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .subdir-file-count {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   margin-left: auto;
-  margin-right: 8px;
+  margin-right: var(--space-2);
 }
 
 .subdir-files-content {
-  padding: 0 8px 8px;
+  padding: 0 var(--space-2) var(--space-2);
 }
 </style>

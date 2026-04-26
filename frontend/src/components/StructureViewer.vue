@@ -10,9 +10,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { storeToRefs } from 'pinia'
 import { WEAS, Atoms } from 'weas'
 import { Color } from 'three'
 import 'weas/style.css'
+import { useThemeStore } from '@/stores/theme'
 import type { StructurePreviewPayload } from '@/api/types'
 
 const props = withDefaults(defineProps<{
@@ -21,6 +23,9 @@ const props = withDefaults(defineProps<{
 }>(), {
   height: '400px'
 })
+
+const themeStore = useThemeStore()
+const { isDark } = storeToRefs(themeStore)
 
 const containerRef = ref<HTMLElement | null>(null)
 let viewer: InstanceType<typeof WEAS> | null = null
@@ -100,6 +105,28 @@ function applyConstraintVisualization(): void {
   }
 }
 
+/**
+ * Update the Three.js scene background to match the current theme.
+ */
+function applyViewerBackground(): void {
+  if (!viewer) return
+  const bgHex = isDark.value ? 0x161b25 : 0xf4f5f8
+  try {
+    const scene = viewer.tjs.scene
+    if (scene) {
+      scene.background = new Color(bgHex)
+      viewer.render()
+    }
+  } catch {
+    // Viewer may not be fully initialized yet
+  }
+}
+
+// React to theme changes
+watch(isDark, () => {
+  applyViewerBackground()
+})
+
 function initViewer(): void {
   if (!containerRef.value) return
 
@@ -124,6 +151,7 @@ function initViewer(): void {
   viewer.avr.modelStyle = 1
   viewer.render()
   applyConstraintVisualization()
+  applyViewerBackground()
 }
 
 
@@ -164,9 +192,9 @@ onUnmounted(() => {
 .structure-viewer-wrapper {
   position: relative;
   width: 100%;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  background-color: #f5f5f5;
+  background-color: var(--bg-page);
 }
 
 .structure-viewer {
@@ -176,16 +204,17 @@ onUnmounted(() => {
 
 .constraint-legend {
   position: absolute;
-  bottom: 8px;
-  right: 8px;
+  bottom: var(--space-2);
+  right: var(--space-2);
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 4px;
-  font-size: 12px;
-  color: #555;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  background: var(--bg-surface);
+  opacity: 0.88;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-12);
+  color: var(--fg-secondary);
   pointer-events: none;
   z-index: 10;
 }
@@ -199,6 +228,6 @@ onUnmounted(() => {
 
 .legend-swatch.constrained {
   background: #7a8794;
-  border: 1px solid #666;
+  border: 1px solid var(--ink-400);
 }
 </style>

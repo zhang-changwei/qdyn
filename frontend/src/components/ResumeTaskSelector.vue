@@ -51,9 +51,9 @@
               :type="task.completed_steps.includes(step) ? 'success' : 'info'"
               size="small"
               effect="plain"
-              class="step-tag"
+              :class="['step-tag', task.completed_steps.includes(step) ? 'step-tag--completed' : 'step-tag--pending']"
             >
-              {{ stepLabel(step) }}
+              {{ task.completed_steps.includes(step) ? '\u2713' : '\u00B7' }}{{ stepLabel(step) }}
             </el-tag>
           </div>
         </div>
@@ -222,7 +222,7 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 .resume-task-selector {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .task-option {
@@ -239,7 +239,7 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 .task-option-tags {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .worker-tag {
@@ -249,15 +249,15 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 }
 
 .task-id {
-  font-family: monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
 }
 
 .task-option-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   margin-top: 2px;
 }
 
@@ -267,49 +267,67 @@ function statusTagType(status: string): '' | 'success' | 'warning' | 'danger' | 
 
 .formula.unknown,
 .unknown {
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
   font-style: italic;
 }
 
 .task-option-steps {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
   margin-top: 6px;
 }
 
 .step-tag {
   font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
 }
 
+/* Step status: completed (green) — matches TaskCard */
+.step-tag--completed {
+  background-color: var(--success-bg) !important;
+  color: var(--success-fg) !important;
+  border-color: var(--success-border) !important;
+}
+
+/* Step status: pending (subtle) — matches TaskCard */
+.step-tag--pending {
+  background-color: var(--ink-100) !important;
+  color: var(--fg-tertiary) !important;
+  border-color: var(--ink-200) !important;
+}
+
+/* Summary card */
 .resume-summary {
-  margin-top: 4px;
+  margin-top: var(--space-1);
+  background-color: var(--bg-surface-alt);
 }
 
 .resume-summary :deep(.el-card__body) {
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
 }
 
 .summary-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 0;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
 }
 
 .summary-label {
   min-width: 90px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-13);
+  color: var(--fg-tertiary);
 }
 
 .summary-value {
-  font-size: 13px;
+  font-size: var(--fs-13);
 }
 
 .monospace {
-  font-family: monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
   word-break: break-all;
 }
 </style>
