@@ -169,7 +169,10 @@ def qdyn_fused_scf_prenamd_task(
             
             # Prepare this subdirectory - link input files from task_dir
             for fname in files_to_copy:
-                os.symlink(fname, os.path.join(subdir, fname))
+                os.symlink(
+                    os.path.join(str(task_dir), fname),
+                    os.path.join(subdir, fname),
+                )
 
             # Move CHGCAR from previous successful calculation for faster convergence
             if prev_chgcar is not None:
