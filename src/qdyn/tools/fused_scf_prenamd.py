@@ -110,7 +110,7 @@ def qdyn_fused_scf_prenamd_task(
 
     all_strus = read_strus(traj_format, traj_path=traj_path)
     software_lower = software.lower()
-    nprocs = total_cpus // omp_python
+    nprocs = max(1, total_cpus // omp_python)
     scf_step = scf_input.scf_step
     if scf_step < 0:
         scf_step = len(all_strus)
@@ -161,13 +161,31 @@ def qdyn_fused_scf_prenamd_task(
     files_to_copy = ipt_files[software_lower]
     vbm, cbm = 0, 0
 
-    # Run SCF calculations sequentially with CHGCAR passing
+    def remove_large_outputs(start: int, end: int) -> None:
+        for subdir in subdirs[start:end]:
+            for fname in ['WAVECAR', 'CHG', 'CHGCAR']:
+                fpath = os.path.join(subdir, fname)
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+
+    # Run SCF calculations sequentially with CHGCAR passing.
+    # The outer loop iterates over CA-NAC pair groups: each group processes
+    # pairs [canac_start, canac_end). Before running CA-NAC, SCF must complete
+    # up to frame canac_end (inclusive) so that both endpoints of every pair
+    # in the group have valid WAVECAR files.
     is_first_step = True
     out = None
-    for idx_start in range(0, n_frames, nprocs):
-        # scf block
-        for subdir in subdirs[idx_start : idx_start + nprocs]:
-            
+    scf_done = 0
+    cleanup_start = 0
+    nstep = n_frames - 1
+
+    for canac_start in range(0, max(nstep, 1), nprocs):
+        canac_end = min(canac_start + nprocs, nstep)
+        scf_target = min(canac_end + 1, n_frames)
+
+        # scf block — only run frames that haven't been computed yet
+        for subdir in subdirs[scf_done:scf_target]:
+
             # Prepare this subdirectory - link input files from task_dir
             for fname in files_to_copy:
                 os.symlink(
@@ -206,7 +224,7 @@ def qdyn_fused_scf_prenamd_task(
 
             except Exception as e:
                 # Mark as failed
-                failed_idx = subdir.split('_')[-1] # 1-based
+                failed_idx = subdir.split('_')[-1]  # 1-based
                 raise RuntimeError(
                     f"SCF calculation failed for frame {failed_idx}"
                 ) from e
@@ -214,10 +232,12 @@ def qdyn_fused_scf_prenamd_task(
             finally:
                 os.chdir(task_dir)
 
+        scf_done = scf_target
+
         # prenamd block
         if is_first_step:
             vbm, cbm, nbands = extract_band_edges(
-                software_lower, 
+                software_lower,
                 subdirs[0],
                 prenamd_input.adv.ikpt,
                 prenamd_input.adv.ispin,
@@ -242,22 +262,19 @@ def qdyn_fused_scf_prenamd_task(
         if canac_result is not None:
             out = canac_result
 
-        # remove large out files
-        idx_l = max(0, idx_start - 1)
-        idx_r = idx_start + nprocs - 1
-        for subdir in subdirs[idx_l:idx_r]:
-            for fname in ['WAVECAR', 'CHG', 'CHGCAR']:
-                fpath = os.path.join(subdir, fname)
-                if os.path.isfile(fpath):
-                    os.remove(fpath)
+        # Remove frames that cannot be needed by later CA-NAC pairs.
+        # Keep frame canac_end — it is the left endpoint of the next group.
+        remove_large_outputs(cleanup_start, canac_end)
+        cleanup_start = canac_end
 
     # tdolap output
     if out is None:
         out = next(canac, None)
     if out is None:
         raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
-    # Ensure generator is exhausted
+    # Ensure generator is exhausted before deleting the final boundary frame.
     next(canac, None)
+    remove_large_outputs(cleanup_start, n_frames)
 
     return {
         "run_dir": str(Path.cwd()),
