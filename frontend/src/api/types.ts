@@ -600,7 +600,7 @@ export interface InputT {
   scf_input?: SCFInput | null
   prenamd_input?: PreNAMDInput | null
   namd_input?: NAMDInput | null
-  steps: Array<'nvt' | 'nve' | 'scf' | 'pre_namd' | 'namd'>
+  steps: Array<'nvt' | 'nve' | 'scf' | 'pre_namd' | 'namd' | 'fused_scf_prenamd'>
   stru: string
   stru_format: string
   stru_hash?: string

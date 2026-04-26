@@ -53,7 +53,7 @@
               effect="plain"
               class="step-tag"
             >
-              {{ step }}
+              {{ stepLabel(step) }}
             </el-tag>
           </div>
         </div>
@@ -95,7 +95,7 @@
         <span class="summary-label">Completed</span>
         <span class="summary-value">
           <template v-if="selectedTask.completed_steps.length > 0">
-            {{ selectedTask.completed_steps.join(' → ') }}
+            {{ selectedTask.completed_steps.map(s => stepLabel(s)).join(' \u2192 ') }}
           </template>
           <template v-else>
             <span class="unknown">None</span>
@@ -105,7 +105,7 @@
       <div class="summary-row">
         <span class="summary-label">Resume from</span>
         <el-tag type="warning" size="small">
-          {{ selectedTask.resume_next_step }}
+          {{ stepLabel(selectedTask.resume_next_step ?? '') }}
         </el-tag>
       </div>
     </el-card>
@@ -186,6 +186,19 @@ function formatDate(timestamp: number): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+const STEP_LABELS: Record<string, string> = {
+  nvt: 'NVT',
+  nve: 'NVE',
+  scf: 'SCF',
+  pre_namd: 'Pre-NAMD',
+  namd: 'NAMD',
+  fused_scf_prenamd: 'Fused SCF+Pre-NAMD',
+}
+
+function stepLabel(step: string): string {
+  return STEP_LABELS[step] ?? step
 }
 
 function workerTagType(worker: string): '' | 'success' | 'info' | 'warning' | 'danger' {
