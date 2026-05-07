@@ -164,7 +164,8 @@ const STEP_LABELS: Record<string, string> = {
   nve: 'NVE',
   scf: 'SCF',
   pre_namd: 'PRE',
-  namd: 'NAMD'
+  namd: 'NAMD',
+  fused_scf_prenamd: 'Fused SCF+Pre-NAMD',
 }
 
 // ============================================

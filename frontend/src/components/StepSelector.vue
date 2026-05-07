@@ -29,6 +29,19 @@
       </div>
     </el-checkbox-group>
 
+    <!-- Fuse toggle -->
+    <div v-if="showFuseToggle" class="fuse-toggle">
+      <el-switch
+        :model-value="isFused"
+        :disabled="fuseToggleDisabled"
+        active-text="Fuse SCF + Pre-NAMD"
+        @update:model-value="handleFuseToggle"
+      />
+      <el-text v-if="fuseToggleDisabled" type="info" size="small" class="fuse-hint">
+        Locked by completed steps
+      </el-text>
+    </div>
+
     <div class="step-hint">
       <el-text type="info" size="small">
         <span v-if="resume && completedSteps && completedSteps.length > 0">
@@ -65,19 +78,56 @@ interface StepConfig {
   label: string
 }
 
-const availableSteps: StepConfig[] = [
+const STEPS_NORMAL: StepConfig[] = [
   { value: 'nvt', label: 'NVT' },
   { value: 'nve', label: 'NVE' },
   { value: 'scf', label: 'SCF' },
   { value: 'pre_namd', label: 'Pre-NAMD' },
-  { value: 'namd', label: 'NAMD' }
+  { value: 'namd', label: 'NAMD' },
 ]
 
-const stepOrder = computed((): string[] => {
-  return availableSteps.map(s => s.value)
+const STEPS_FUSED: StepConfig[] = [
+  { value: 'nvt', label: 'NVT' },
+  { value: 'nve', label: 'NVE' },
+  { value: 'fused_scf_prenamd', label: 'Fused SCF+Pre-NAMD' },
+  { value: 'namd', label: 'NAMD' },
+]
+
+const isFused = computed((): boolean => {
+  return props.modelValue.includes('fused_scf_prenamd')
+    || props.completedSteps.includes('fused_scf_prenamd')
 })
 
-/** Index of the first selectable step in resume mode */
+const effectiveStepOrder = computed((): string[] => {
+  if (isFused.value) {
+    return STEPS_FUSED.map(s => s.value)
+  }
+  return STEPS_NORMAL.map(s => s.value)
+})
+
+const availableSteps = computed((): StepConfig[] => {
+  return isFused.value ? STEPS_FUSED : STEPS_NORMAL
+})
+
+const showFuseToggle = computed((): boolean => {
+  const hasScfAndPreNamd = props.modelValue.includes('scf') && props.modelValue.includes('pre_namd')
+  const hasFused = props.modelValue.includes('fused_scf_prenamd')
+  const completedFused = props.completedSteps.includes('fused_scf_prenamd')
+  const completedScf = props.completedSteps.includes('scf')
+  return hasScfAndPreNamd || hasFused || completedFused || completedScf
+})
+
+const fuseToggleDisabled = computed((): boolean => {
+  if (!props.resume) return false
+  // completedSteps contains fused → locked on
+  if (props.completedSteps.includes('fused_scf_prenamd')) return true
+  // completedSteps contains scf (independent) → locked off
+  if (props.completedSteps.includes('scf')) return true
+  return false
+})
+
+const stepOrder = computed((): string[] => effectiveStepOrder.value)
+
 const resumeStartIndex = computed((): number => {
   if (!props.resume || !props.completedSteps || props.completedSteps.length === 0) {
     return 0
@@ -96,16 +146,9 @@ function isStepSelectable(step: string): boolean {
 
   // Resume mode with known completed steps
   if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
-    // Completed steps are always disabled (shown as done)
     if (stepIndex < resumeStartIndex.value) return false
-
-    // First selectable step is always allowed
     if (stepIndex === resumeStartIndex.value) return true
-
-    // Already selected — allow unchecking
     if (props.modelValue.includes(step)) return true
-
-    // Allow if the previous step in order is selected
     const prevStep = stepOrder.value[stepIndex - 1]
     return props.modelValue.includes(prevStep)
   }
@@ -121,28 +164,24 @@ function isStepSelectable(step: string): boolean {
     return stepIndex === selectedIndices[selectedIndices.length - 1] + 1
   }
 
-  // Normal (new task) mode — allow starting from nvt or scf
-  const allowedFirstSteps = ['nvt', 'scf']
+  // Normal (new task) mode — allow starting from nvt, scf, or fused_scf_prenamd
+  const allowedFirstSteps = ['nvt', 'scf', 'fused_scf_prenamd']
   if (props.modelValue.length === 0) {
     return allowedFirstSteps.includes(step)
   }
 
-  // Already selected — always allow unchecking
   if (props.modelValue.includes(step)) {
     return true
   }
 
-  // Determine the current contiguous range boundaries
   const selectedIndices = props.modelValue.map(s => stepOrder.value.indexOf(s)).sort((a, b) => a - b)
   const minIdx = selectedIndices[0]
   const maxIdx = selectedIndices[selectedIndices.length - 1]
 
-  // Allow extending one step after the current range
   if (stepIndex === maxIdx + 1) {
     return true
   }
 
-  // Allow extending one step before the current range (but not below allowed first steps)
   if (stepIndex === minIdx - 1 && allowedFirstSteps.includes(step)) {
     return true
   }
@@ -153,6 +192,25 @@ function isStepSelectable(step: string): boolean {
 function isArrowActive(step: string): boolean {
   if (isCompletedStep(step)) return true
   return props.modelValue.includes(step)
+}
+
+function handleFuseToggle(fused: boolean): void {
+  let newSteps: string[]
+  const targetOrder = fused
+    ? STEPS_FUSED.map(s => s.value)
+    : STEPS_NORMAL.map(s => s.value)
+  if (fused) {
+    newSteps = props.modelValue
+      .filter(s => s !== 'scf' && s !== 'pre_namd')
+      .concat('fused_scf_prenamd')
+  } else {
+    newSteps = props.modelValue
+      .filter(s => s !== 'fused_scf_prenamd')
+      .concat('scf', 'pre_namd')
+  }
+  emit('update:modelValue', [...newSteps].sort((a, b) =>
+    targetOrder.indexOf(a) - targetOrder.indexOf(b)
+  ))
 }
 
 function handleUpdate(newValue: string[]): void {
@@ -234,6 +292,17 @@ function sortSteps(steps: string[]): string[] {
 
 .step-arrow.active {
   color: var(--el-color-primary);
+}
+
+.fuse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.fuse-hint {
+  font-style: italic;
 }
 
 .step-hint {

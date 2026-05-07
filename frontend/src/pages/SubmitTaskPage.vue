@@ -335,16 +335,27 @@
         </template>
 
         <template v-if="schemas">
-          <template v-for="(step, idx) in formData.steps" :key="step">
-            <el-divider v-if="idx > 0" />
-            <div class="step-params">
-              <h4 class="step-params-title">{{ STEP_CONFIG[step].label }}</h4>
-              <DynamicStepForm
-                :schema="schemas[STEP_CONFIG[step].schemaKey]"
-                :model-value="formData[STEP_CONFIG[step].inputKey] as Record<string, unknown>"
-                @update:model-value="formData[STEP_CONFIG[step].inputKey] = $event as any"
-              />
-            </div>
+          <template v-for="(step, stepIdx) in formData.steps" :key="step">
+            <!-- Fused mode info alert -->
+            <el-alert
+              v-if="step === 'fused_scf_prenamd'"
+              title="Fused mode forces single-node execution for SCF"
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px;"
+            />
+            <template v-for="(entry, entryIdx) in getStepInputEntries(step)" :key="entry.inputKey">
+              <el-divider v-if="stepIdx > 0 || entryIdx > 0" />
+              <div class="step-params">
+                <h4 class="step-params-title">{{ entry.label }}</h4>
+                <DynamicStepForm
+                  :schema="schemas[entry.schemaKey]"
+                  :model-value="formData[entry.inputKey] as Record<string, unknown>"
+                  @update:model-value="formData[entry.inputKey] = $event as any"
+                />
+              </div>
+            </template>
           </template>
         </template>
 
@@ -396,6 +407,23 @@ const STEP_CONFIG: Record<string, {
   scf: { inputKey: 'scf_input', schemaKey: 'scf', label: 'SCF Parameters' },
   pre_namd: { inputKey: 'prenamd_input', schemaKey: 'pre_namd', label: 'Pre-NAMD Parameters' },
   namd: { inputKey: 'namd_input', schemaKey: 'namd', label: 'NAMD Parameters' },
+}
+
+interface StepInputEntry {
+  inputKey: keyof typeof formData
+  schemaKey: keyof StepInputSchemas
+  label: string
+}
+
+function getStepInputEntries(step: string): StepInputEntry[] {
+  if (step === 'fused_scf_prenamd') {
+    return [
+      { inputKey: 'scf_input', schemaKey: 'scf', label: 'SCF Parameters' },
+      { inputKey: 'prenamd_input', schemaKey: 'pre_namd', label: 'Pre-NAMD Parameters' },
+    ]
+  }
+  const config = STEP_CONFIG[step]
+  return config ? [{ inputKey: config.inputKey, schemaKey: config.schemaKey, label: config.label }] : []
 }
 
 const router = useRouter()
@@ -453,7 +481,7 @@ const trajVersion = ref(0) // Concurrency guard: prevents stale async flows from
 const isSCFFirstStep = computed(() => {
   if (submitMode.value !== 'new') return false
   if (formData.steps.length === 0) return false
-  return formData.steps[0] === 'scf'
+  return formData.steps[0] === 'scf' || formData.steps[0] === 'fused_scf_prenamd'
 })
 
 /**
@@ -541,11 +569,11 @@ onMounted(async () => {
     schemas.value = await getStepInputSchemas()
     // Backfill defaults for any steps already selected before schema loaded
     for (const step of formData.steps) {
-      const config = STEP_CONFIG[step]
-      if (!config) continue
-      const current = formData[config.inputKey]
-      if (!current || Object.keys(current as object).length === 0) {
-        ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
+      for (const entry of getStepInputEntries(step)) {
+        const current = formData[entry.inputKey]
+        if (!current || Object.keys(current as object).length === 0) {
+          ;(formData as Record<string, unknown>)[entry.inputKey] = buildStepDefaults(entry.schemaKey)
+        }
       }
     }
   } catch (error) {
@@ -599,26 +627,41 @@ const formRules: FormRules = {
   ]
 }
 
-// Watch steps changes to init/reset input objects from schema defaults
+// Watch steps changes to init/reset input objects from schema defaults.
+// Uses inputKey active sets so scf↔fused toggle does not reset shared inputs.
 watch(
   () => formData.steps,
   (newSteps, oldSteps) => {
-    // Initialize inputs for newly selected steps
-    for (const step of newSteps) {
-      const config = STEP_CONFIG[step]
-      if (!config) continue
-      const current = formData[config.inputKey]
+    const newInputKeys = new Set(
+      newSteps.flatMap(s => getStepInputEntries(s).map(e => e.inputKey))
+    )
+    const oldInputKeys = new Set(
+      (oldSteps ?? []).flatMap(s => getStepInputEntries(s).map(e => e.inputKey))
+    )
+
+    // Initialize: fill any input that is needed but empty
+    for (const key of newInputKeys) {
+      const current = formData[key]
       if (!current || Object.keys(current as object).length === 0) {
-        ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
+        const entry = newSteps
+          .flatMap(s => getStepInputEntries(s))
+          .find(e => e.inputKey === key)
+        if (entry) {
+          ;(formData as Record<string, unknown>)[key] = buildStepDefaults(entry.schemaKey)
+        }
       }
     }
 
-    // Reset inputs for deselected steps
-    const removedSteps = (oldSteps || []).filter(s => !newSteps.includes(s))
-    for (const step of removedSteps) {
-      const config = STEP_CONFIG[step]
-      if (!config) continue
-      ;(formData as Record<string, unknown>)[config.inputKey] = buildStepDefaults(config.schemaKey)
+    // Reset: only clear inputs that old steps used but new steps no longer need
+    for (const key of oldInputKeys) {
+      if (!newInputKeys.has(key)) {
+        const entry = (oldSteps ?? [])
+          .flatMap(s => getStepInputEntries(s))
+          .find(e => e.inputKey === key)
+        if (entry) {
+          ;(formData as Record<string, unknown>)[key] = buildStepDefaults(entry.schemaKey)
+        }
+      }
     }
   },
   { deep: true }
@@ -1024,9 +1067,23 @@ async function handleSubmit(): Promise<void> {
     }
   }
 
+  // Fused mode: force scf_input.nodes = 1 before payload construction
+  if (formData.steps.includes('fused_scf_prenamd')) {
+    const scfInput = formData.scf_input as Record<string, unknown>
+    if (scfInput) {
+      scfInput.nodes = 1
+    }
+  }
+
   // Build submit payload matching backend InputT exactly
   const useTrajHash = !isResume && isSCFFirstStep.value && !!trajHash.value
-  const payload = {
+
+  // Collect active input keys via getStepInputEntries
+  const activeInputKeys = new Set(
+    formData.steps.flatMap(s => getStepInputEntries(s).map(e => e.inputKey))
+  )
+
+  const payload: Record<string, unknown> = {
     basic_input: {
       software: formData.basic_input.software,
       plot: formData.basic_input.plot,
@@ -1037,13 +1094,14 @@ async function handleSubmit(): Promise<void> {
     stru_format: 'vasp',
     ...(useTrajHash ? { stru_hash: trajHash.value } : {}),
     task_name: formData.taskName.trim() || null,
-    // Include inputs for selected steps
-    ...(formData.steps.includes('nvt') && { nvt_input: formData.nvt_input }),
-    ...(formData.steps.includes('nve') && { nve_input: formData.nve_input }),
-    ...(formData.steps.includes('scf') && { scf_input: formData.scf_input }),
-    ...(formData.steps.includes('pre_namd') && { prenamd_input: formData.prenamd_input }),
-    ...(formData.steps.includes('namd') && { namd_input: formData.namd_input })
   }
+
+  // Include inputs for all active steps (covers fused → scf_input + prenamd_input)
+  if (activeInputKeys.has('nvt_input')) payload.nvt_input = formData.nvt_input
+  if (activeInputKeys.has('nve_input')) payload.nve_input = formData.nve_input
+  if (activeInputKeys.has('scf_input')) payload.scf_input = formData.scf_input
+  if (activeInputKeys.has('prenamd_input')) payload.prenamd_input = formData.prenamd_input
+  if (activeInputKeys.has('namd_input')) payload.namd_input = formData.namd_input
 
   // Build URL with optional resume parameters
   let submitUrl = `/submit?method=${formData.method}`

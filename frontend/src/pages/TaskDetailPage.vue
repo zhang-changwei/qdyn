@@ -119,7 +119,11 @@
           @expand-change="handleExpandChange"
         >
           <el-table-column prop="index" label="#" width="60" />
-          <el-table-column prop="name" label="Job Name" min-width="200" />
+          <el-table-column label="Job Name" min-width="200">
+            <template #default="{ row }">
+              {{ jobDisplayName(row.name) }}
+            </template>
+          </el-table-column>
           <el-table-column label="Status" width="120">
             <template #default="{ row }">
               <StatusBadge :status="row.derived_state" />
@@ -236,6 +240,9 @@
                       >
                         {{ jobProgress.get(row.uuid)!.batch!.failed }} failed
                       </el-text>
+                    </template>
+                    <template v-else-if="jobProgress.get(row.uuid)?.step_type === 'fused_cat'">
+                      <el-text size="small">CA-NAC aggregation</el-text>
                     </template>
                     <template v-else>
                       <el-text size="small">
@@ -709,16 +716,27 @@ async function fetchStructurePreview() {
   }
 }
 
-// Phase ordering: nvt < nve < scf < pre_namd < namd
+// Phase ordering: nvt < nve < scf/fused < pre_namd < namd
 const PHASE_ORDER: Record<string, number> = {
   nvt: 0,
   nve: 1,
   scf: 2,
+  fused_scf_prenamd: 2,
+  fused_cat: 2,
   pre_namd: 3,
   namd: 4,
 }
 
+function jobDisplayName(name: string): string {
+  if (name.toLowerCase().includes('cat_canac')) return 'CA-NAC Aggregation'
+  return name
+}
+
 function getPhaseFromName(name: string): number {
+  const lower = name.toLowerCase()
+  // Fused priority match (before scf/namd substring would match)
+  if (lower.includes('fused')) return PHASE_ORDER['fused_scf_prenamd']
+  if (lower.includes('cat_canac')) return PHASE_ORDER['fused_cat']
   // Job names like "nvt_0", "nve_0", "scf_0", "pre_namd_0", "namd_0"
   // Extract the step type by removing the trailing "_<index>"
   const lastUnderscore = name.lastIndexOf('_')
@@ -1320,7 +1338,7 @@ function isMdJob(job: JobStatusItem): boolean {
 
 function isScfJob(job: JobStatusItem): boolean {
   const name = job.name.toLowerCase()
-  return name.startsWith('scf_')
+  return name.startsWith('scf_') || name.includes('fused')
 }
 
 function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): void {

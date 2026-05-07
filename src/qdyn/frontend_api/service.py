@@ -244,8 +244,12 @@ def get_job_info_safe(
 
     for step_name, uuid_list in job_ids.items():
         if job_uuid in uuid_list:
-            job_name = f"{step_name}_{uuid_list.index(job_uuid)}"
             job_index = uuid_list.index(job_uuid)
+            if (step_name == "fused_scf_prenamd"
+                    and job_index == len(uuid_list) - 1):
+                job_name = "cat_canac_outputs"
+            else:
+                job_name = f"{step_name}_{job_index}"
             break
 
     return JobStatusItem(
@@ -613,9 +617,14 @@ def get_task_detail(
             if ji is not None:
                 raw_state = ji.state.value
                 derived = derive_job_state(raw_state)
+                if (step_name == "fused_scf_prenamd"
+                        and idx == len(uuid_list) - 1):
+                    display_name = "cat_canac_outputs"
+                else:
+                    display_name = f"{step_name}_{idx}"
                 job_item = JobStatusItem(
                     uuid=job_uuid,
-                    name=f"{step_name}_{idx}",
+                    name=display_name,
                     state=raw_state,
                     derived_state=derived,
                     index=idx,
@@ -631,7 +640,11 @@ def get_task_detail(
                 # Fallback: per-job query (batch query missed this UUID)
                 try:
                     job_item = get_job_info_safe(task_id, job_uuid, manager_getter)
-                    job_item.name = f"{step_name}_{idx}"
+                    if (step_name == "fused_scf_prenamd"
+                            and idx == len(uuid_list) - 1):
+                        job_item.name = "cat_canac_outputs"
+                    else:
+                        job_item.name = f"{step_name}_{idx}"
                     job_item.index = idx
                     jobs.append(job_item)
                     raw_status_counts[job_item.state] = (
@@ -669,8 +682,16 @@ def get_task_detail(
     )
 
 
-# Canonical step ordering used for resume eligibility computation
-_STEP_ORDER = ["nvt", "nve", "scf", "pre_namd", "namd"]
+# Canonical step orderings used for resume eligibility computation
+_STEP_ORDER_NORMAL = ["nvt", "nve", "scf", "pre_namd", "namd"]
+_STEP_ORDER_FUSED = ["nvt", "nve", "fused_scf_prenamd", "namd"]
+
+
+def _get_step_order(job_ids: dict) -> list[str]:
+    """Return the step ordering based on which steps exist."""
+    if "fused_scf_prenamd" in job_ids:
+        return _STEP_ORDER_FUSED
+    return _STEP_ORDER_NORMAL
 
 
 def _build_task_summary(
@@ -726,7 +747,8 @@ def _build_task_summary(
         step_all_completed[step_name] = all_completed_for_step
 
     # Sort steps by canonical order
-    steps = [s for s in _STEP_ORDER if s in job_ids]
+    step_order = _get_step_order(job_ids)
+    steps = [s for s in step_order if s in job_ids]
 
     # Compute completed_steps: contiguous prefix of fully-completed steps
     completed_steps: List[str] = []
@@ -740,9 +762,9 @@ def _build_task_summary(
     resume_next_step: str | None = None
     if completed_steps:
         last_completed = completed_steps[-1]
-        last_idx = _STEP_ORDER.index(last_completed)
-        if last_idx + 1 < len(_STEP_ORDER):
-            resume_next_step = _STEP_ORDER[last_idx + 1]
+        last_idx = step_order.index(last_completed)
+        if last_idx + 1 < len(step_order):
+            resume_next_step = step_order[last_idx + 1]
 
     created_at = _get_task_created_at_fallback(task_id)
     derived_status = derive_task_status(raw_status_counts)
@@ -1406,6 +1428,11 @@ def serve_subdir_file(
 def _detect_step_type(job_name: str, run_dir_path: str | None = None) -> str:
     """Detect the step type from job name or run_dir path string."""
     name_lower = job_name.lower()
+    # Fused detection first (avoids "scf"/"namd" substring false matches)
+    if "fused" in name_lower:
+        return "fused_scf_prenamd"
+    if "cat_canac" in name_lower:
+        return "fused_cat"
     if "pre_namd" in name_lower:
         return "pre_namd"
     if "namd" in name_lower:
@@ -1418,6 +1445,10 @@ def _detect_step_type(job_name: str, run_dir_path: str | None = None) -> str:
         return "scf"
     if run_dir_path:
         dir_lower = run_dir_path.lower()
+        if "fused" in dir_lower:
+            return "fused_scf_prenamd"
+        if "cat_canac" in dir_lower:
+            return "fused_cat"
         if "pre_namd" in dir_lower:
             return "pre_namd"
         if "namd" in dir_lower:
@@ -1651,8 +1682,12 @@ def get_job_progress(
 
     if step_type in ("nvt", "nve"):
         return _get_md_progress(access, step_type)
-    elif step_type == "scf":
+    elif step_type in ("scf", "fused_scf_prenamd"):
         return _get_scf_progress(access)
+    elif step_type == "fused_cat":
+        return JobProgressResponse(
+            available=True, step_type="fused_cat"
+        )
     else:
         return JobProgressResponse(available=False, step_type=step_type)
 
@@ -2508,7 +2543,11 @@ def _try_preview_for_task(
 
     # Get the first step's first job UUID
     # Preserve step ordering based on canonical workflow order
-    _STEP_ORDER_MAP = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
+    _STEP_ORDER_MAP = {
+        "nvt": 0, "nve": 1, "scf": 2,
+        "fused_scf_prenamd": 2, "fused_cat": 2,
+        "pre_namd": 3, "namd": 4,
+    }
     sorted_steps = sorted(
         job_ids.keys(),
         key=lambda s: _STEP_ORDER_MAP.get(s, 99),
