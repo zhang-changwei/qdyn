@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -119,6 +120,10 @@ def _make_manager() -> MainWorkflow:
     )
     manager.init_active_pool()
     return manager
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_get_pool_returns_active_pool_instance():
@@ -271,6 +276,7 @@ def test_switch_active_pool_not_implemented():
 def test_load_config_requires_worker_pools(tmp_path: Path):
     jf_config = tmp_path / "jf.yaml"
     jf_config.write_text("workers: {}\n", encoding="utf-8")
+    jf_hash = _file_sha256(jf_config)
 
     qdyn_config = tmp_path / "qdyn.yaml"
     qdyn_config.write_text(
@@ -278,6 +284,7 @@ def test_load_config_requires_worker_pools(tmp_path: Path):
             "basic:\n"
             f"  jf_project_path: {jf_config.as_posix()}\n"
             "  jf_project_name: jf_qdyn\n"
+            f"  jf_config_hash: '{jf_hash}'\n"
             "auth:\n"
             "  secret_key: ''\n"
         ),
@@ -287,6 +294,43 @@ def test_load_config_requires_worker_pools(tmp_path: Path):
     with pytest.raises(ConfigError, match="Missing 'worker_pools'"):
         cfg, jf_cfg = load_config(qdyn_config)
         validate_and_fill_runtime_config(cfg, jf_cfg)
+
+
+def test_load_config_requires_jf_config_hash(tmp_path: Path):
+    jf_config = tmp_path / "jf.yaml"
+    jf_config.write_text("workers: {}\n", encoding="utf-8")
+
+    qdyn_config = tmp_path / "qdyn.yaml"
+    qdyn_config.write_text(
+        (
+            "basic:\n"
+            f"  jf_project_path: {jf_config.as_posix()}\n"
+            "  jf_project_name: jf_qdyn\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="Missing 'basic.jf_config_hash'"):
+        load_config(qdyn_config)
+
+
+def test_load_config_rejects_mismatched_jf_config_hash(tmp_path: Path):
+    jf_config = tmp_path / "jf.yaml"
+    jf_config.write_text("workers: {}\n", encoding="utf-8")
+
+    qdyn_config = tmp_path / "qdyn.yaml"
+    qdyn_config.write_text(
+        (
+            "basic:\n"
+            f"  jf_project_path: {jf_config.as_posix()}\n"
+            "  jf_project_name: jf_qdyn\n"
+            "  jf_config_hash: 'not-the-real-hash'\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="jobflow-remote config hash mismatch"):
+        load_config(qdyn_config)
 
 
 def test_validate_workflow_input_requires_fused_inputs(tmp_path: Path):

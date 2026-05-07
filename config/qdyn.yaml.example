@@ -10,6 +10,7 @@
 basic:
   jf_project_path: "config/jf_qdyn.yaml"
   jf_project_name: "jf_qdyn"
+  jf_config_hash: ""  # managed by scripts/generate_jf_config.py
   user_db_path: "data/qdyn_users.db"
   mongo_dir: "mongo/"
   port: 8000

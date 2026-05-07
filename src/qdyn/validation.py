@@ -1,4 +1,5 @@
 import io
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -95,6 +96,14 @@ def _warn_and_fill_default_leaf(
         )
 
 
+def _compute_file_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def load_config(
     config_path: str | Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -132,6 +141,23 @@ def load_config(
     if not isinstance(jf_cfg, dict):
         raise ConfigError(f"Jobflow-remote project config at {jf_path} is empty or invalid.")
     logging.info(f"Found jobflow-remote project config at {jf_path}.")
+
+    expected_hash = cfg.get("basic", {}).get("jf_config_hash")
+    if not isinstance(expected_hash, str) or not expected_hash:
+        raise ConfigError(
+            "Missing 'basic.jf_config_hash' in QDYN config.\n"
+            "Run scripts/generate_jf_config.py to generate jf-remote config "
+            "and write the matching hash back to qdyn.yaml."
+        )
+
+    actual_hash = _compute_file_sha256(jf_path)
+    if expected_hash != actual_hash:
+        raise ConfigError(
+            "jobflow-remote config hash mismatch.\n"
+            f"Expected: {expected_hash}\n"
+            f"Actual:   {actual_hash}\n"
+            "Re-run scripts/generate_jf_config.py and do not edit jf_remote_cfg manually."
+        )
 
     return cfg, jf_cfg
 

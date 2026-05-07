@@ -156,14 +156,15 @@ def test_validate_and_fill_runtime_config_rejects_old_step_resource_names():
         )
 
 
-def test_normalize_worker_resources_maps_cpus_per_node_to_threads():
+def test_normalize_worker_resources_maps_ntasks_and_cpus_per_task():
     resources = normalize_worker_resources(
-        {"nodes": 1, "cpus_per_node": 4, "p": 2}
+        {"nodes": 1, "ntasks_per_node": 4, "cpus_per_task": 2, "p": 2}
     )
 
     assert resources == {
         "nodes": 1,
-        "threads_per_process": 4,
+        "processes_per_node": 4,
+        "threads_per_process": 2,
         "scheduler_kwargs": {"p": 2},
     }
 

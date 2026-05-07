@@ -14,7 +14,9 @@ The output file is written atomically (write to temp, then rename).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -256,7 +258,7 @@ def _atomic_write(path: Path, content: str) -> None:
     """Write content to path atomically via temp file + rename.
 
     The temp file is created in the same directory as the target so that
-    os.rename() is guaranteed to be atomic (same filesystem).
+    os.replace() is guaranteed to be atomic (same filesystem).
     """
     target_dir = path.parent
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -265,9 +267,9 @@ def _atomic_write(path: Path, content: str) -> None:
         dir=str(target_dir), prefix=".jf_config_", suffix=".tmp"
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(content)
-        os.rename(tmp_path, str(path))
+        os.replace(tmp_path, str(path))
     except BaseException:
         # Clean up temp file on failure
         try:
@@ -275,6 +277,67 @@ def _atomic_write(path: Path, content: str) -> None:
         except OSError:
             pass
         raise
+
+
+def _compute_file_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _update_qdyn_jf_config_hash(qdyn_path: Path, jf_config_hash: str) -> None:
+    raw = qdyn_path.read_text(encoding="utf-8")
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    lines = raw.splitlines(keepends=True)
+
+    basic_idx = None
+    basic_indent = 0
+    basic_pattern = re.compile(r"^(?P<indent>\s*)basic:\s*(?:#.*)?$")
+    for idx, line in enumerate(lines):
+        match = basic_pattern.match(line.rstrip("\r\n"))
+        if match:
+            basic_idx = idx
+            basic_indent = len(match.group("indent"))
+            break
+
+    if basic_idx is None:
+        print(
+            f"ERROR: {qdyn_path} is missing a top-level 'basic' section",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    section_end = len(lines)
+    for idx in range(basic_idx + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+        if indent <= basic_indent:
+            section_end = idx
+            break
+
+    child_indent = " " * (basic_indent + 2)
+    hash_line = f'{child_indent}jf_config_hash: "{jf_config_hash}"{newline}'
+
+    for idx in range(basic_idx + 1, section_end):
+        stripped = lines[idx].lstrip()
+        indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+        if indent > basic_indent and stripped.startswith("jf_config_hash:"):
+            lines[idx] = hash_line
+            break
+    else:
+        insert_idx = section_end
+        for idx in range(basic_idx + 1, section_end):
+            stripped = lines[idx].lstrip()
+            indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+            if indent > basic_indent and stripped.startswith("jf_project_name:"):
+                insert_idx = idx + 1
+        lines.insert(insert_idx, hash_line)
+
+    _atomic_write(qdyn_path, "".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +418,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     _atomic_write(output_path, yaml_content)
+    jf_config_hash = _compute_file_sha256(output_path)
+    _update_qdyn_jf_config_hash(args.qdyn_config, jf_config_hash)
 
     # Summary
     pools = qdyn_cfg.get("worker_pools", {})
@@ -362,6 +427,7 @@ def main(argv: list[str] | None = None) -> None:
         p.get("pool", {}).get("size", 0) for p in pools.values()
     )
     print(f"Generated {output_path}")
+    print(f"  jf_config_hash: {jf_config_hash}")
     print(f"  Pools: {', '.join(pools.keys())}")
     print(f"  Total workers: {total_workers}")
     for pool_name, pool_def in pools.items():
