@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from qdyn.frontend_api.service import (
     _detect_step_type,
@@ -76,18 +77,19 @@ def test_get_job_input_params_reads_prenamd_parameters_from_jfremote_json(
         name = "qdyn_pre_namd"
 
     class DummyManager:
+        def get_task_pool(self, task_id: str):
+            assert task_id == "task-1"
+            return SimpleNamespace(
+                build_run_dir_access=lambda job_uuid: LocalRunDirAccess(run_dir)
+            )
+
         def get_job_info(self, job_uuid: str):
             assert job_uuid == "job-123"
             return DummyJobInfo()
 
     from qdyn.frontend_api.run_dir_access import LocalRunDirAccess
 
-    monkeypatch.setattr(
-        "qdyn.frontend_api.service.get_run_dir_access",
-        lambda job_uuid, manager: LocalRunDirAccess(run_dir),
-    )
-
-    response = get_job_input_params(DummyManager(), "job-123")
+    response = get_job_input_params(DummyManager(), "task-1", "job-123")
 
     assert response.available is True
     assert response.parameters_title == "PRE_NAMD Parameters"
@@ -120,17 +122,18 @@ def test_get_job_progress_hides_placeholder_progress_for_namd(monkeypatch, tmp_p
             return DummyJobInfo()
 
     class DummyManager:
+        def get_task_pool(self, task_id: str):
+            assert task_id == "task-1"
+            return SimpleNamespace(
+                build_run_dir_access=lambda job_uuid: LocalRunDirAccess(run_dir)
+            )
+
         def _ensure_job_controller(self):
             return DummyJobController()
 
     from qdyn.frontend_api.run_dir_access import LocalRunDirAccess
 
-    monkeypatch.setattr(
-        "qdyn.frontend_api.service.get_run_dir_access",
-        lambda job_uuid, manager: LocalRunDirAccess(run_dir),
-    )
-
-    response = get_job_progress(DummyManager(), "job-123")
+    response = get_job_progress(DummyManager(), "task-1", "job-123")
 
     assert response.available is False
     assert response.step_type == "namd"

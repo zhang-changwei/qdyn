@@ -18,8 +18,6 @@ from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
 from .run_dir_access import (
     FileInfo,
-    LocalRunDirAccess,
-    RemoteRunDirAccess,
     RunDirAccess,
 )
 from .models import (
@@ -44,6 +42,14 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+
+def _get_task_run_dir_access(
+    manager: MainWorkflow,
+    task_id: str,
+    job_uuid: str,
+) -> RunDirAccess | None:
+    """Build run-dir access using the task's owning pool."""
+    return manager.get_task_pool(task_id).build_run_dir_access(job_uuid)
 
 
 # -----------------------------------------------------------------------------
@@ -891,57 +897,6 @@ def _is_blacklisted(name: str) -> bool:
     return False
 
 
-def get_run_dir_access(
-    job_uuid: str, manager: MainWorkflow
-) -> RunDirAccess | None:
-    """Create the appropriate RunDirAccess based on worker type.
-
-    For local workers, returns a ``LocalRunDirAccess`` backed by the local
-    filesystem.  For remote workers, returns a ``RemoteRunDirAccess`` that
-    uses ``SharedHosts`` from jobflow-remote for SSH operations.
-
-    Returns ``None`` when the run_dir is not yet assigned or unreachable.
-    """
-    jc = manager._ensure_job_controller()
-    try:
-        job_info = jc.get_job_info(job_id=job_uuid)
-    except Exception:
-        return None
-
-    if job_info is None or not job_info.run_dir:
-        return None
-
-    run_dir = str(job_info.run_dir)
-    worker_name = job_info.worker
-
-    # Determine worker type from jf_config
-    worker_cfg = manager.jf_config.get("workers", {}).get(worker_name, {})
-    worker_type = worker_cfg.get("type", "local")
-
-    if worker_type in ("remote", "separated_transfer"):
-        try:
-            from jobflow_remote.utils.remote import SharedHosts
-
-            project = jc.project
-            shared = SharedHosts(project)
-            host = shared.get_host(worker_name)
-            access = RemoteRunDirAccess(run_dir, host)
-            if access.is_available():
-                return access
-            return None
-        except Exception:
-            logger.warning(
-                "Failed to create remote access for worker %s, job %s",
-                worker_name, job_uuid,
-            )
-            return None
-    else:
-        p = Path(run_dir)
-        if p.is_dir():
-            return LocalRunDirAccess(p)
-        return None
-
-
 def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
     """Parse an INCAR file into a key-value dictionary.
 
@@ -986,7 +941,7 @@ def _parse_incar_text(text: str) -> Dict[str, str]:
 
 
 def get_job_input_params(
-    manager: MainWorkflow, job_uuid: str
+    manager: MainWorkflow, task_id: str, job_uuid: str
 ) -> JobInputParamsResponse:
     """Read job input parameters from a job's run directory.
 
@@ -996,7 +951,7 @@ def get_job_input_params(
     Uses ``read_multiple_root_texts()`` to fetch both files in a single
     SSH command for remote workers (reduces 4 roundtrips to 1).
     """
-    access = get_run_dir_access(job_uuid, manager)
+    access = _get_task_run_dir_access(manager, task_id, job_uuid)
     if access is None:
         return JobInputParamsResponse(available=False)
 
@@ -1645,7 +1600,7 @@ def _parse_oszicar_tail_text(tail: str) -> dict:
 
 
 def get_job_progress(
-    manager: MainWorkflow, job_uuid: str
+    manager: MainWorkflow, task_id: str, job_uuid: str
 ) -> JobProgressResponse:
     """
     Get the progress of a running or completed job.
@@ -1671,7 +1626,7 @@ def get_job_progress(
     if raw_state in ("WAITING", "READY", "CHECKED_OUT"):
         return JobProgressResponse(available=False)
 
-    access = get_run_dir_access(job_uuid, manager)
+    access = _get_task_run_dir_access(manager, task_id, job_uuid)
     if access is None:
         return JobProgressResponse(available=False)
 
@@ -1892,7 +1847,7 @@ def get_job_images(
         return JobImagesResponse(available=True)
 
     # Get RunDirAccess to verify file existence
-    access = get_run_dir_access(job_uuid, manager)
+    access = _get_task_run_dir_access(manager, task_id, job_uuid)
 
     items: List[JobImageItem] = []
     for img_path in image_paths:
@@ -2156,6 +2111,7 @@ def _build_md_references(
 
 def get_job_md_timeseries(
     manager: MainWorkflow,
+    task_id: str,
     job_uuid: str,
     attempt: int | None,
     max_points: int,
@@ -2187,9 +2143,7 @@ def get_job_md_timeseries(
         return JobMdTimeseriesResponse(available=False, warning="Job run directory not available yet.")
 
     # Check if this is a remote worker -- graceful fallback for Phase 1
-    worker_name = job_info.worker
-    worker_cfg = manager.jf_config.get("workers", {}).get(worker_name, {})
-    if worker_cfg.get("type") in ("remote", "separated_transfer"):
+    if manager.get_task_pool(task_id).remote:
         return JobMdTimeseriesResponse(
             available=False,
             step_type=_detect_step_type(job_name, str(raw_run_dir)),

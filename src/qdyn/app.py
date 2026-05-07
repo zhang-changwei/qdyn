@@ -20,13 +20,15 @@ from qdyn import __version__
 
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
+from .calc_common import extract_structure_metadata
 from .errors import ConfigError
 from .database import qdyndb
 from .frontend_api import create_frontend_router
 from .input import InputT, NVTInputT, NVEInputT, SCFInputT, PreNAMDInputT, NAMDInputT
 from .main_workflow import (
-    MainWorkflow, ValidationError, ConfigError, ResumeError, QueryError,
+    MainWorkflow, ValidationError, ResumeError, QueryError,
 )
+from .pool import WorkerPool
 from .params import HASH_PATTERN as _HASH_PATTERN
 from .validation import validate_and_fill_runtime_config
 
@@ -67,12 +69,8 @@ async def lifespan(app: FastAPI):
     expire_hours = auth_cfg["token_expire_hours"]
     generated_key = configure_auth(secret_key, expire_hours)
 
-    # -- create user_data folder if not exist --
-    user_data_dir = str(Path(manager.config["basic"]["user_data"]).resolve())
-    traj_dir = os.path.join(user_data_dir, "trajs")
-    model_dir = os.path.join(user_data_dir, "models")
-    os.makedirs(traj_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+    # user_data folders are created on demand when uploading files, if not presented.
+    # One user_data for each worker. No longer created at startup.
 
     # persist auto-generated key back to config file if it was empty
     if not auth_cfg["secret_key"]:
@@ -100,7 +98,7 @@ async def lifespan(app: FastAPI):
     from .queue_poller import queue_dispatch_loop
 
     # Read poll interval from normalized pool config.
-    _, _, pool_cfg = manager._resolve_pool_context()
+    pool_cfg = manager.active_pool.pool_cfg
     poll_interval = pool_cfg["queue_poll_interval"]
 
     poller_task: asyncio.Task | None = asyncio.create_task(
@@ -274,47 +272,6 @@ def _verify_ownership(task_id: str, username: str) -> None:
         )
 
 
-def _extract_structure_metadata(
-    input: InputT, resume: bool, prev_task_id: str, config: dict | None = None
-) -> tuple:
-    """Extract (formula, num_atoms) from input or predecessor task."""
-    formula = None
-    num_atoms = None
-    if resume and prev_task_id:
-        prev_meta = qdyndb.get_task_metadata(prev_task_id)
-        if prev_meta:
-            formula = prev_meta.get("formula")
-            num_atoms = prev_meta.get("num_atoms")
-    else:
-        if input.stru:
-            try:
-                import io as _io
-                from ase.io import read as ase_read
-                atoms = ase_read(
-                    _io.StringIO(input.stru),
-                    format=input.stru_format or "vasp",
-                )
-                formula = atoms.get_chemical_formula()
-                num_atoms = len(atoms)
-            except Exception:
-                logging.warning("Failed to parse structure metadata from POSCAR")
-        elif input.stru_hash and config:
-            data_dir = str(Path(config["basic"]["user_data"]).resolve())
-            traj_path = Path(data_dir) / "trajs" / input.stru_hash
-            if traj_path.is_file():
-                try:
-                    atoms = ase.io.read(str(traj_path), format=input.stru_format, index=0)
-                    formula = atoms.get_chemical_formula()
-                    num_atoms = len(atoms)
-                except Exception:
-                    logging.warning(
-                        "Failed to parse structure metadata from trajectory hash %s",
-                        input.stru_hash,
-                    )
-    return formula, num_atoms
-
-
-
 def _sync_dispatch(
     m: MainWorkflow,
     task_id: str,
@@ -342,7 +299,7 @@ def _sync_dispatch(
     available (pool full).
     """
     if runtime_worker is None:
-        worker, mode = m._select_runtime_worker(username, pool_name)
+        worker, mode = m.active_pool.select_runtime_worker(username)
         if worker is None:
             return None
         runtime_worker = worker
@@ -358,7 +315,6 @@ def _sync_dispatch(
         prev_task_id=prev_task_id,
         task_id=task_id,
         username=username,
-        pool_name=pool_name,
         runtime_worker=runtime_worker,
     )
 
@@ -366,7 +322,12 @@ def _sync_dispatch(
     qdyndb.assign_task(final_task_id, username, job_ids, pool_name=pool_name)
 
     # Persist structure metadata
-    formula, num_atoms = _extract_structure_metadata(input_obj, resume, prev_task_id, config=m.config)
+    formula, num_atoms = extract_structure_metadata(
+        input_obj,
+        resume,
+        prev_task_id,
+        pool=m.active_pool,
+    )
     qdyndb.update_task_metadata(
         final_task_id,
         task_name=input_obj.task_name,
@@ -413,7 +374,7 @@ def get_workers():
     workers = list(m.config["worker_pools"].keys())
     return {
         "workers": workers,
-        "default": m.active_pool_name,
+        "default": m.active_pool.name,
     }
 
 
@@ -459,7 +420,7 @@ async def submit_task(
 
     from jobflow.utils import suid
     task_id = suid()
-    pool_name = m.active_pool_name
+    pool_name = m.active_pool.name
 
     try:
         runtime_worker = await _dispatch_task(
@@ -504,7 +465,12 @@ async def submit_task(
     )
 
     # Extract and persist structure metadata even for queued tasks
-    formula, num_atoms = _extract_structure_metadata(input, resume, prev_task_id, config=m.config)
+    formula, num_atoms = extract_structure_metadata(
+        input,
+        resume,
+        prev_task_id,
+        m.active_pool,
+    )
     qdyndb.update_task_metadata(
         task_id,
         task_name=input.task_name,
@@ -570,35 +536,6 @@ def get_job_output(
     return output
 
 
-def _count_trajectory_frames(path: str, ase_format: str) -> int:
-    """Count frames in a trajectory file without loading all atoms into memory.
-
-    Uses format-specific lightweight scanning when available, falls back
-    to ASE iread for unknown formats.
-
-    Parameters
-    ----------
-    path : str
-        Path to the trajectory file.
-    ase_format : str
-        ASE I/O format string (e.g. 'vasp-xdatcar').
-    """
-    if ase_format == "vasp-xdatcar":
-        # Scan for "Direct configuration=" markers — O(n) read, no Atoms created
-        with open(path, "r", encoding="utf-8", errors="replace") as fd:
-            count = sum(1 for line in fd if "Direct configuration=" in line)
-        # If no markers found but file is readable (e.g. single-frame POSCAR),
-        # fall back to ASE to determine actual frame count
-        if count > 0:
-            return count
-
-    # Generic fallback: may or may not be truly streaming depending on format.
-    # TODO: add lightweight frame counters for other formats (e.g. xyz, cp2k)
-    #       as they are supported, similar to the XDATCAR fast path above.
-    from ase.io import iread
-    return sum(1 for _ in iread(path, format=ase_format, index=":"))
-
-
 @app.post("/upload")
 async def upload(
     file: UploadFile = File(...),
@@ -606,16 +543,20 @@ async def upload(
     user: str = Depends(get_current_user),
 ):
     m = _manager()
-    type_mapping = {"trajectory": "trajs", "model": "models"}
+    pool = m.active_pool
 
-    data_dir = str(Path(m.config["basic"]["user_data"]).resolve())
-    target_dir = Path(data_dir) / type_mapping[file_type]
-    target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = Path(pool.get_user_file_path(file_type))
+    if not pool.remote:
+        target_dir.mkdir(parents=True, exist_ok=True)
 
     # Stream read: compute MD5 while writing to temp file, enforcing size limit
     md5 = hashlib.md5()
     total_size = 0
-    fd, tmp_path = tempfile.mkstemp(dir=str(target_dir), suffix='.tmp')
+    fd, tmp_path = tempfile.mkstemp(
+        dir=None if pool.remote else str(target_dir),
+        suffix='.tmp',
+    )
+    file_hash = ""
     try:
         with os.fdopen(fd, 'wb') as tmp_f:
             while chunk := await file.read(8 * 1024 * 1024):  # 8 MiB chunks
@@ -629,11 +570,6 @@ async def upload(
                 md5.update(chunk)
                 tmp_f.write(chunk)
         file_hash = md5.hexdigest()
-        final_path = target_dir / file_hash
-        if final_path.exists():
-            os.unlink(tmp_path)  # dedup: already have it
-        else:
-            os.replace(tmp_path, final_path)  # atomic rename
     except HTTPException:
         raise  # re-raise size limit error as-is
     except Exception:
@@ -646,16 +582,17 @@ async def upload(
     # delete it and return an error — don't keep garbage files on disk.
     summary = {}
     if file_type == "trajectory":
+        from .calc_common import count_trajectory_frames
         from .params import TRAJ_FORMAT_MAPPING
         parsed = False
         for fmt in TRAJ_FORMAT_MAPPING.values():
             try:
-                atoms = ase.io.read(str(final_path), format=fmt, index=0)
+                atoms = ase.io.read(str(tmp_path), format=fmt, index=0)
                 summary = {
                     "formula": atoms.get_chemical_formula(),
                     "num_atoms": len(atoms),
-                    "num_frames": _count_trajectory_frames(
-                        str(final_path), fmt
+                    "num_frames": count_trajectory_frames(
+                        str(tmp_path), fmt
                     ),
                 }
                 parsed = True
@@ -664,7 +601,8 @@ async def upload(
                 continue
         if not parsed:
             # Unrecognizable file — clean up and reject
-            final_path.unlink(missing_ok=True)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
             tried = ', '.join(f'{k} ({v})' for k, v in TRAJ_FORMAT_MAPPING.items())
             raise HTTPException(
                 status_code=422,
@@ -673,7 +611,18 @@ async def upload(
                        f"Please upload a trajectory file (e.g. XDATCAR for VASP).",
             )
 
-    return {"hash": file_hash, **summary}
+    # upload tmp file to final_path on local/remote worker
+    try:
+        pool.upload_user_file(
+            file_type=file_type, 
+            file_hash=file_hash, 
+            local_path=tmp_path
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return {"hash": file_hash, "pool_name": pool.name, **summary}
 
 
 @app.get("/upload/hash")
@@ -684,42 +633,33 @@ def check_hash(
 ):
     # Validate hash format to prevent path traversal
     if not _HASH_PATTERN.match(hash):
-        raise HTTPException(status_code=422, detail="Invalid hash format: expected 32-char hex string")
+        raise HTTPException(status_code=422, 
+                            detail="Invalid hash format: expected 32-char hex string")
 
     m = _manager()
-    type_mapping = {"trajectory": "trajs", "model": "models"}
-
-    data_dir = str(Path(m.config["basic"]["user_data"]).resolve())
-    target_dir = Path(data_dir) / type_mapping[file_type]
-
-    file_path = target_dir / hash
-    exists = file_path.is_file()
+    pool = m.active_pool
+    exists = pool.user_file_exists(file_type, hash)
 
     # If file exists and is a trajectory, validate format and return summary.
     # If the file is invalid (e.g. leftover from before validation was added),
     # delete it and report as not existing — forces a clean re-upload.
     summary = {}
     if exists and file_type == "trajectory":
+        from .calc_common import count_trajectory_frames, read_trajectory_summary
         from .params import TRAJ_FORMAT_MAPPING
-        parsed = False
-        for fmt in TRAJ_FORMAT_MAPPING.values():
-            try:
-                atoms = ase.io.read(str(file_path), format=fmt, index=0)
-                summary = {
-                    "formula": atoms.get_chemical_formula(),
-                    "num_atoms": len(atoms),
-                    "num_frames": _count_trajectory_frames(str(file_path), fmt),
-                }
-                parsed = True
-                break
-            except Exception:
-                continue
+
+        parsed, summary = read_trajectory_summary(
+            pool=pool,
+            file_hash=hash,
+            formats=list(TRAJ_FORMAT_MAPPING.values()),
+        )
+
         if not parsed:
             # Stale invalid file — clean up
-            file_path.unlink(missing_ok=True)
+            pool.delete_user_file(file_type=file_type, file_hash=hash)
             exists = False
 
-    return {"exists": exists, **summary}
+    return {"exists": exists, "pool_name": pool.name, **summary}
 
 
 # ---------------------------------------------------------------------------
@@ -743,9 +683,8 @@ def get_pool_status(username: str = Depends(get_current_user)):
     workers the current user occupies vs. the per-user limit.
     """
     m = _manager()
-    pool_name = m.active_pool_name
-    pool_workers = m._get_pool_workers(pool_name)
-    _, _, pool_cfg = m._resolve_pool_context(pool_name)
+    pool_name = m.active_pool.name
+    pool_workers = m.active_pool.get_pool_workers()
 
     # Query MongoDB for busy workers (any non-terminal job)
     jc = m._ensure_job_controller()
@@ -753,14 +692,14 @@ def get_pool_status(username: str = Depends(get_current_user)):
         {
             "$match": {
                 "worker": {"$in": pool_workers},
-                "state": {"$nin": MainWorkflow._TERMINAL_STATES},
+                "state": {"$nin": WorkerPool._TERMINAL_STATES},
             }
         },
         {"$group": {"_id": "$worker"}},
     ]
     busy_workers = {doc["_id"] for doc in jc.jobs.aggregate(busy_pipeline)}
 
-    user_workers = m._get_user_occupied_workers(username, pool_name)
+    user_workers = m.active_pool.get_user_occupied_workers(username)
 
     return PoolStatusResponse(
         pool_name=pool_name,

@@ -78,7 +78,7 @@ async def queue_dispatch_loop(
     logger.info(
         "Queue poller started (interval=%ds, pool=%s).",
         interval,
-        workflow.active_pool_name,
+        workflow.active_pool.name,
     )
     try:
         while True:
@@ -134,11 +134,11 @@ async def _poll_once(
     Pass 2: All remaining tasks belong to users who already HAVE a worker.
              Submit each to the user's existing worker and clear the queue.
     """
-    pool_name = workflow.active_pool_name
+    pool = workflow.active_pool
 
     # 1. Any free workers?
     free_workers = await asyncio.to_thread(
-        workflow._get_free_workers, pool_name
+        pool.get_free_workers,
     )
     if not free_workers:
         return  # nothing to do this round
@@ -163,7 +163,7 @@ async def _poll_once(
 
         # Check if user has any occupied worker.
         user_workers = await asyncio.to_thread(
-            workflow._get_user_occupied_workers, username, pool_name
+            pool.get_user_occupied_workers, username
         )
 
         if user_workers:
@@ -180,7 +180,7 @@ async def _poll_once(
         worker = free_workers.pop(0)
         await _claim_and_dispatch(
             workflow, db, dispatch_lock,
-            entry, pool_name, worker,
+            entry, pool.name, worker,
         )
 
     # ------------------------------------------------------------------
@@ -191,7 +191,7 @@ async def _poll_once(
         username = entry["username"]
 
         user_workers = await asyncio.to_thread(
-            workflow._get_user_occupied_workers, username, pool_name
+            pool.get_user_occupied_workers, username
         )
         if not user_workers:
             # Edge case: user's worker freed between Pass 1 and Pass 2.
@@ -200,7 +200,7 @@ async def _poll_once(
                 worker = free_workers.pop(0)
                 await _claim_and_dispatch(
                     workflow, db, dispatch_lock,
-                    entry, pool_name, worker,
+                    entry, pool.name, worker,
                 )
             else:
                 # No free worker available; leave in queue for next round.
@@ -216,7 +216,7 @@ async def _poll_once(
         worker = user_workers[0]
         await _claim_and_dispatch(
             workflow, db, dispatch_lock,
-            entry, pool_name, worker,
+            entry, pool.name, worker,
         )
 
 

@@ -9,6 +9,7 @@ import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
 from .input import InputT
+from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
 SUPPORTED_SOFTWARE = ["vasp", "vasp_ae", "abacus", "python", "namd"]
@@ -206,7 +207,6 @@ def validate_and_fill_runtime_config(
     basic_cfg = _require_mapping_child(cfg, "basic", err_msg="Missing 'basic' section in QDYN config.")
 
     _warn_and_fill_default_leaf(basic_cfg, "basic.user_db_path", "user_db_path", "data/qdyn_users.db")
-    _warn_and_fill_default_leaf(basic_cfg, "basic.user_data", "user_data", "data/user_data")
     _warn_and_fill_default_leaf(basic_cfg, "basic.mongo_dir", "mongo_dir", "mongo/")
     _warn_and_fill_default_leaf(basic_cfg, "basic.port", "port", 8000)
     if "jf_project_path" not in basic_cfg or not basic_cfg["jf_project_path"]:
@@ -292,6 +292,13 @@ def validate_and_fill_runtime_config(
                     "Should be type (int)\n"
                     "Recommend: size = nodes - max_jobs",
         )
+        _require_present_leaf(
+            pool_cfg,
+            "user_data",
+            str,
+            err_msg=f"Invalid 'worker_pools.{pool_name}.pool.user_data' in QDYN config. "
+                    "Should be type (str)",
+        )
 
         # worker
         _require_present_leaf(
@@ -369,6 +376,7 @@ def validate_workflow_input(
     known_task_ids: Collection[str],
     config: dict[str, Any],
     worker_cfg: dict[str, Any],
+    active_pool: WorkerPool,
 ) -> None:
     """Validate user workflow input before building the jobflow graph."""
     software = input.basic_input.software
@@ -443,17 +451,24 @@ def validate_workflow_input(
             ase.io.read(io.StringIO(stru), format=stru_format, index=":")
         except Exception as exc:
             raise ValidationError(
-                f"Provided structure string could not be parsed by ASE with format '{stru_format}'."
+                f"Provided structure string could not be parsed "
+                f"by ASE with format '{stru_format}'."
             ) from exc
 
     if stru_hash:
-        user_data_dir = Path(str(config["basic"]["user_data"])).resolve()
-        stru_path = user_data_dir / "trajs" / stru_hash
-        if not stru_path.is_file():
-            raise ValidationError(f"Structure with hash '{stru_hash}' not found.")
-        try:
-            ase.io.read(stru_path, format=stru_format, index=0)
-        except Exception as exc:
+        if not active_pool.user_file_exists("trajectory", stru_hash):
             raise ValidationError(
-                f"Structure with hash '{stru_hash}' could not be parsed by ASE with format '{stru_format}'."
-            ) from exc
+                f"Structure with hash '{stru_hash}' not found in the active pool."
+            )
+        
+        from .calc_common import read_trajectory_summary
+        parsed, summary = read_trajectory_summary(
+            pool=active_pool,
+            file_hash=stru_hash,
+            formats=[stru_format],
+        )
+        if not parsed:
+            raise ValidationError(
+                f"Structure with hash '{stru_hash}' could not be parsed "
+                f"by ASE with format '{stru_format}'."
+            )

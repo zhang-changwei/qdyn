@@ -756,7 +756,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        access = service.get_run_dir_access(job_uuid, manager)
+        access = manager.get_task_pool(task_id).build_run_dir_access(job_uuid)
 
         if access is None:
             return JobFilesResponse(available=False)
@@ -798,7 +798,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        access = service.get_run_dir_access(job_uuid, manager)
+        access = manager.get_task_pool(task_id).build_run_dir_access(job_uuid)
 
         if access is None:
             raise HTTPException(status_code=404, detail="Job run directory not available")
@@ -866,7 +866,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        access = service.get_run_dir_access(job_uuid, manager)
+        access = manager.get_task_pool(task_id).build_run_dir_access(job_uuid)
 
         if access is None:
             raise HTTPException(
@@ -934,7 +934,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        access = service.get_run_dir_access(job_uuid, manager)
+        access = manager.get_task_pool(task_id).build_run_dir_access(job_uuid)
 
         if access is None:
             return SubdirFilesResponse(
@@ -981,7 +981,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        return service.get_job_progress(manager, job_uuid)
+        return service.get_job_progress(manager, task_id, job_uuid)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/input-params - Job input params
@@ -1012,7 +1012,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        return service.get_job_input_params(manager, job_uuid)
+        return service.get_job_input_params(manager, task_id, job_uuid)
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/images - Job images
@@ -1078,6 +1078,6 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         verify_job_belongs_to_task(task_id, job_uuid)
 
         manager = manager_getter()
-        return service.get_job_md_timeseries(manager, job_uuid, attempt, max_points)
+        return service.get_job_md_timeseries(manager, task_id, job_uuid, attempt, max_points)
 
     return router

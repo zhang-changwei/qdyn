@@ -11,7 +11,6 @@ basic:
   jf_project_path: "config/jf_qdyn.yaml"
   jf_project_name: "jf_qdyn"
   user_db_path: "data/qdyn_users.db"
-  user_data: "data/user_data"
   mongo_dir: "mongo/"
   port: 8000
 
@@ -29,6 +28,7 @@ worker_pools:
       size: 30
       queue_poll_interval: 60    # seconds between queue polling rounds
       work_dir_base: /absolute/path/to/runs
+      user_data: /absolute/path/to/user_data  # shared by all workers in this pool
     worker:
       type: local                # jf-remote worker type
       scheduler_type: slurm      # jf-remote scheduler type

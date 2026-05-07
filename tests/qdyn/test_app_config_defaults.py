@@ -20,6 +20,7 @@ def _make_runtime_config() -> dict:
                 "pool": {
                     "size": 3,
                     "work_dir_base": "/tmp/qdyn",
+                    "user_data": "/tmp/qdyn_user_data",
                 },
                 "worker": {
                     "type": "local",
@@ -95,12 +96,12 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
 
     assert config["active_pool"] == "local_slurm"
     assert config["basic"]["user_db_path"] == "data/qdyn_users.db"
-    assert config["basic"]["user_data"] == "data/user_data"
     assert config["basic"]["mongo_dir"] == "mongo/"
     assert config["basic"]["port"] == 8000
     assert config["auth"]["secret_key"] == ""
     assert config["auth"]["token_expire_hours"] == 24
     assert config["worker_pools"]["local_slurm"]["pool"]["queue_poll_interval"] == 60
+    assert config["worker_pools"]["local_slurm"]["pool"]["user_data"] == "/tmp/qdyn_user_data"
     assert config["worker_pools"]["local_slurm"]["worker"]["type"] == "local"
     assert config["worker_pools"]["local_slurm"]["worker"]["resources"] == {}
     assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {"vasp": ""}
@@ -174,6 +175,20 @@ def test_validate_and_fill_runtime_config_requires_non_optional_runtime_keys():
     with pytest.raises(
         ConfigError,
         match="Missing 'worker_pools.local_slurm.worker.nvt'",
+    ):
+        validate_and_fill_runtime_config(
+            config,
+            _make_jf_config(),
+        )
+
+
+def test_validate_and_fill_runtime_config_requires_pool_user_data():
+    config = _make_runtime_config()
+    del config["worker_pools"]["local_slurm"]["pool"]["user_data"]
+
+    with pytest.raises(
+        ConfigError,
+        match="worker_pools.local_slurm.pool.user_data",
     ):
         validate_and_fill_runtime_config(
             config,
