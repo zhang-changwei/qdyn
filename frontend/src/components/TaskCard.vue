@@ -1,8 +1,8 @@
 <template>
   <el-card
     class="task-card"
-    :body-style="{ padding: '16px' }"
-    shadow="hover"
+    :body-style="{ padding: 'var(--space-4)' }"
+    shadow="never"
     @click="handleClick"
   >
     <div class="task-card-content">
@@ -15,7 +15,7 @@
           </span>
         </div>
         <div class="task-header-right">
-          <div class="card-actions" @click.stop>
+          <div v-if="manage" class="card-actions" @click.stop>
             <el-button
               v-if="isQueued"
               type="warning"
@@ -63,7 +63,7 @@
           <el-tag
             :type="workerTagType"
             size="small"
-            class="worker-tag"
+            class="worker-tag pool-worker-tag"
             :title="workerTooltip"
             @click.stop
           >
@@ -73,7 +73,7 @@
         </template>
         <template v-if="task.queue_status === 'QUEUED' && task.queue_position != null">
           <span class="meta-sep">&middot;</span>
-          <el-tag type="info" size="small" effect="plain">
+          <el-tag type="info" size="small" effect="plain" class="queue-position-tag">
             Queue #{{ task.queue_position }}
           </el-tag>
         </template>
@@ -94,7 +94,7 @@
             :type="stepTagType(step)"
             :effect="stepTagEffect(step)"
             size="small"
-            class="step-tag"
+            :class="['step-tag', `step-tag--${getStepStatus(step)}`, { 'qdyn-pulse': getStepStatus(step) === 'running' }]"
           >
             {{ stepPrefix(step) }}{{ stepLabel(step) }}
           </el-tag>
@@ -138,9 +138,12 @@ import { getTaskDisplayName } from '@/utils/task-display'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   task: TaskSummary
-}>()
+  manage?: boolean
+}>(), {
+  manage: false,
+})
 
 const emit = defineEmits<{
   (e: 'task-deleted', taskId: string): void
@@ -428,19 +431,23 @@ async function handleCancelQueue(): Promise<void> {
 </script>
 
 <style scoped>
+/* Card: flat at rest, lifts on hover */
 .task-card {
   cursor: pointer;
-  transition: transform 0.2s ease;
+  border: 1px solid var(--border-default);
+  transition: transform var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
 }
 
 .task-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-hover);
 }
 
 .task-card-content {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 /* Row 1: Header */
@@ -448,7 +455,7 @@ async function handleCancelQueue(): Promise<void> {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .task-title {
@@ -460,17 +467,18 @@ async function handleCancelQueue(): Promise<void> {
 }
 
 .formula {
-  font-weight: 600;
-  font-size: 15px;
-  color: var(--el-text-color-primary);
+  font: var(--text-h4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  color: var(--fg-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .atom-count {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-13);
+  color: var(--fg-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -478,13 +486,13 @@ async function handleCancelQueue(): Promise<void> {
 .task-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-shrink: 0;
 }
 
 .card-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 /* Row 2: Meta line */
@@ -492,23 +500,26 @@ async function handleCancelQueue(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   overflow: hidden;
 }
 
 .meta-uuid {
-  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
   cursor: help;
   white-space: nowrap;
 }
 
 .meta-sep {
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
   flex-shrink: 0;
 }
 
 .meta-time {
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   white-space: nowrap;
 }
 
@@ -517,6 +528,20 @@ async function handleCancelQueue(): Promise<void> {
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
+}
+
+/* Worker/pool tag: info palette */
+.pool-worker-tag {
+  background-color: var(--info-bg) !important;
+  color: var(--info-fg) !important;
+  border-color: var(--info-border) !important;
+}
+
+/* Queue position tag: warning palette */
+.queue-position-tag {
+  background-color: var(--warning-bg) !important;
+  color: var(--warning-fg) !important;
+  border-color: var(--warning-border) !important;
 }
 
 .worker-icon {
@@ -528,9 +553,9 @@ async function handleCancelQueue(): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   padding-top: 6px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .step-tags {
@@ -545,22 +570,50 @@ async function handleCancelQueue(): Promise<void> {
   letter-spacing: 0.3px;
 }
 
+/* Step status: completed (green) */
+.step-tag--completed {
+  background-color: var(--success-bg) !important;
+  color: var(--success-fg) !important;
+  border-color: var(--success-border) !important;
+}
+
+/* Step status: running (phosphor) */
+.step-tag--running {
+  background-color: var(--phosphor-soft) !important;
+  color: var(--phosphor-strong) !important;
+  border-color: var(--phosphor) !important;
+}
+
+/* Step status: failed (danger) */
+.step-tag--failed {
+  background-color: var(--danger-bg) !important;
+  color: var(--danger-fg) !important;
+  border-color: var(--danger-border) !important;
+}
+
+/* Step status: pending (subtle) */
+.step-tag--pending {
+  background-color: var(--ink-100) !important;
+  color: var(--fg-tertiary) !important;
+  border-color: var(--ink-200) !important;
+}
+
 .total-jobs {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 /* Row 4: Resume info */
 .resume-info {
-  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
 }
 
 /* Row 5: Failed jobs */
 .failed-jobs {
   padding-top: 6px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--border-subtle);
 }
 </style>

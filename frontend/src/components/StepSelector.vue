@@ -251,20 +251,20 @@ function sortSteps(steps: string[]): string[] {
 .step-selector {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .step-list {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .step-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .step-item.step-done :deep(.el-checkbox) {
@@ -272,33 +272,33 @@ function sortSteps(steps: string[]): string[] {
 }
 
 .step-item.step-done :deep(.el-checkbox__label) {
-  color: var(--el-color-success);
+  color: var(--success-fg);
 }
 
 .step-label-text {
-  font-weight: 500;
+  font: var(--text-body-strong);
 }
 
 .done-icon {
-  font-size: 12px;
-  color: var(--el-color-success);
+  font-size: var(--fs-12);
+  color: var(--success-fg);
   margin-left: 2px;
 }
 
 .step-arrow {
-  color: var(--el-text-color-placeholder);
-  transition: color 0.3s ease;
+  color: var(--fg-placeholder);
+  transition: color var(--dur-base) var(--ease-standard);
 }
 
 .step-arrow.active {
-  color: var(--el-color-primary);
+  color: var(--brand-primary);
 }
 
 .fuse-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
 }
 
 .fuse-hint {
@@ -306,6 +306,11 @@ function sortSteps(steps: string[]): string[] {
 }
 
 .step-hint {
-  margin-top: 8px;
+  margin-top: var(--space-2);
+}
+
+.step-hint :deep(.el-text) {
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
 }
 </style>

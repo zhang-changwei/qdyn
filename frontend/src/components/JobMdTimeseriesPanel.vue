@@ -68,8 +68,10 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
+import { useThemeStore } from '@/stores/theme'
 import { LineChart, ScatterChart } from 'echarts/charts'
 import {
   GridComponent,
@@ -123,10 +125,53 @@ const props = defineProps<{
   stepType: string | undefined | null
 }>()
 
+const themeStore = useThemeStore()
+const { isDark } = storeToRefs(themeStore)
+
 const loading = ref(false)
 const errorMsg = ref<string | null>(null)
 const data = ref<JobMdTimeseriesResponse | null>(null)
 const selectedAttempt = ref<number | undefined>(undefined)
+
+/** Theme-reactive color palette for chart series and axes */
+const chartColors = computed(() => {
+  if (isDark.value) {
+    return {
+      temperature: '#e0a04e',
+      totalEnergy: '#7c8fe0',
+      potentialEnergy: '#5ec995',
+      kineticEnergy: '#7e879a',
+      reference: '#e57369',
+      unconverged: '#e57369',
+      driftLine: '#e0a04e',
+      axisLine: '#2a3240',
+      axisLabel: '#7e879a',
+      splitLine: '#1e2531',
+      tooltipBg: '#1e2531',
+      tooltipBorder: '#2a3240',
+      tooltipText: '#d0d5dd',
+      legendText: '#aab2c0',
+      markAreaBg: 'rgba(229, 115, 105, 0.10)',
+    }
+  }
+  return {
+    temperature: '#b8741b',
+    totalEnergy: '#3a4ea6',
+    potentialEnergy: '#1a7f4f',
+    kineticEnergy: '#8a93a3',
+    reference: '#c0392b',
+    unconverged: '#c0392b',
+    driftLine: '#b8741b',
+    axisLine: '#dde1e8',
+    axisLabel: '#5b6473',
+    splitLine: '#eef0f4',
+    tooltipBg: '#ffffff',
+    tooltipBorder: '#dde1e8',
+    tooltipText: '#262d3a',
+    legendText: '#3e4654',
+    markAreaBg: 'rgba(192, 57, 43, 0.08)',
+  }
+})
 
 async function fetchData(attempt?: number): Promise<void> {
   loading.value = true
@@ -165,6 +210,7 @@ watch(() => props.jobUuid, () => {
 const chartOption = computed<ECOption>(() => {
   if (!data.value?.series) return {}
 
+  const c = chartColors.value
   const series = data.value.series
   const refs = data.value.references
   // Prefer API response step_type over parent prop for chart config
@@ -192,7 +238,7 @@ const chartOption = computed<ECOption>(() => {
       smooth: false,
       symbol: 'none',
       lineStyle: { width: 1.5 },
-      itemStyle: { color: '#E6A23C' },
+      itemStyle: { color: c.temperature },
     },
   ]
 
@@ -203,7 +249,7 @@ const chartOption = computed<ECOption>(() => {
       markLine: {
         silent: true,
         symbol: 'none',
-        lineStyle: { type: 'dashed', color: '#F56C6C', width: 1.5 },
+        lineStyle: { type: 'dashed', color: c.reference, width: 1.5 },
         label: { formatter: `TEEND = ${refs.target_temperature} K`, position: 'insideEndTop', fontSize: 11 },
         data: [{ yAxis: refs.target_temperature }],
       } as MarkLineComponentOption,
@@ -214,7 +260,7 @@ const chartOption = computed<ECOption>(() => {
         ...tempSeries[0],
         markArea: {
           silent: true,
-          itemStyle: { color: 'rgba(245, 108, 108, 0.08)' },
+          itemStyle: { color: c.markAreaBg },
           data: [[
             { yAxis: refs.temperature_tolerance_low },
             { yAxis: refs.temperature_tolerance_high },
@@ -234,7 +280,7 @@ const chartOption = computed<ECOption>(() => {
       data: unconvergedIndices.map(i => [xData[i], series.temperatures[i]]),
       symbol: 'circle',
       symbolSize: 6,
-      itemStyle: { color: '#F56C6C' },
+      itemStyle: { color: c.unconverged },
     })
   }
 
@@ -249,7 +295,7 @@ const chartOption = computed<ECOption>(() => {
       smooth: false,
       symbol: 'none',
       lineStyle: { width: 1.5 },
-      itemStyle: { color: '#409EFF' },
+      itemStyle: { color: c.totalEnergy },
     },
     {
       type: 'line',
@@ -260,7 +306,7 @@ const chartOption = computed<ECOption>(() => {
       smooth: false,
       symbol: 'none',
       lineStyle: { width: 1 },
-      itemStyle: { color: '#67C23A' },
+      itemStyle: { color: c.potentialEnergy },
     },
     {
       type: 'line',
@@ -271,7 +317,7 @@ const chartOption = computed<ECOption>(() => {
       smooth: false,
       symbol: 'none',
       lineStyle: { width: 1 },
-      itemStyle: { color: '#909399' },
+      itemStyle: { color: c.kineticEnergy },
     },
   ]
 
@@ -283,7 +329,7 @@ const chartOption = computed<ECOption>(() => {
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { type: 'dashed', color: '#409EFF', width: 1 },
+          lineStyle: { type: 'dashed', color: c.totalEnergy, width: 1 },
           label: { formatter: 'Mean E_total', position: 'insideEndTop', fontSize: 11 },
           data: [{ yAxis: refs.mean_total_energy }],
         } as MarkLineComponentOption,
@@ -309,8 +355,8 @@ const chartOption = computed<ECOption>(() => {
         data: [[x0, y0], [xEnd, yEnd]],
         smooth: false,
         symbol: 'none',
-        lineStyle: { width: 1.5, type: 'dashed', color: '#E6A23C' },
-        itemStyle: { color: '#E6A23C' },
+        lineStyle: { width: 1.5, type: 'dashed', color: c.driftLine },
+        itemStyle: { color: c.driftLine },
       })
     }
   }
@@ -320,10 +366,17 @@ const chartOption = computed<ECOption>(() => {
     'Kinetic Energy': false,
   }
 
+  // Shared axis styling
+  const axisLineStyle = { color: c.axisLine }
+  const splitLineStyle = { type: 'dashed' as const, color: c.splitLine }
+
   const option: ECOption = {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }] },
+      backgroundColor: c.tooltipBg,
+      borderColor: c.tooltipBorder,
+      textStyle: { color: c.tooltipText },
       formatter: (params: any) => {
         if (!Array.isArray(params) || params.length === 0) return ''
         const firstParam = params[0]
@@ -353,6 +406,7 @@ const chartOption = computed<ECOption>(() => {
       ],
       bottom: 0,
       selected: defaultSelected,
+      textStyle: { color: c.legendText },
     },
     grid: [
       { left: 70, right: 40, top: 30, height: '30%' },
@@ -363,6 +417,7 @@ const chartOption = computed<ECOption>(() => {
         type: 'value',
         gridIndex: 0,
         axisLabel: { show: false },
+        axisLine: { lineStyle: axisLineStyle },
         name: '',
         min: xData[0],
         max: xData[xData.length - 1],
@@ -373,6 +428,9 @@ const chartOption = computed<ECOption>(() => {
         name: refs?.potim_fs != null ? 'Time (fs)' : 'Step',
         nameLocation: 'center',
         nameGap: 25,
+        nameTextStyle: { color: c.axisLabel },
+        axisLine: { lineStyle: axisLineStyle },
+        axisLabel: { color: c.axisLabel },
         min: xData[0],
         max: xData[xData.length - 1],
       },
@@ -384,8 +442,11 @@ const chartOption = computed<ECOption>(() => {
         name: 'Temperature (K)',
         nameLocation: 'center',
         nameGap: 50,
+        nameTextStyle: { color: c.axisLabel },
+        axisLine: { lineStyle: axisLineStyle },
+        axisLabel: { color: c.axisLabel },
         scale: true,
-        splitLine: { lineStyle: { type: 'dashed' } },
+        splitLine: { lineStyle: splitLineStyle },
       },
       {
         type: 'value',
@@ -393,8 +454,11 @@ const chartOption = computed<ECOption>(() => {
         name: 'Energy (eV)',
         nameLocation: 'center',
         nameGap: 50,
+        nameTextStyle: { color: c.axisLabel },
+        axisLine: { lineStyle: axisLineStyle },
+        axisLabel: { color: c.axisLabel },
         scale: true,
-        splitLine: { lineStyle: { type: 'dashed' } },
+        splitLine: { lineStyle: splitLineStyle },
       },
     ],
     dataZoom: [

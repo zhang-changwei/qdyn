@@ -179,69 +179,71 @@ function clearFile(): void {
 
 <style scoped>
 .poscar-uploader {
-  border: 2px dashed var(--el-border-color);
-  border-radius: 8px;
+  border: 2px dashed var(--border-default);
+  border-radius: var(--radius-lg);
   padding: 40px 20px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s ease;
-  background-color: var(--el-fill-color-blank);
+  transition: border-color var(--dur-base) var(--ease-standard),
+              background-color var(--dur-base) var(--ease-standard);
+  background-color: var(--bg-surface);
 }
 
 .poscar-uploader:hover {
-  border-color: var(--el-color-primary);
-  background-color: var(--el-fill-color-light);
+  border-color: var(--brand-primary);
+  background-color: var(--bg-surface-alt);
 }
 
 .poscar-uploader.is-dragover {
-  border-color: var(--el-color-primary);
-  background-color: var(--el-color-primary-light-9);
+  border-color: var(--brand-primary);
+  background-color: var(--brand-primary-soft);
 }
 
 .upload-prompt {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .upload-icon {
   font-size: 48px;
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
 }
 
 .upload-text {
   display: flex;
   align-items: center;
-  gap: 4px;
-  color: var(--el-text-color-secondary);
+  gap: var(--space-1);
+  color: var(--fg-tertiary);
 }
 
 .upload-hint {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
+  font-size: var(--fs-12);
+  color: var(--fg-placeholder);
 }
 
 .upload-success {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .success-icon {
   font-size: 40px;
-  color: var(--el-color-success);
+  color: var(--success-fg);
 }
 
 .file-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .file-name {
-  font-weight: 500;
-  color: var(--el-text-color-primary);
+  font: var(--text-body-strong);
+  font-family: var(--font-mono);
+  color: var(--fg-primary);
 }
 </style>

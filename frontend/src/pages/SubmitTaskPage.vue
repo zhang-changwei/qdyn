@@ -1134,7 +1134,7 @@ async function handleSubmit(): Promise<void> {
 
 <style scoped>
 .submit-task-page {
-  padding: 24px;
+  padding: var(--space-6);
   max-width: 900px;
   margin: 0 auto;
 }
@@ -1142,62 +1142,69 @@ async function handleSubmit(): Promise<void> {
 .page-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .page-title {
   margin: 0;
-  font-size: 20px;
+  font: var(--text-h2);
 }
 
 .submit-form {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-6);
 }
 
 .form-section {
   margin-bottom: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+
+.form-section :deep(.el-card__header) {
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .section-title {
-  font-weight: 600;
-  font-size: 16px;
+  font: var(--text-h3);
 }
 
 .mode-section {
   margin-bottom: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: none;
 }
 
 .mode-section :deep(.el-card__body) {
   display: flex;
   justify-content: center;
-  padding: 16px;
+  padding: var(--space-4);
 }
 
 .resume-info-alert {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .validation-alert {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .step-params {
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 .step-params-title {
-  margin: 0 0 16px 0;
-  font-size: 14px;
-  color: var(--el-text-color-secondary);
+  margin: 0 0 var(--space-4) 0;
+  font: var(--text-body);
+  color: var(--fg-secondary);
 }
 
 .submit-section {
   display: flex;
   justify-content: center;
-  padding: 24px 0;
+  padding: var(--space-6) 0;
 }
 
 .disabled-radio-wrapper {
@@ -1207,123 +1214,130 @@ async function handleSubmit(): Promise<void> {
 
 :deep(.param-help-icon) {
   font-size: 14px;
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
   cursor: help;
 }
 
-/* Trajectory uploader styles */
 /* Trajectory uploader — visually matched to PoscarUploader */
 .traj-uploader {
-  border: 2px dashed var(--el-border-color);
-  border-radius: 8px;
+  border: 2px dashed var(--border-default);
+  border-radius: var(--radius-lg);
   padding: 40px 20px;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.2s, background-color 0.2s;
-  background-color: var(--el-fill-color-blank);
+  transition: border-color var(--dur-base) var(--ease-standard),
+              background-color var(--dur-base) var(--ease-standard);
+  background-color: var(--bg-surface);
 }
 
 .traj-uploader:hover {
-  border-color: var(--el-color-primary);
-  background-color: var(--el-fill-color-light);
+  border-color: var(--brand-primary);
+  background-color: var(--bg-surface-alt);
 }
 
 .traj-uploader.is-dragover {
-  border-color: var(--el-color-primary);
-  background-color: var(--el-color-primary-light-9);
+  border-color: var(--brand-primary);
+  background-color: var(--brand-primary-soft);
 }
 
 .upload-prompt {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .upload-icon {
   font-size: 48px;
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
 }
 
 .upload-text {
   display: flex;
   align-items: center;
-  gap: 4px;
-  color: var(--el-text-color-secondary);
+  gap: var(--space-1);
+  color: var(--fg-tertiary);
 }
 
 .upload-hint {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
+  font-size: var(--fs-12);
+  color: var(--fg-placeholder);
 }
 
 .traj-status-area {
   cursor: default;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .traj-file-info {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: var(--space-2);
+  font: var(--text-body);
 }
 
 .traj-file-name {
-  font-weight: 500;
+  font: var(--text-body-strong);
+  font-family: var(--font-mono);
 }
 
 .traj-file-size {
-  color: var(--el-text-color-secondary);
+  color: var(--fg-tertiary);
 }
 
 .traj-progress-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-2);
+  font: var(--text-small);
 }
 
 .traj-done {
-  color: var(--el-color-success);
+  color: var(--success-fg);
 }
 
 .traj-error {
-  color: var(--el-color-danger);
+  color: var(--danger-fg);
 }
 
 .traj-done-area {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .traj-summary {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
+  font: var(--text-body-strong);
+  color: var(--fg-primary);
 }
 
 .traj-hash-display {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font: var(--text-caption);
+  color: var(--fg-tertiary);
 }
 
 .traj-hash-display code {
-  font-family: monospace;
-  background: var(--el-fill-color-light);
+  font-family: var(--font-mono);
+  background: var(--bg-surface-alt);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 /* Pool status card */
+.pool-status-card {
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-alt);
+}
+
 .pool-description {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  font: var(--text-small);
+  color: var(--fg-tertiary);
   line-height: 1.6;
-  margin: 0 0 12px 0;
+  margin: 0 0 var(--space-3) 0;
   padding-left: 20px;
 }
 .pool-description li {
@@ -1332,51 +1346,50 @@ async function handleSubmit(): Promise<void> {
 
 .pool-value-help {
   cursor: help;
-  border-bottom: 1px dashed var(--el-text-color-secondary);
+  border-bottom: 1px dashed var(--fg-tertiary);
 }
 
 .pool-status-info {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .pool-status-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 
 .pool-label {
-  font-size: 14px;
-  color: var(--el-text-color-secondary);
+  font: var(--text-body);
+  color: var(--fg-secondary);
 }
 
 .pool-value {
-  font-size: 14px;
-  font-weight: 500;
+  font: var(--text-body-strong);
 }
 
 .pool-idle-zero {
-  color: var(--el-color-warning);
+  color: var(--warning-fg);
   font-weight: 600;
 }
 
 .pool-queue-hint {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .task-name-input {
-  margin-top: 16px;
+  margin-top: var(--space-4);
   margin-bottom: 0;
 }
 
 .structure-preview {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .constraint-file-hint {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 </style>
