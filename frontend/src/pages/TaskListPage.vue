@@ -1,11 +1,21 @@
 <template>
   <div class="task-list-page">
-    <!-- Top navigation bar -->
-    <el-header class="page-header">
-      <div class="header-content">
-        <h1 class="page-title">QDYN Tasks</h1>
-        <div class="header-right">
-          <!-- Refresh button -->
+    <!-- Page title bar -->
+    <div class="page-title-bar">
+      <div class="page-title-bar__inner">
+        <div>
+          <h1 class="page-title">QDYN Tasks</h1>
+          <p class="page-subtitle">Workflow submissions and status</p>
+        </div>
+        <div class="page-title-bar__actions">
+          <el-button
+            :type="managing ? 'primary' : ''"
+            :plain="managing"
+            @click="managing = !managing"
+          >
+            <el-icon style="margin-right: 4px"><Setting /></el-icon>
+            {{ managing ? 'Done' : 'Manage' }}
+          </el-button>
           <el-button
             plain
             :loading="refreshing"
@@ -13,15 +23,9 @@
           >
             <el-icon><Refresh /></el-icon>
           </el-button>
-          <div class="user-info">
-            <span class="username">{{ authStore.username }}</span>
-            <el-button type="danger" plain @click="handleLogout">
-              Logout
-            </el-button>
-          </div>
         </div>
       </div>
-    </el-header>
+    </div>
 
     <!-- Main content -->
     <el-main class="page-main">
@@ -42,6 +46,7 @@
           v-for="task in taskList.items"
           :key="task.task_id"
           :task="task"
+          :manage="managing"
           @task-deleted="onTaskDeleted"
           @task-stopped="onTaskStopped"
           @task-queue-cancelled="onTaskQueueCancelled"
@@ -61,15 +66,34 @@
         </template>
       </el-result>
 
-      <!-- Empty state (shown when data loaded successfully but list is empty) -->
-      <el-empty
-        v-else
-        description="No tasks found. Submit your first task to get started."
-      >
+      <!-- Empty state -->
+      <div v-else class="empty-state">
+        <!-- Lattice mark SVG (low opacity) -->
+        <svg
+          class="empty-state__mark"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 64 64"
+          width="80"
+          height="80"
+          fill="currentColor"
+          aria-label="QDYN lattice"
+        >
+          <circle cx="10" cy="10" r="3" />
+          <circle cx="32" cy="10" r="3" />
+          <circle cx="54" cy="10" r="3" />
+          <circle cx="10" cy="32" r="3" />
+          <circle cx="32" cy="32" r="3" />
+          <circle cx="54" cy="32" r="3" />
+          <circle cx="10" cy="54" r="3" />
+          <circle cx="32" cy="54" r="3" />
+          <circle cx="54" cy="54" r="3" />
+        </svg>
+        <h2 class="empty-state__heading">No tasks yet</h2>
+        <p class="empty-state__description">Submit your first task to start a dynamics workflow.</p>
         <el-button type="primary" @click="goToSubmit">
           Submit Task
         </el-button>
-      </el-empty>
+      </div>
     </el-main>
 
     <!-- Floating action button -->
@@ -88,13 +112,11 @@
 <script setup lang="ts">
 import { onMounted, computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Refresh } from '@element-plus/icons-vue'
-import { useAuthStore } from '@/stores/auth'
+import { Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { useTasksStore } from '@/stores/tasks'
 import TaskCard from '@/components/TaskCard.vue'
 
 const router = useRouter()
-const authStore = useAuthStore()
 const tasksStore = useTasksStore()
 
 const taskList = computed(() => tasksStore.taskList)
@@ -102,6 +124,7 @@ const loading = computed(() => tasksStore.loading)
 const error = computed(() => tasksStore.error)
 
 const refreshing = ref(false)
+const managing = ref(false)
 
 onMounted(() => {
   refreshTaskList()
@@ -116,10 +139,6 @@ async function refreshTaskList(): Promise<void> {
   } finally {
     refreshing.value = false
   }
-}
-
-function handleLogout(): void {
-  authStore.logout()
 }
 
 function goToSubmit(): void {
@@ -145,49 +164,42 @@ function onTaskQueueCancelled(_taskId: string): void {
 <style scoped>
 .task-list-page {
   min-height: 100vh;
-  background-color: var(--el-bg-color-page);
+  background-color: var(--bg-page);
 }
 
-.page-header {
-  background-color: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color-light);
+.page-title-bar {
   padding: 0 24px;
-  height: auto;
-  line-height: normal;
 }
 
-.header-content {
+.page-title-bar__inner {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 0;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 0 16px;
 }
 
 .page-title {
   margin: 0;
-  font-size: 20px;
-  color: var(--el-text-color-primary);
+  font: var(--text-h1);
+  color: var(--fg-primary);
 }
 
-.header-right {
+.page-subtitle {
+  margin: 4px 0 0;
+  font: var(--text-small);
+  color: var(--fg-tertiary);
+}
+
+.page-title-bar__actions {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.username {
-  color: var(--el-text-color-secondary);
-  font-weight: 500;
+  gap: 8px;
 }
 
 .page-main {
-  padding: 24px;
+  padding: 0 24px 24px;
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -200,20 +212,54 @@ function onTaskQueueCancelled(_taskId: string): void {
 
 .task-skeleton {
   padding: 16px;
-  background-color: var(--el-bg-color);
-  border-radius: 8px;
+  background-color: var(--bg-surface);
+  border-radius: var(--radius-lg);
 }
 
 .task-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
   gap: 16px;
 }
 
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 24px;
+  text-align: center;
+}
+
+.empty-state__mark {
+  color: var(--fg-placeholder);
+  opacity: 0.3;
+  margin-bottom: 24px;
+}
+
+.empty-state__heading {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-22);
+  color: var(--fg-secondary);
+}
+
+.empty-state__description {
+  margin: 0 0 24px;
+  font: var(--text-body);
+  color: var(--fg-tertiary);
+}
+
+/* FAB */
 .fab-button {
   position: fixed;
   bottom: 32px;
   right: 32px;
-  box-shadow: var(--el-box-shadow-light);
+  width: 56px !important;
+  height: 56px !important;
+  font-size: 24px;
+  box-shadow: var(--shadow-floating);
 }
 </style>

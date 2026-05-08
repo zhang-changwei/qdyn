@@ -151,3 +151,90 @@ const activeStepIndex = computed((): number => {
   return workflowSteps.value.length
 })
 </script>
+
+<style scoped>
+/* --- Step icon overrides --- */
+
+/* Completed (finish/success) step icon */
+:deep(.el-step__head.is-success .el-step__icon) {
+  background-color: var(--success-fg);
+  border-color: var(--success-fg);
+  color: #fff;
+}
+
+/* Running (process) step icon — phosphor with pulse */
+:deep(.el-step__head.is-process .el-step__icon) {
+  background-color: var(--phosphor);
+  border-color: var(--phosphor);
+  color: #fff;
+  animation: qdyn-phosphor-pulse 1.6s ease-in-out infinite;
+}
+
+/* Pending (wait) step icon */
+:deep(.el-step__head.is-wait .el-step__icon) {
+  background-color: var(--ink-300);
+  border-color: var(--ink-300);
+  color: #fff;
+}
+
+/* Error step icon */
+:deep(.el-step__head.is-error .el-step__icon) {
+  background-color: var(--danger-fg);
+  border-color: var(--danger-fg);
+  color: #fff;
+}
+
+/* --- Step title & description --- */
+
+:deep(.el-step__title) {
+  font: var(--text-body-strong);
+}
+
+:deep(.el-step__description) {
+  font-size: var(--fs-12);
+  color: var(--fg-tertiary);
+}
+
+/* Override Element Plus description color overrides per status */
+:deep(.el-step__description.is-success) {
+  color: var(--success-fg);
+}
+
+:deep(.el-step__description.is-process) {
+  color: var(--phosphor-strong);
+}
+
+:deep(.el-step__description.is-wait) {
+  color: var(--fg-tertiary);
+}
+
+:deep(.el-step__description.is-error) {
+  color: var(--danger-fg);
+}
+
+/* --- Connector line overrides --- */
+
+/* Base connector line (always visible as subtle gray) */
+:deep(.el-step__line) {
+  background-color: var(--border-default) !important;
+}
+
+/* Completed connector: fill overlays base */
+:deep(.el-step__head.is-success .el-step__line-inner) {
+  border-color: var(--success-fg) !important;
+  background-color: var(--success-fg) !important;
+}
+
+/* Process connector: phosphor fill */
+:deep(.el-step__head.is-process .el-step__line-inner) {
+  border-color: var(--phosphor) !important;
+  background-color: var(--phosphor) !important;
+}
+
+/* Wait / error connectors: no fill, base line shows through */
+:deep(.el-step__head.is-wait .el-step__line-inner),
+:deep(.el-step__head.is-error .el-step__line-inner) {
+  border-color: transparent !important;
+  background-color: transparent !important;
+}
+</style>
