@@ -27,6 +27,7 @@ def _make_manager() -> MainWorkflow:
                     "partition": "chu",
                     "cpus_per_node": 96,
                     "resources": {"partition": "chu"},
+                    "gpu_resources": None,
                     "installed": {
                         "vasp": True,
                         "vasp_ae": False,
@@ -58,6 +59,7 @@ def _make_manager() -> MainWorkflow:
                     "partition": "gpu",
                     "cpus_per_node": 64,
                     "resources": {"partition": "gpu"},
+                    "gpu_resources": None,
                     "installed": {
                         "vasp": True,
                         "vasp_ae": False,

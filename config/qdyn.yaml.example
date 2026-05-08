@@ -40,6 +40,10 @@ worker_pools:
         # worker.resources keeps only nodes/processes_per_node/threads_per_process
         # as portable top-level fields; all other keys pass through unchanged
         # via QResources.scheduler_kwargs.
+      gpu_resources: null
+        # Required. Set to null on non-GPU clusters.
+        # For GPU-capable clusters, provide a mapping similar to resources
+        # (for example partition/account/gres or other scheduler fields).
 
       # QDYN specific worker configs
       # Don't remove any following entries.

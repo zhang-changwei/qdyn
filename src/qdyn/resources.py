@@ -15,15 +15,12 @@ RESOURCE_ALIASES = {
 }
 
 
-def normalize_worker_resources(resources: Mapping[str, Any] | None) -> dict[str, Any]:
+def normalize_worker_resources(resources: Mapping[str, Any]) -> dict[str, Any]:
     """Keep portable execution fields top-level and pass scheduler fields through."""
-    if resources is None:
-        return {}
     if not isinstance(resources, Mapping):
         raise ConfigError("worker.resources should be a mapping in QDYN config.")
 
     normalized: dict[str, Any] = {}
-    aliased_resources: dict[str, Any] = {}
     scheduler_kwargs: dict[str, Any] = {}
 
     for key, value in resources.items():
@@ -40,8 +37,6 @@ def normalize_worker_resources(resources: Mapping[str, Any] | None) -> dict[str,
             normalized[normalized_key] = value
         else:
             scheduler_kwargs[key] = value
-
-    normalized = {**aliased_resources, **normalized}
 
     if scheduler_kwargs:
         normalized["scheduler_kwargs"] = scheduler_kwargs
@@ -75,7 +70,7 @@ def validate_step_resources(resources: Any, dotted_name: str) -> None:
 
 
 def build_qresources(
-    worker_resources: Mapping[str, Any] | None,
+    worker_resources: Mapping[str, Any],
     step_resources: Mapping[str, Any] | None = None,
     **overrides: Any,
 ) -> QResources:

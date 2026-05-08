@@ -341,13 +341,25 @@ def validate_and_fill_runtime_config(
             err_msg=f"Invalid worker_pools.{pool_name}.worker.scheduler_type in QDYN config. "
                      "Should be a valid scheduler name. E.g. 'slurm', 'pbs'",
         )
-        _warn_and_fill_default_leaf(
+        _require_mapping_child(
             worker_cfg,
-            f"worker_pools.{pool_name}.worker.resources",
             "resources",
-            {},
+            err_msg=f"Missing 'worker_pools.{pool_name}.worker.resources' in QDYN config."
         )
         worker_cfg["resources"] = normalize_worker_resources(worker_cfg["resources"])
+
+        _require_mapping_child(
+            worker_cfg,
+            "gpu_resources",
+            err_msg=f"Missing 'worker_pools.{pool_name}.worker.gpu_resources' in QDYN config.\n"
+                    "Set it to null for non-GPU clusters, or a mapping for GPU-capable clusters."
+        )
+        gpu_resources = worker_cfg["gpu_resources"]
+        if gpu_resources is not None and not isinstance(gpu_resources, dict):
+            raise ConfigError(
+                f"Invalid 'worker_pools.{pool_name}.worker.gpu_resources' in QDYN config.\n"
+                "Should be null or a mapping."
+            )
         _require_present_leaf(
             worker_cfg,
             "cpus_per_node",

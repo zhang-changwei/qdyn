@@ -25,6 +25,7 @@ def _make_runtime_config() -> dict:
                 "worker": {
                     "type": "local",
                     "scheduler_type": "slurm",
+                    "gpu_resources": None,
                     "cpus_per_node": 64,
                     "installed": {
                         "vasp": True,
@@ -104,6 +105,7 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
     assert config["worker_pools"]["local_slurm"]["pool"]["user_data"] == "/tmp/qdyn_user_data"
     assert config["worker_pools"]["local_slurm"]["worker"]["type"] == "local"
     assert config["worker_pools"]["local_slurm"]["worker"]["resources"] == {}
+    assert config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"] is None
     assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {"vasp": ""}
     assert config["worker_pools"]["local_slurm"]["worker"]["modules"]["vasp"] == []
     assert config["worker_pools"]["local_slurm"]["worker"]["export"]["vasp"] == {}
@@ -218,4 +220,50 @@ def test_validate_and_fill_runtime_config_requires_jf_workers():
         validate_and_fill_runtime_config(
             config,
             {},
+        )
+
+
+def test_validate_and_fill_runtime_config_requires_gpu_resources():
+    config = _make_runtime_config()
+    del config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"]
+
+    with pytest.raises(
+        ConfigError,
+        match="Missing 'worker_pools.local_slurm.worker.gpu_resources'",
+    ):
+        validate_and_fill_runtime_config(
+            config,
+            _make_jf_config(),
+        )
+
+
+def test_validate_and_fill_runtime_config_accepts_mapping_gpu_resources():
+    config = _make_runtime_config()
+    config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"] = {
+        "partition": "gpu",
+        "gres": "gpu:4",
+    }
+
+    validate_and_fill_runtime_config(
+        config,
+        _make_jf_config(),
+    )
+
+    assert config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"] == {
+        "partition": "gpu",
+        "gres": "gpu:4",
+    }
+
+
+def test_validate_and_fill_runtime_config_rejects_invalid_gpu_resources_type():
+    config = _make_runtime_config()
+    config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"] = ["gpu"]
+
+    with pytest.raises(
+        ConfigError,
+        match="worker.gpu_resources",
+    ):
+        validate_and_fill_runtime_config(
+            config,
+            _make_jf_config(),
         )
