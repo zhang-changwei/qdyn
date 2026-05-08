@@ -677,11 +677,11 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 
 <style scoped>
 .dynamic-step-form {
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 .advanced-collapse {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 :deep(.el-input-number) {
@@ -694,8 +694,14 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 
 :deep(.param-help-icon) {
   font-size: 14px;
-  color: var(--el-text-color-placeholder);
+  color: var(--fg-placeholder);
   cursor: help;
+}
+
+/* Textarea for Extra INCAR and similar free-text fields */
+:deep(.el-textarea__inner) {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
 }
 
 .smart-number-input {
@@ -712,16 +718,25 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 .log-step-input {
   width: 100px;
   text-align: center;
-  font-family: monospace;
+  font-family: var(--font-mono);
   padding: 4px 8px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  font-size: 14px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-14);
+  background: var(--bg-surface);
+  color: var(--fg-primary);
+  transition: border-color var(--dur-base) var(--ease-standard),
+              box-shadow var(--dur-base) var(--ease-standard);
+}
+
+.log-step-input:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 1px var(--brand-primary-soft);
 }
 
 .log-step-input--invalid {
-  border-color: var(--el-color-danger);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--el-color-danger) 30%, transparent);
+  border-color: var(--danger-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger-fg) 30%, transparent);
 }
 </style>

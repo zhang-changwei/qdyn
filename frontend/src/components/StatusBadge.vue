@@ -1,5 +1,11 @@
 <template>
-  <el-tag :type="tagType" :effect="effect" size="small">
+  <el-tag
+    :type="tagType"
+    :effect="effect"
+    size="small"
+    :class="{ 'qdyn-pulse': isRunning }"
+    :style="isRunning ? phosphorStyle : undefined"
+  >
     {{ displayText }}
   </el-tag>
 </template>
@@ -19,16 +25,16 @@ interface StatusConfig {
 }
 
 const STATUS_CONFIG: Record<DerivedState, StatusConfig> = {
-  RUNNING: { type: 'warning', effect: 'light', text: 'Running' },
+  RUNNING: { type: '', effect: 'light', text: 'Running' },
   COMPLETED: { type: 'success', effect: 'light', text: 'Completed' },
   FAILED: { type: 'danger', effect: 'light', text: 'Failed' },
   PENDING: { type: 'info', effect: 'light', text: 'Pending' },
   PAUSED: { type: 'warning', effect: 'light', text: 'Paused' },
   STOPPED: { type: 'danger', effect: 'plain', text: 'Stopped' },
   ERROR: { type: 'danger', effect: 'dark', text: 'Error' },
-  QUEUED: { type: 'info', effect: 'light', text: 'Queued' },
-  DISPATCHING: { type: 'warning', effect: 'plain', text: 'Dispatching' },
-  CANCELLED: { type: 'info', effect: 'plain', text: 'Cancelled' }
+  QUEUED: { type: 'warning', effect: 'light', text: 'Queued' },
+  DISPATCHING: { type: 'info', effect: 'plain', text: 'Dispatching' },
+  CANCELLED: { type: 'danger', effect: 'plain', text: 'Cancelled' }
 }
 
 const DEFAULT_CONFIG: StatusConfig = {
@@ -45,4 +51,12 @@ const currentConfig = computed((): StatusConfig => {
 const tagType = computed(() => currentConfig.value.type)
 const effect = computed(() => currentConfig.value.effect)
 const displayText = computed(() => currentConfig.value.text)
+
+const isRunning = computed(() => props.status === 'RUNNING')
+
+const phosphorStyle = {
+  background: 'var(--phosphor-soft)',
+  color: 'var(--phosphor-strong)',
+  borderColor: 'var(--phosphor)'
+}
 </script>
