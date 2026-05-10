@@ -17,8 +17,8 @@ def test_pretrained_model_filenames_match_params():
     assert script.mace_pretrained_model_filename("small") == "2023-12-10-mace-128-L0_energy_epoch-249.model"
 
 
-def test_download_script_downloads_selected_targets(monkeypatch):
-    root = Path.cwd() / "test-temp" / "download-models" / ".qdyn" / "pretrained"
+def test_download_script_downloads_selected_targets(monkeypatch, tmp_path: Path):
+    root = tmp_path / ".qdyn" / "pretrained"
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(script, "PRETRAINED_ROOT", root)
 
@@ -145,4 +145,4 @@ def test_workerpool_check_file_exists_expands_home_on_remote():
     pool._get_remote_host = lambda worker_name: DummyHost()  # type: ignore[method-assign]
 
     assert pool.check_file_exists("~/.qdyn/pretrained/test.model") is True
-    assert captured["cmd"] == "test -f '~/.qdyn/pretrained/test.model' && echo ok"
+    assert captured["cmd"] == 'test -f "$HOME/.qdyn/pretrained/test.model" && echo ok'

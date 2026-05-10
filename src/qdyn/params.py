@@ -79,6 +79,8 @@ HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
+    'nequip': 'qdyn.extxyz',
+    'mace': 'qdyn.extxyz',
 }
 
 # ASE format strings for reading/writing trajectory files per software.
@@ -88,7 +90,63 @@ TRAJ_FORMAT_MAPPING = {
     # COMPATIBLE USES BELOW
     'extxyz': 'extxyz',
     'xyz': 'xyz',
+    'nequip': 'extxyz',
+    'mace': 'extxyz',
 }
+
+NEQUIP_PRETRAINED_MODELS = (
+    'mir-group/NequIP-OAM-L',
+    'mir-group/NequIP-OAM-M',
+    'mir-group/NequIP-OAM-S',
+    'mir-group/NequIP-OAM-XL',
+    'mir-group/Allegro-OAM-L',
+)
+
+from typing import Literal
+type NEQUIP_PRETRAINED_MODELS_TYPE = Literal[
+    'mir-group/NequIP-OAM-L',
+    'mir-group/NequIP-OAM-M',
+    'mir-group/NequIP-OAM-S',
+    'mir-group/NequIP-OAM-XL',
+    'mir-group/Allegro-OAM-L',
+]
+
+MACE_PRETRAINED_MODELS = (
+    'small',
+    'medium',
+    'large',
+    'small-0b',
+    'medium-0b',
+    'small-0b2',
+    'medium-0b2',
+    'large-0b2',
+    'medium-0b3',
+)
+
+type MACE_PRETRAINED_MODELS_TYPE = Literal[
+    'small',
+    'medium',
+    'large',
+    'small-0b',
+    'medium-0b',
+    'small-0b2',
+    'medium-0b2',
+    'large-0b2',
+    'medium-0b3',
+]
+
+MACE_PRETRAINED_MODEL_URLS = {
+    'small': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/2023-12-10-mace-128-L0_energy_epoch-249.model',
+    'medium': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/2023-12-03-mace-128-L1_epoch-199.model',
+    'large': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/MACE_MPtrj_2022.9.model',
+    'small-0b': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b/mace_agnesi_small.model',
+    'medium-0b': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b/mace_agnesi_medium.model',
+    'small-0b2': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b2/mace-small-density-agnesi-stress.model',
+    'medium-0b2': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b2/mace-medium-density-agnesi-stress.model',
+    'large-0b2': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b2/mace-large-density-agnesi-stress.model',
+    'medium-0b3': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b3/mace-mp-0b3-medium.model',
+}
+
 
 backup_files = {
     'vasp': [

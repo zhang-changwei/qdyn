@@ -82,6 +82,21 @@ def write_stru(software: str, structure: Atoms, out_dir: str | Path) -> None:
         raise ValueError(f"Unsupported software: {software}")
 
 
+class TrajWriter:
+    def __init__(self, dyn, atoms, fname='qdyn.extxyz', format='extxyz'):
+        self.dyn = dyn
+        self.atoms = atoms
+        self.fname = fname
+        self.format = format
+        self.file = open(fname, 'w')
+    
+    def __call__(self):
+        ase.io.write(self.file, self.atoms, append=True, format=self.format)
+
+    def close(self):
+        self.file.close()
+
+
 def safe_eval(expr: str) -> Any:
     ALLOWED_OPS = {ast.Add: operator.add, ast.Sub: operator.sub}
     tree = ast.parse(expr, mode='eval')

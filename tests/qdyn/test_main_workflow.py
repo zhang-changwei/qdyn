@@ -6,7 +6,15 @@ import pytest
 from qtoolkit import QResources
 
 from qdyn.errors import QueryError, ValidationError
-from qdyn.input import BasicInputT, InputT, SCFInputT, SchedulerConfigT
+from qdyn.input import (
+    BasicInputT,
+    DFTBaseInputT,
+    InputT,
+    MACEInputT,
+    NVEInputT,
+    SCFInputT,
+    SchedulerConfigT,
+)
 from qdyn.main_workflow import ConfigError, MainWorkflow
 from qdyn.resources import build_qresources
 from qdyn.validation import (
@@ -474,6 +482,120 @@ def test_step_scf_uses_active_pool_user_data_path(monkeypatch):
     assert [job.uuid for job in jobs] == ["job-1"]
     assert captured["traj_path"] == "/remote/user_data/trajectory/traj-hash"
     assert captured["traj_format"] == "extxyz"
+
+
+def test_step_nve_uses_calculator_nodes(monkeypatch):
+    manager = _make_manager()
+
+    captured: dict[str, object] = {}
+
+    def fake_qdyn_nve(**kwargs):
+        captured["nodes"] = kwargs["nodes"]
+        return SimpleNamespace(uuid="job-1")
+
+    monkeypatch.setattr("qdyn.main_workflow.qdyn_nve", fake_qdyn_nve)
+    monkeypatch.setattr("qdyn.main_workflow.set_run_config", lambda job, **_: job)
+
+    structure = {
+        "numbers": [1],
+        "positions": [[0.0, 0.0, 0.0]],
+        "cell": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "pbc": [False, False, False],
+        "momenta": [[0.0, 0.0, 0.0]],
+    }
+
+    payload = InputT(
+        basic_input=BasicInputT(),
+        scheduler_config=SchedulerConfigT(),
+        nve_input=NVEInputT(calculator=DFTBaseInputT(nodes=7)),
+        steps=["nve"],
+    )
+
+    jobs = manager.step_nve(
+        input=payload,
+        jobs={"nvt": [SimpleNamespace(output={"stru": structure})]},
+        is_first_step=False,
+        stru="",
+        stru_format="vasp",
+        resume=False,
+        prev_task_id="",
+        prepare_input_only=False,
+    )
+
+    assert [job.uuid for job in jobs] == ["job-1"]
+    assert captured["nodes"] == 7
+
+
+def test_step_nve_uses_mace_software_and_model_path(monkeypatch):
+    manager = _make_manager()
+    manager.active_pool.worker_cfg["modules"]["python"] = ["ml-stack"]
+    manager.active_pool.worker_cfg["export"]["python"] = {"PYTHONPATH": "/ml"}
+    manager.active_pool.worker_cfg["pre_run"]["python"] = "source ml"
+    manager.active_pool.worker_cfg["pp_path"]["python"] = ""
+    manager.active_pool.worker_cfg["orb_path"]["python"] = ""
+    manager.active_pool.worker_cfg["nve"]["python"] = {
+        "nodes": 2,
+        "processes_per_node": 8,
+        "threads_per_process": 1,
+    }
+
+    captured: dict[str, object] = {}
+
+    def fake_qdyn_nve(**kwargs):
+        captured["software"] = kwargs["software"]
+        captured["model_path"] = kwargs["model_path"]
+        captured["nodes"] = kwargs["nodes"]
+        captured["pp_path"] = kwargs["pp_path"]
+        captured["orb_path"] = kwargs["orb_path"]
+        return SimpleNamespace(uuid="job-mace")
+
+    def fake_set_run_config(job, **kwargs):
+        captured["modules"] = kwargs["exec_config"].modules
+        return job
+
+    monkeypatch.setattr("qdyn.main_workflow.qdyn_nve", fake_qdyn_nve)
+    monkeypatch.setattr("qdyn.main_workflow.set_run_config", fake_set_run_config)
+
+    structure = {
+        "numbers": [1],
+        "positions": [[0.0, 0.0, 0.0]],
+        "cell": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "pbc": [False, False, False],
+        "momenta": [[0.0, 0.0, 0.0]],
+    }
+
+    payload = InputT(
+        basic_input=BasicInputT(),
+        scheduler_config=SchedulerConfigT(),
+        nve_input=NVEInputT(
+            software="mace",
+            calculator=MACEInputT(
+                use_gpu=False,
+                use_pretrained_model=True,
+                model_name="medium-0b3",
+            ),
+        ),
+        steps=["nve"],
+    )
+
+    jobs = manager.step_nve(
+        input=payload,
+        jobs={"nvt": [SimpleNamespace(output={"stru": structure})]},
+        is_first_step=False,
+        stru="",
+        stru_format="vasp",
+        resume=False,
+        prev_task_id="",
+        prepare_input_only=False,
+    )
+
+    assert [job.uuid for job in jobs] == ["job-mace"]
+    assert captured["software"] == "mace"
+    assert captured["model_path"] == "~/.qdyn/pretrained/mace-mp-0b3-medium.model"
+    assert captured["nodes"] == 2
+    assert captured["pp_path"] == ""
+    assert captured["orb_path"] == ""
+    assert captured["modules"] == ["ml-stack"]
 
 
 def test_workerpool_remote_property_uses_worker_type():

@@ -5,6 +5,9 @@ from typing import Literal, List, Any
 
 import numpy as np
 
+from .params import NEQUIP_PRETRAINED_MODELS_TYPE
+from .params import MACE_PRETRAINED_MODELS_TYPE
+
 ## Important!
 # InputT: should contain minimal parameters exposed to users,
 #         universal for all DFT codes
@@ -33,6 +36,90 @@ class SchedulerConfigT(BaseModel):
     """Scheduler configuration (reserved for future use)."""
 
     pass
+
+
+class DFTBaseInputT(BaseModel):
+    '''Base class for DFT input parameters, containing common fields.'''
+
+    nodes: PositiveInt | None = Field(
+        default=None,
+        le=8,
+        description="Number of compute nodes. Leave empty to use qdyn config default.",
+        json_schema_extra={
+            "group": "advanced",
+            "step": 1,
+            "placeholder": "Auto (from config)",
+        },
+    )
+
+    kspacing: float = Field(
+        0.04,
+        ge=1e-4,
+        le=10.0,
+        description="K-point spacing in 2π × 1/Å",
+        json_schema_extra={"step": 0.001, "precision": 4},
+    )
+
+    scf_thr: float = Field(
+        1e-6,
+        ge=1e-12,
+        le=1.0,
+        description="Electronic convergence criterion (eV)",
+        json_schema_extra={"widget": "log-step"},
+    )
+
+    parameters: str = Field(
+        '',
+        description="Additional INCAR parameters string",
+        json_schema_extra={
+            **ADVANCED_GROUP,
+            "widget": "textarea",
+            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
+        },
+    )
+
+
+class NequipInputT(BaseModel):
+    version: str = 'v0'
+    use_gpu: bool 
+    use_pretrained_model: bool = False
+    model_name: NEQUIP_PRETRAINED_MODELS_TYPE | Literal[''] = ''
+    model_hash: str = ''
+    energy_unit: Literal['eV', 'Ry', 'Ha'] = 'eV'
+    length_unit: Literal['Ang', 'Bohr'] = 'Ang'
+
+    @field_validator('model_hash')
+    @classmethod
+    def validate_stru_hash(cls, v: str) -> str:
+        """Ensure model_hash is either empty or a valid 32-char hex string (MD5)."""
+        from .params import HASH_PATTERN
+
+        if v and not HASH_PATTERN.match(v):
+            raise ValueError(
+                'model_hash must be a 32-character lowercase hex string (MD5 digest)'
+            )
+        return v
+
+class MACEInputT(BaseModel):
+    version: str = 'v0'
+    use_gpu: bool 
+    use_pretrained_model: bool = True
+    model_name: MACE_PRETRAINED_MODELS_TYPE | Literal[''] = ''
+    model_hash: str = ''
+    default_dtype: Literal['float32', 'float64'] = 'float32'
+
+    @field_validator('model_hash')
+    @classmethod
+    def validate_stru_hash(cls, v: str) -> str:
+        """Ensure model_hash is either empty or a valid 32-char hex string (MD5)."""
+        from .params import HASH_PATTERN
+
+        if v and not HASH_PATTERN.match(v):
+            raise ValueError(
+                'model_hash must be a 32-character lowercase hex string (MD5 digest)'
+            )
+        return v
+
 
 
 class NAMDInputT(BaseModel):
@@ -319,24 +406,6 @@ class NVTInputT(BaseModel):
 class NVEInputT(BaseModel):
     """Input parameters for NVE molecular dynamics."""
 
-    nodes: PositiveInt | None = Field(
-        default=None,
-        description="Number of compute nodes. Leave empty to use qdyn config default.",
-        json_schema_extra={
-            "group": "advanced",
-            "step": 1,
-            "placeholder": "Auto (from config)",
-        },
-    )
-
-    kspacing: float = Field(
-        0.04,
-        ge=1e-4,
-        le=10.0,
-        description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.001, "precision": 4},
-    )
-
     # MD parameters
     md_dt: float = Field(
         1.0,
@@ -352,27 +421,17 @@ class NVEInputT(BaseModel):
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
-    scf_thr: float = Field(
-        1e-6,
-        ge=1e-12,
-        le=1.0,
-        description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "log-step"},
-    )
+    log_every: Literal[1] = 1
 
     sel: SelDynInputT = Field(
         default_factory=SelDynInputT,
         json_schema_extra={"group": "advanced"},
     )
 
-    parameters: str = Field(
-        '',
-        description="Additional INCAR parameters string",
-        json_schema_extra={
-            **ADVANCED_GROUP,
-            "widget": "textarea",
-            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
-        },
+    software: Literal['vasp', 'nequip', 'mace'] = 'vasp'
+
+    calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
+        default_factory=DFTBaseInputT,
     )
 
 

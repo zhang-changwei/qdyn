@@ -9,7 +9,12 @@ import ase.io
 import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
-from .input import InputT
+from .input import (InputT, NVEInputT, 
+                    DFTBaseInputT, NequipInputT, MACEInputT)
+from .params import (
+    mace_pretrained_model_filename,
+    nequip_pretrained_model_filename,
+)
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -348,12 +353,11 @@ def validate_and_fill_runtime_config(
         )
         worker_cfg["resources"] = normalize_worker_resources(worker_cfg["resources"])
 
-        _require_mapping_child(
-            worker_cfg,
-            "gpu_resources",
-            err_msg=f"Missing 'worker_pools.{pool_name}.worker.gpu_resources' in QDYN config.\n"
-                    "Set it to null for non-GPU clusters, or a mapping for GPU-capable clusters."
-        )
+        if "gpu_resources" not in worker_cfg:
+            raise ConfigError(
+                f"Missing 'worker_pools.{pool_name}.worker.gpu_resources' in QDYN config.\n"
+                "Set it to null for non-GPU clusters, or a mapping for GPU-capable clusters."
+            )
         gpu_resources = worker_cfg["gpu_resources"]
         if gpu_resources is not None and not isinstance(gpu_resources, dict):
             raise ConfigError(
@@ -415,8 +419,13 @@ def validate_workflow_input(
     config: dict[str, Any],
     worker_cfg: dict[str, Any],
     active_pool: WorkerPool,
+    skip: list[str] | None = None,
 ) -> None:
     """Validate user workflow input before building the jobflow graph."""
+
+    check_list = {'gpu': False, 'models': []}
+
+    # software and method
     software = input.basic_input.software
     if not (software == "vasp" and method == "namd"):
         raise NotImplementedError(
@@ -429,6 +438,8 @@ def validate_workflow_input(
         raise ValidationError(
             f"Software '{software}' is not installed on the worker."
         )
+    
+    # steps, coresponding input must be provided
     required_inputs = {
         "nvt": ("nvt_input",),
         "nve": ("nve_input",),
@@ -444,7 +455,7 @@ def validate_workflow_input(
                     f"Step '{step}' requires '{field_name}' to be provided."
                 )
 
-    # vasp_ae specific
+    # vasp_ae specific (scf / fused_scf_prenamd)
     if (
         software == "vasp"
         and ("scf" in input.steps or "fused_scf_prenamd" in input.steps)
@@ -458,16 +469,11 @@ def validate_workflow_input(
                 "but 'vasp_ae' is not installed on the worker."
             )
 
+    # null step check
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
 
-    valid_steps = {"nvt", "nve", "scf", "pre_namd", "namd", "fused_scf_prenamd"}
-    unknown = set(input.steps) - valid_steps  # type: ignore[arg-type]
-    if unknown:
-        raise ValidationError(
-            f"Unknown step(s): {unknown}. Valid steps: {sorted(valid_steps)}"
-        )
-
+    # step contiguity check (for namd)
     if method == "namd":
         key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
         expanded_steps = _expand_steps_for_validation(input.steps)
@@ -478,13 +484,18 @@ def validate_workflow_input(
     else:
         raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
+    # In resume task, no stru, stru_format, or stru_hash required
+    # In tasks starting from nvt/nve, stru, stru_format reqired
+    # In tasks starting from scf/fused_scf_prenamd, stru_hash, stru_format required
+    # resume check
     if resume:
         if not prev_task_id:
             raise ValidationError("prev_task_id must be provided when resume=True.")
         if prev_task_id not in known_task_ids:
             raise ResumeError(f"Previous task '{prev_task_id}' not found.")
 
-    if stru:
+    # stru / stru_hash check
+    elif stru:
         try:
             ase.io.read(io.StringIO(stru), format=stru_format, index=":")
         except Exception as exc:
@@ -493,7 +504,7 @@ def validate_workflow_input(
                 f"by ASE with format '{stru_format}'."
             ) from exc
 
-    if stru_hash:
+    elif stru_hash:
         if not active_pool.user_file_exists("trajectory", stru_hash):
             raise ValidationError(
                 f"Structure with hash '{stru_hash}' not found in the active pool."
@@ -510,3 +521,126 @@ def validate_workflow_input(
                 f"Structure with hash '{stru_hash}' could not be parsed "
                 f"by ASE with format '{stru_format}'."
             )
+    else:
+        raise ValidationError(
+            "Either stru, stru_hash, or resume with valid prev_task_id must be provided."
+        )
+    
+    # nve specific check
+    if isinstance(input.nve_input, NVEInputT):
+        validate_nve_input(input.nve_input, active_pool, worker_cfg, check_list)
+
+
+def validate_nve_input(
+    nve: NVEInputT,
+    pool: WorkerPool,
+    worker_cfg: dict[str, Any],
+    check_list: dict[str, Any],
+):
+    CALCULATOR_MISMATCH_MSG = (r"Invalid calculator for NVE step "
+                                r"with software '{}'.")
+    # dft
+    if (nve.software in ['vasp'] and
+        not isinstance(nve.calculator, DFTBaseInputT)):
+
+        raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+    
+    # nequip
+    elif nve.software == 'nequip':
+        if not isinstance(nve.calculator, NequipInputT):
+            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+        
+        calc = nve.calculator
+        device = 'cuda' if calc.use_gpu else 'cpu'
+        if calc.use_gpu:
+            validate_gpu_availability(pool, worker_cfg)
+            check_list['gpu'] = True
+        
+        if calc.use_pretrained_model:
+            if not calc.model_name:
+                raise ValidationError("NequIP pretrained model_name is required.")
+            model_name = nequip_pretrained_model_filename(calc.model_name, device)
+            model_path = '~/.qdyn/pretrained/' + model_name
+            exists = pool.check_file_exists(model_path)
+            if not exists:
+                raise ValidationError(
+                    f"Pretrained model '{calc.model_name}' for NequIP on {device} not found at '{model_path}'.\n"
+                    "Please download the model from nequip.net and place it in the specified path."
+                )
+            check_list['models'].append(calc.model_name)
+
+        else: # custom model
+            if (
+                not calc.model_hash or 
+                not pool.user_file_exists("model", calc.model_hash)
+            ):
+
+                raise ValidationError(
+                    f"Custom model with hash '{calc.model_hash}' not found in the active pool.\n"
+                    "Please upload the model file and provide the correct hash."
+                )
+    
+    # mace
+    elif nve.software == 'mace':
+        if not isinstance(nve.calculator, MACEInputT):
+            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+        
+        calc = nve.calculator
+        if calc.use_gpu:
+            validate_gpu_availability(pool, worker_cfg)
+            check_list['gpu'] = True
+
+        if calc.use_pretrained_model:
+            if not calc.model_name:
+                raise ValidationError("MACE pretrained model_name is required.")
+            model_name = mace_pretrained_model_filename(calc.model_name)
+            model_path = '~/.qdyn/pretrained/' + model_name
+            exists = pool.check_file_exists(model_path)
+            if not exists:
+                raise ValidationError(
+                    f"Pretrained model '{calc.model_name}' for MACE not found at '{model_path}'.\n"
+                    "Please download the model from the official MACE release page and place it in the specified path."
+                )
+            check_list['models'].append(calc.model_name)
+        else:
+            if (
+                not calc.model_hash
+                or not pool.user_file_exists("model", calc.model_hash)
+            ):
+                raise ValidationError(
+                    f"Custom model with hash '{calc.model_hash}' not found in the active pool.\n"
+                    "Please upload the model file and provide the correct hash."
+                )
+            
+        
+
+def validate_gpu_availability(
+    pool: WorkerPool, 
+    worker_cfg: dict[str, Any],
+    check_cuda_avail: bool = False
+) -> None:
+    if not worker_cfg['gpu_resources']:
+        raise ValidationError(
+            "GPU resources are required for the selected calculator, "
+            "but no gpu_resources are configured for the worker."
+        )
+    if check_cuda_avail:
+        if pool.remote:
+            host = pool._get_remote_host(pool.get_pool_workers()[0])
+            script = "import torch; print(torch.cuda.is_available())"
+            stdout, stderr, rc = host.execute(
+                pool._build_remote_python_command(script)
+            )
+            if stdout.strip() != "True":
+                raise ValidationError(
+                    "CUDA is not available on the remote worker, "
+                    "but is required for the selected calculator."
+                )
+        else:
+            import torch
+            if not torch.cuda.is_available():
+                raise ValidationError(
+                    "CUDA is not available on the local worker, "
+                    "but is required for the selected calculator."
+                )
+

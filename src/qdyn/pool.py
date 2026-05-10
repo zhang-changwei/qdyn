@@ -75,6 +75,15 @@ class WorkerPool:
         return self._remote
 
 
+    def check_file_exists(self, path: str) -> bool:
+        if self.remote:
+            host = self._get_remote_host(self.get_pool_workers()[0])
+            if path.startswith("~"):
+                path = path.replace("~", "$HOME", 1)
+            stdout, _, rc = host.execute(f'test -f "{path}" && echo ok')
+            return rc == 0 and "ok" in stdout
+        return Path(path).expanduser().resolve().is_file()
+
     def user_file_exists(self, file_type: str, file_hash: str) -> bool:
         """Return whether a pool user-data file exists.
 

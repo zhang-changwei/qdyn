@@ -20,7 +20,14 @@ uv sync
 1. Modify `config/qdyn.yaml`
 2. Start mongod `python main.py --mongod`
 3. Generate jf project configuration `jf project generate jf_qdyn`
-4. Start jf `python main.py --jf`  
+4. Download pretrained ML models on worker if needed
+   Models are saved under `~/.qdyn/pretrained/`.
+   ```bash
+   python src/scripts/download_pretrained_models.py --list-models
+   python src/scripts/download_pretrained_models.py --nequip-model mir-group/NequIP-OAM-L --nequip-device cpu
+   python src/scripts/download_pretrained_models.py --mace-model small
+   ```
+5. Start jf `python main.py --jf`  
 
 ```
 export PYTHONPATH=$HOME/src/qdyn/src:$PYTHONPATH

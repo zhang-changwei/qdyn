@@ -34,6 +34,7 @@ def _make_runtime_config() -> dict:
                         "python": False,
                         "namd": False,
                     },
+                    "resources": {},
                     "modules": {
                         "vasp": [],
                     },
@@ -116,7 +117,6 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
     assert "auth.token_expire_hours" in warning_text
     assert "active_pool" in warning_text
     assert "worker_pools.local_slurm.pool.queue_poll_interval" in warning_text
-    assert "worker_pools.local_slurm.worker.resources" in warning_text
 
 
 def test_validate_and_fill_runtime_config_normalizes_worker_resource_aliases():

@@ -16,7 +16,7 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .errors import ConfigError, ResumeError, ValidationError, QueryError
-from .input import InputT
+from .input import DFTBaseInputT, InputT
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
 from .calc_common import TRAJ_FORMAT_MAPPING
@@ -28,6 +28,7 @@ from .tools.scf import qdyn_scf
 from .tools.fused_scf_prenamd import qdyn_fused_scf_prenamd
 from .tools.prepare_namd import qdyn_pre_namd
 from .tools.namd import qdyn_namd
+from .tools.mlff_wrapper import resolve_model_path
 
 
 # States that can be stopped via jc.stop_job()
@@ -293,8 +294,8 @@ class MainWorkflow:
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        software = input.basic_input.software
         assert input.nve_input is not None
+        software = input.nve_input.software
         if 'nvt' in jobs:
             structure = jobs['nvt'][0].output['stru']
         elif is_first_step and resume:
@@ -316,20 +317,36 @@ class MainWorkflow:
                 "Provide a structure string or set resume=True with a valid prev_task_id."
             )
 
-        nodes = (
-            input.nve_input.nodes
-            if input.nve_input.nodes is not None
-            else active_worker_cfg['nve'][software]['nodes']
-        )
-        processes_per_node = active_worker_cfg['nve'][software]['processes_per_node']
-        threads_per_process = active_worker_cfg['nve'][software]['threads_per_process']
+        calculator = input.nve_input.calculator
+        
+        if isinstance(calculator, DFTBaseInputT):
+            nodes = (
+                calculator.nodes
+                if  calculator.nodes is not None
+                else active_worker_cfg['nve'][software]['nodes']
+            )
+            processes_per_node = active_worker_cfg['nve'][software]['processes_per_node']
+            threads_per_process = active_worker_cfg['nve'][software]['threads_per_process']
+            pp_path = active_worker_cfg["pp_path"][software]
+            orb_path = active_worker_cfg["orb_path"][software]
+            model_path = ''
+            res_software = software
+        else:
+            nodes = 1
+            processes_per_node = 1
+            threads_per_process = active_worker_cfg['cpus_per_node']
+            pp_path = ''
+            orb_path = ''
+            model_path = resolve_model_path(self.active_pool, calculator)
+            res_software = 'python'
 
         job_nve = qdyn_nve(
             software=software,
             parameters=input.nve_input,
-            pp_path=active_worker_cfg["pp_path"][software],
-            orb_path=active_worker_cfg["orb_path"][software],
+            pp_path=pp_path,
+            orb_path=orb_path,
             structure=structure,
+            model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
@@ -338,11 +355,12 @@ class MainWorkflow:
         )
         job_nve = set_run_config(
             job_nve,
-            exec_config=self._build_exec_config([software]),
+            exec_config=self._build_exec_config([res_software]),
             resources=build_qresources(
                 active_worker_cfg["resources"],
-                active_worker_cfg['nve'][software],
                 nodes=nodes,
+                processes_per_node=processes_per_node,
+                threads_per_process=threads_per_process,
             ),
         )
         return [job_nve]

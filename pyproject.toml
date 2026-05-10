@@ -39,6 +39,8 @@ ml = [
     "torch-sparse>=0.6.18",
     "torchaudio==2.7.1",
     "torchvision==0.22.1",
+    "mace-torch>=0.3.15",
+    "torch-dftd>=0.5.3",
 ]
 
 [dependency-groups]
@@ -63,6 +65,9 @@ environments = [
 ]
 find-links = [
     "https://data.pyg.org/whl/torch-2.7.1+cu126.html"
+]
+override_dependencies = [
+    "e3nn>=0.6.0",
 ]
 
 [tool.uv.sources]
