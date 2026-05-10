@@ -664,7 +664,7 @@ def parse_md_data_from_oszicar(
                     step_converged = True
                     if prev_line:
                         try:
-                            if int(prev_line.split()[1]) == nelm:
+                            if int(prev_line.split(":")[1].strip().split()[0]) == nelm:
                                 step_converged = False
                         except (ValueError, IndexError):
                             pass
