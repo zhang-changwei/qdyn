@@ -12,12 +12,7 @@ import numpy as np
 from ..input import NVEInputT
 from ..params import params_default, TRAJ_FNAME_MAPPING
 from ..input_prepare import DFTInputs
-from ..output_postprocess import (
-    extract_md_data_from_oszicar,
-    check_scf_convergence,
-    save_md_data,
-    plot_md_results,
-)
+from ..output_postprocess import MDOutpus
 from .run_software import run_software
 from .seldyn import add_constraints
 
@@ -95,13 +90,13 @@ def qdyn_nve(
     run_software(software_lower, nprocs)
 
     # Process output and check convergence
-    scf_converged, md_file, images = _process_nve_output(
+    mdoutputs = _process_nve_output(
         software=software_lower,
         md_dt=parameters.md_dt,
         plot=plot,
     )
 
-    if not scf_converged:
+    if not mdoutputs.scf_converged:
         raise RuntimeError(
             "NVE calculation failed: SCF did not converge properly in the "
             "last portion of the trajectory. Please check the output files."
@@ -119,8 +114,8 @@ def qdyn_nve(
     return {
         'run_dir': str(Path.cwd()),
         'software': software,
-        'md_files': md_file,
-        'images': images,
+        'md_files': mdoutputs.md_file,
+        'images': [mdoutputs.image], # return list in previous version for consistency, but currently only one image is generated in NVE workflow.
         # 'strus': strus_list,
         'traj_path': str(
             Path.cwd() / TRAJ_FNAME_MAPPING[software_lower]
@@ -171,7 +166,7 @@ def _process_nve_output(
     software: str,
     md_dt: float,
     plot: bool,
-) -> Tuple[bool, str, List[str]]:
+) -> MDOutpus:
     """Process NVE output files and check convergence.
 
     In the old workflow, NVE convergence check uses:
@@ -190,34 +185,25 @@ def _process_nve_output(
     """
 
     if software == 'vasp':
-        md_data = extract_md_data_from_oszicar()
+        mdoutputs = MDOutpus.from_md_tracks(software='vasp')
     else:
         raise NotImplementedError(
             f"MD data extraction for {software} is not implemented yet."
         )
 
-    if md_data is None or len(md_data['steps']) == 0:
-        raise FileNotFoundError(
-            "Failed to extract MD data from output files. "
-            "Please check the output for errors."
-        )
-
     # Check SCF convergence on the last portion of the trajectory
     # In old workflow: check_nsw = wavecar_steps + 100, max_unconverged = nsw // 100
     # Here we check the last 10% of steps with 1% unconverged tolerance
-    scf_converged = check_scf_convergence(
-        converged_list=md_data['converged'],
-        check_nsw=None,  # default: last 10% of steps
+    mdoutputs.check_scf_convergence(
+        check_nsw=None,
         max_unconverged_ratio=0.01,
     )
 
     # Save MD data
-    md_file = save_md_data(md_data, md_dt, filename='md_nve.dat')
+    mdoutputs.save_md_data(md_dt, filename='md_nve.dat')
 
     # Generate plots if requested
-    images = []
     if plot:
-        image = plot_md_results(md_data, filename='nve_results.png')
-        images.append(image)
+        mdoutputs.plot_md_results(filename='nve_results.png')
 
-    return scf_converged, md_file, images
+    return mdoutputs

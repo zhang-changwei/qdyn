@@ -2,7 +2,7 @@ import os
 import shutil
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Tuple, NamedTuple
+from typing import Dict, Literal, Tuple
 from copy import deepcopy
 
 import ase.io
@@ -15,27 +15,12 @@ from jobflow import job  # type: ignore
 from ..input import NVTInputT
 from ..params import params_default, backup_files
 from ..input_prepare import DFTInputs
-from ..output_postprocess import (
-    extract_md_data_from_oszicar,
-    check_scf_convergence,
-    save_md_data,
-    plot_md_results,
-)
+from ..output_postprocess import MDOutpus
 from .run_software import run_software
 from .seldyn import add_constraints
 
 
 MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergence
-
-
-class NVTOutputT(NamedTuple):
-    current_structure: Atoms
-    scf_converged: bool
-    temp_converged: bool
-    max_deviation: float
-    md_file: str
-    image: str
-
 
 @job
 def qdyn_nvt(
@@ -121,25 +106,18 @@ def qdyn_nvt(
         run_software(software_lower, nprocs)
 
         # Process output and check convergence
-        (
-            current_structure,
-            scf_converged,
-            temp_converged,
-            max_deviation,
-            attempt_mdfile,
-            attempt_image,
-        ) = _process_nvt_output(
+        current_structure, mdoutputs = _process_nvt_output(
             software=software_lower,
             target_temp=parameters.temp_end,
             md_dt=parameters.md_dt,
             plot=plot,
             attempt=attempt,
         )
-        md_files.append(attempt_mdfile)
-        images.append(attempt_image)
+        md_files.append(mdoutputs.md_file)
+        images.append(mdoutputs.image)
 
         # Check 1: SCF convergence - if failed, raise error immediately
-        if not scf_converged:
+        if not mdoutputs.scf_converged:
             error_msg = (
                 f"NVT calculation failed: SCF did not converge properly. "
                 f"Please check the output files for details."
@@ -147,14 +125,14 @@ def qdyn_nvt(
             raise RuntimeError(error_msg)
 
         # Check 2: Temperature convergence
-        if temp_converged:
+        if mdoutputs.temp_converged:
             break
         else:
             # Check if we've exhausted retries
             if attempt >= MAX_NVT_RETRIES:
                 error_msg = (
                     f"NVT calculation failed: Temperature did not converge after "
-                    f"{MAX_NVT_RETRIES} attempts. Max deviation: {max_deviation:.1f} K. "
+                    f"{MAX_NVT_RETRIES} attempts. Max deviation: {mdoutputs.max_deviation:.1f} K. "
                     f"Please check the system or increase MAX_NVT_RETRIES."
                 )
                 raise RuntimeError(error_msg)
@@ -272,7 +250,7 @@ def _process_nvt_output(
     attempt: int = 1,
     check_nsw: int | None = None,
     max_unconverged_ratio: float = 0.01,
-) -> NVTOutputT:
+) -> tuple[Atoms, MDOutpus]:
     """Process NVT output files and check convergence (universal for all software).
 
     This function extracts MD data using software-specific functions,
@@ -301,7 +279,7 @@ def _process_nvt_output(
 
     # Extract MD data using software-specific function
     if software == 'vasp':
-        md_data = extract_md_data_from_oszicar()
+        mdoutputs = MDOutpus.from_md_tracks(software='vasp')
         # Read CONTCAR as new structure for next iteration
         current_structure = ase.io.read('CONTCAR', format='vasp')  # type: ignore
     else:
@@ -309,85 +287,69 @@ def _process_nvt_output(
             f"MD data extraction for {software} is not implemented yet."
         )
 
-    if md_data is None or len(md_data['steps']) == 0:
-        raise FileNotFoundError(
-            "Failed to extract MD data from output files. Please check the output for errors."
-        )
-
     # Check SCF convergence (universal)
-    scf_converged = check_scf_convergence(
-        converged_list=md_data['converged'],
+    mdoutputs.check_scf_convergence(
         check_nsw=check_nsw,
         max_unconverged_ratio=max_unconverged_ratio,
     )
 
     # Check temperature convergence (universal)
-    n_last = min(len(md_data['temperatures']), 1000)
-    temp_converged, max_deviation = check_temperature_convergence(
-        md_data=md_data,
+    mdoutputs.check_temperature_convergence(
         target_temp=target_temp,
-        n_last=n_last,
+        n_last=1000,
         threshold_ratio=0.10,
     )
 
     # Save MD data to file in unified format
     md_filename = f'md_attempt_{attempt}.dat'
-    md_file = save_md_data(md_data, md_dt, filename=md_filename)
+    mdoutputs.save_md_data(md_dt, filename=md_filename)
 
-    image = ''
     # Generate plots if requested
     if plot:
         plot_filename = f'nvt_results_attempt_{attempt}.png'
-        image = plot_md_results(md_data, plot_filename, target_temp)
+        mdoutputs.plot_md_results(plot_filename, target_temp)
 
-    return NVTOutputT(
-        current_structure,  # type: ignore
-        scf_converged,
-        temp_converged,
-        max_deviation,
-        md_file,
-        image,
-    )
+    return current_structure, mdoutputs # type: ignore
 
 
-def check_temperature_convergence(
-    md_data: Dict,
-    target_temp: float,
-    n_last: int = 1000,
-    threshold_ratio: float = 0.10,
-) -> Tuple[bool, float]:
-    """Check temperature convergence from MD data (universal for all software).
+# def check_temperature_convergence(
+#     md_data: Dict,
+#     target_temp: float,
+#     n_last: int = 1000,
+#     threshold_ratio: float = 0.10,
+# ) -> Tuple[bool, float]:
+#     """Check temperature convergence from MD data (universal for all software).
 
-    This function checks if temperature converged to the target value.
+#     This function checks if temperature converged to the target value.
 
-    Args:
-        md_data: MD data dictionary with 'temperatures' field.
-        target_temp: Target temperature for NVT simulation.
-        n_last: Number of last steps to use for averaging (default: 1000).
-        threshold_ratio: Maximum allowed deviation as ratio of target temp
-            (default: 0.10 = 10%).
+#     Args:
+#         md_data: MD data dictionary with 'temperatures' field.
+#         target_temp: Target temperature for NVT simulation.
+#         n_last: Number of last steps to use for averaging (default: 1000).
+#         threshold_ratio: Maximum allowed deviation as ratio of target temp
+#             (default: 0.10 = 10%).
 
-    Returns:
-        (converged, avg_temp, max_deviation)
-        - converged: True if temperature converged to target
-        - avg_temp: Average temperature of last n_last steps
-        - max_deviation: Maximum temperature deviation from target
-    """
-    temps = np.array(md_data['temperatures'])
-    n_steps = len(temps)
+#     Returns:
+#         (converged, avg_temp, max_deviation)
+#         - converged: True if temperature converged to target
+#         - avg_temp: Average temperature of last n_last steps
+#         - max_deviation: Maximum temperature deviation from target
+#     """
+#     temps = np.array(md_data['temperatures'])
+#     n_steps = len(temps)
 
-    if n_steps == 0:
-        raise ValueError("No temperature data available to check convergence.")
+#     if n_steps == 0:
+#         raise ValueError("No temperature data available to check convergence.")
 
-    # Use last n_last steps (or all if fewer)
-    n_check = min(n_steps, n_last)
-    last_ntemps = temps[-n_check:]
+#     # Use last n_last steps (or all if fewer)
+#     n_check = min(n_steps, n_last)
+#     last_ntemps = temps[-n_check:]
 
-    temp_deviation = np.abs(last_ntemps - target_temp)
-    max_deviation = np.max(temp_deviation)
+#     temp_deviation = np.abs(last_ntemps - target_temp)
+#     max_deviation = np.max(temp_deviation)
 
-    # Check if max deviation is within threshold
-    threshold = target_temp * threshold_ratio
-    converged = max_deviation <= threshold
+#     # Check if max deviation is within threshold
+#     threshold = target_temp * threshold_ratio
+#     converged = max_deviation <= threshold
 
-    return converged, max_deviation
+#     return converged, max_deviation
