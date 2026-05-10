@@ -331,6 +331,7 @@ class MainWorkflow:
             orb_path = active_worker_cfg["orb_path"][software]
             model_path = ''
             res_software = software
+            use_gpu = False
         else:
             nodes = 1
             processes_per_node = 1
@@ -339,6 +340,7 @@ class MainWorkflow:
             orb_path = ''
             model_path = resolve_model_path(self.active_pool, calculator)
             res_software = 'python'
+            use_gpu = calculator.use_gpu
 
         job_nve = qdyn_nve(
             software=software,
@@ -353,15 +355,16 @@ class MainWorkflow:
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
+        overrides = {
+            'worker_resources': active_worker_cfg["resources"],
+            'nodes': nodes,
+            'processes_per_node': processes_per_node,
+            'threads_per_process': threads_per_process,
+        } if not use_gpu else {'worker_resources': active_worker_cfg["gpu_resources"]}
         job_nve = set_run_config(
             job_nve,
             exec_config=self._build_exec_config([res_software]),
-            resources=build_qresources(
-                active_worker_cfg["resources"],
-                nodes=nodes,
-                processes_per_node=processes_per_node,
-                threads_per_process=threads_per_process,
-            ),
+            resources=build_qresources(**overrides),
         )
         return [job_nve]
 
