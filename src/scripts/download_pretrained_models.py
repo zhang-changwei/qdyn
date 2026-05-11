@@ -19,6 +19,8 @@ from qdyn.params import (
     MACE_PRETRAINED_MODEL_URLS,
     MACE_PRETRAINED_MODELS,
     NEQUIP_PRETRAINED_MODELS,
+)
+from qdyn.tools.mlff_wrapper import (
     mace_pretrained_model_filename,
     nequip_pretrained_model_filename,
 )

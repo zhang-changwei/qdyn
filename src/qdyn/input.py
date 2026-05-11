@@ -1,7 +1,7 @@
 import re
 
-from pydantic import BaseModel, Field, field_validator, PositiveInt
-from typing import Literal, List, Any
+from pydantic import BaseModel, Field, field_validator, PositiveInt, AfterValidator
+from typing import Literal, List, Any, Annotated
 
 import numpy as np
 
@@ -23,6 +23,16 @@ from .params import MACE_PRETRAINED_MODELS_TYPE
 # ---------------------------------------------------------------------------
 HIDDEN_FIELD: dict[str, Any] = {"hidden": True}
 ADVANCED_GROUP: dict[str, Any] = {"group": "advanced"}
+
+
+from .params import HASH_PATTERN
+def validate_md5_hash(v: str) -> str:
+    """Ensure string is either empty or a valid 32-char hex string (MD5)."""
+    if v and not HASH_PATTERN.match(v):
+        raise ValueError('must be a 32-character lowercase hex string (MD5 digest)')
+    return v
+
+MD5HashStr = Annotated[str, AfterValidator(validate_md5_hash)]
 
 
 class BasicInputT(BaseModel):
@@ -53,7 +63,7 @@ class DFTBaseInputT(BaseModel):
     )
 
     kspacing: float = Field(
-        0.04,
+        default=0.04,
         ge=1e-4,
         le=10.0,
         description="K-point spacing in 2π × 1/Å",
@@ -61,7 +71,7 @@ class DFTBaseInputT(BaseModel):
     )
 
     scf_thr: float = Field(
-        1e-6,
+        default=1e-6,
         ge=1e-12,
         le=1.0,
         description="Electronic convergence criterion (eV)",
@@ -69,7 +79,7 @@ class DFTBaseInputT(BaseModel):
     )
 
     parameters: str = Field(
-        '',
+        default='',
         description="Additional INCAR parameters string",
         json_schema_extra={
             **ADVANCED_GROUP,
@@ -81,44 +91,20 @@ class DFTBaseInputT(BaseModel):
 
 class NequipInputT(BaseModel):
     version: str = 'v0'
-    use_gpu: bool 
+    use_gpu: bool = False
     use_pretrained_model: bool = False
     model_name: NEQUIP_PRETRAINED_MODELS_TYPE | Literal[''] = ''
-    model_hash: str = ''
+    model_hash: MD5HashStr = ''
     energy_unit: Literal['eV', 'Ry', 'Ha'] = 'eV'
     length_unit: Literal['Ang', 'Bohr'] = 'Ang'
 
-    @field_validator('model_hash')
-    @classmethod
-    def validate_stru_hash(cls, v: str) -> str:
-        """Ensure model_hash is either empty or a valid 32-char hex string (MD5)."""
-        from .params import HASH_PATTERN
-
-        if v and not HASH_PATTERN.match(v):
-            raise ValueError(
-                'model_hash must be a 32-character lowercase hex string (MD5 digest)'
-            )
-        return v
-
 class MACEInputT(BaseModel):
     version: str = 'v0'
-    use_gpu: bool 
+    use_gpu: bool = False
     use_pretrained_model: bool = True
     model_name: MACE_PRETRAINED_MODELS_TYPE | Literal[''] = ''
-    model_hash: str = ''
+    model_hash: MD5HashStr = ''
     default_dtype: Literal['float32', 'float64'] = 'float32'
-
-    @field_validator('model_hash')
-    @classmethod
-    def validate_stru_hash(cls, v: str) -> str:
-        """Ensure model_hash is either empty or a valid 32-char hex string (MD5)."""
-        from .params import HASH_PATTERN
-
-        if v and not HASH_PATTERN.match(v):
-            raise ValueError(
-                'model_hash must be a 32-character lowercase hex string (MD5 digest)'
-            )
-        return v
 
 
 
@@ -194,19 +180,19 @@ class NAMDInputT(BaseModel):
 
 class _PreNAMDInputAdvT(BaseModel):
     reorder: bool = Field(
-        False, description="Whether to reorder bands before post-processing"
+        default=False, description="Whether to reorder bands before post-processing"
     )
     alle: bool = Field(
-        False, description="Whether to use all-electron data in pre-processing"
+        default=False, description="Whether to use all-electron data in pre-processing"
     )
     ikpt: int = Field(
-        1,
+        default=1,
         ge=1,
         description="K-point index starting from 1",
         json_schema_extra={"step": 1},
     )
     ispin: int = Field(
-        1,
+        default=1,
         ge=1,
         le=2,
         description="Spin channel index starting from 1",
@@ -509,7 +495,7 @@ class InputT(BaseModel):
                         'fused_scf_prenamd']] = ['nvt']
     stru: str = ''
     stru_format: str = 'vasp'
-    stru_hash: str = ''
+    stru_hash: MD5HashStr = ''
 
     task_name: str | None = Field(
         default=None,
@@ -534,14 +520,3 @@ class InputT(BaseModel):
                 )
         return v
 
-    @field_validator('stru_hash')
-    @classmethod
-    def validate_stru_hash(cls, v: str) -> str:
-        """Ensure stru_hash is either empty or a valid 32-char hex string (MD5)."""
-        from .params import HASH_PATTERN
-
-        if v and not HASH_PATTERN.match(v):
-            raise ValueError(
-                'stru_hash must be a 32-character lowercase hex string (MD5 digest)'
-            )
-        return v

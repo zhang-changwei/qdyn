@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from qtoolkit import QResources
+from qtoolkit.core.data_objects import QResources
 
 from .errors import ConfigError
 
@@ -70,21 +70,31 @@ def validate_step_resources(resources: Any, dotted_name: str) -> None:
 
 
 def build_qresources(
-    worker_resources: Mapping[str, Any],
+    worker_cfg: Mapping[str, Any],
     step_resources: Mapping[str, Any] | None = None,
+    use_gpu: bool = False,
     **overrides: Any,
 ) -> QResources:
-    """Merge worker, step, and explicit overrides into QResources."""
-    resources = normalize_worker_resources(worker_resources)
-    if step_resources is not None:
-        resources.update(step_resources)
-    resources.update(
-        {
-            key: value
-            for key, value in overrides.items()
-            if value is not None
-        }
-    )
+    """
+    Merge worker, step, and explicit overrides into QResources.
+
+    Notice:
+    if use_gpu, step_resources and overrides are ignored, 
+    We only support single GPU card jobs.
+    """
+    if use_gpu:
+        resources = normalize_worker_resources(worker_cfg['gpu_resources'])
+    else:
+        resources = normalize_worker_resources(worker_cfg['resources'])
+        if step_resources is not None:
+            resources.update(step_resources)
+        resources.update(
+            {
+                key: value
+                for key, value in overrides.items()
+                if value is not None
+            }
+        )
 
     try:
         return QResources(**resources)

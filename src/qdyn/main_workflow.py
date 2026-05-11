@@ -274,7 +274,7 @@ class MainWorkflow:
             job_nvt,
             exec_config=self._build_exec_config([software]),
             resources=build_qresources(
-                active_worker_cfg["resources"],
+                active_worker_cfg,
                 active_worker_cfg['nvt'][software],
                 nodes=nodes,
             ),
@@ -355,16 +355,20 @@ class MainWorkflow:
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
-        overrides = {
-            'worker_resources': active_worker_cfg["resources"],
-            'nodes': nodes,
-            'processes_per_node': processes_per_node,
-            'threads_per_process': threads_per_process,
-        } if not use_gpu else {'worker_resources': active_worker_cfg["gpu_resources"]}
+        qres = build_qresources(
+            active_worker_cfg,
+            use_gpu=use_gpu,
+            nodes=nodes,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
+        )
         job_nve = set_run_config(
             job_nve,
-            exec_config=self._build_exec_config([res_software]),
-            resources=build_qresources(**overrides),
+            exec_config=self._build_exec_config(
+                [res_software], 
+                omp_threads=qres.threads_per_process
+            ),
+            resources=qres,
         )
         return [job_nve]
 
@@ -439,7 +443,7 @@ class MainWorkflow:
                 job_scf,
                 exec_config=self._build_exec_config([software]),
                 resources=build_qresources(
-                    active_worker_cfg["resources"],
+                    active_worker_cfg,
                     active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
@@ -526,7 +530,7 @@ class MainWorkflow:
                     omp_threads=omp_python,
                 ),
                 resources=build_qresources(
-                    active_worker_cfg["resources"],
+                    active_worker_cfg,
                     active_worker_cfg['scf'][software],
                     nodes=nodes,
                 ),
@@ -584,7 +588,7 @@ class MainWorkflow:
                 omp_threads=omp_threads,
             ),
             resources=build_qresources(
-                active_worker_cfg["resources"],
+                active_worker_cfg,
                 nodes=1,
                 processes_per_node=1,
                 threads_per_process=ncpus,
@@ -661,7 +665,7 @@ class MainWorkflow:
                 omp_threads=threads_per_process,
             ),
             resources=build_qresources(
-                active_worker_cfg["resources"],
+                active_worker_cfg,
                 nodes=nodes,
                 processes_per_node=processes_per_node,
                 threads_per_process=threads_per_process,
