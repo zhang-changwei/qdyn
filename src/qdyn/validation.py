@@ -11,7 +11,7 @@ import yaml
 from .errors import ConfigError, ValidationError, ResumeError
 from .input import (InputT, NVEInputT, 
                     DFTBaseInputT, NequipInputT, MACEInputT)
-from .params import (
+from .tools.mlff_wrapper import (
     mace_pretrained_model_filename,
     nequip_pretrained_model_filename,
 )
@@ -643,4 +643,3 @@ def validate_gpu_availability(
                     "CUDA is not available on the local worker, "
                     "but is required for the selected calculator."
                 )
-
