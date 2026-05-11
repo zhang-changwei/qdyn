@@ -1124,7 +1124,13 @@ async function handleSubmit(): Promise<void> {
       router.push({ name: 'task-detail', params: { taskId: result.task_id } })
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Submit failed'
+    const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+    let message = error instanceof Error ? error.message : 'Submit failed'
+    if (typeof detail === 'string') {
+      message = detail
+    } else if (Array.isArray(detail) && typeof detail[0]?.msg === 'string') {
+      message = detail[0].msg
+    }
     ElMessage.error(message)
   } finally {
     submitting.value = false
