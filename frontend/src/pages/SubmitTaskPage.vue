@@ -667,6 +667,59 @@ watch(
   { deep: true }
 )
 
+// Watch NVE software discriminator: when it changes, reset calculator defaults
+// to the matching branch (DFTBaseInputT for vasp, NequipInputT for nequip, etc.)
+watch(
+  () => (formData.nve_input as Record<string, unknown>)?.software,
+  (newSoftware, oldSoftware) => {
+    if (!newSoftware || newSoftware === oldSoftware) return
+    if (!schemas.value) return
+    const nveSchema = schemas.value.nve
+    if (!nveSchema?.properties?.calculator?.anyOf) return
+    const defs = nveSchema.$defs ?? {}
+
+    // Build enum→branch mapping (same logic as DynamicStepForm's resolveAnyOfDiscriminator)
+    const refBranches = nveSchema.properties.calculator.anyOf
+      .filter((b: { $ref?: string }) => b.$ref)
+      .map((b: { $ref?: string }) => {
+        const defName = b.$ref?.replace('#/$defs/', '') ?? ''
+        return { defName, schema: defs[defName] }
+      })
+      .filter((b: { schema?: unknown }) => b.schema)
+
+    const softwareEnum = ['vasp', 'nequip', 'mace']
+    const branchByEnum = new Map<string, Record<string, unknown>>()
+    const unmatched: { defName: string; schema: Record<string, unknown> }[] = []
+
+    for (const branch of refBranches) {
+      const title = (branch.schema.title ?? branch.defName)
+        .replace(/InputT?$/i, '').toLowerCase()
+      const matched = softwareEnum.find(
+        (ev) => title === ev || title.includes(ev)
+      )
+      if (matched && !branchByEnum.has(matched)) {
+        branchByEnum.set(matched, branch.schema as Record<string, unknown>)
+      } else {
+        unmatched.push(branch as { defName: string; schema: Record<string, unknown> })
+      }
+    }
+    const unmatchedEnums = softwareEnum.filter((ev) => !branchByEnum.has(ev))
+    for (let i = 0; i < Math.min(unmatched.length, unmatchedEnums.length); i++) {
+      branchByEnum.set(unmatchedEnums[i], unmatched[i].schema)
+    }
+
+    const targetSchema = branchByEnum.get(String(newSoftware))
+    if (targetSchema) {
+      const defaults = buildDefaultsFromSchema(
+        targetSchema as Parameters<typeof buildDefaultsFromSchema>[0],
+        nveSchema,
+      )
+      const nveInput = formData.nve_input as Record<string, unknown>
+      nveInput.calculator = defaults
+    }
+  },
+)
+
 watch(selectedPool, (newPool, oldPool) => {
   if (!oldPool || newPool === oldPool) {
     return
