@@ -2121,11 +2121,23 @@ def get_job_md_timeseries(
 
     This is the main entry point called by the router.
 
+    Resolution order depends on step_type:
+
+    **NVE**: try ``run_dir/qdyn_md.log`` first (written by MDProgressMonitor),
+    fallback to OSZICAR via ``_resolve_md_attempt_files()``.
+
+    **NVT**: resolve selected attempt via ``_resolve_md_attempt_files()``
+    first (preserves retry history), then within the selected attempt
+    directory try ``qdyn_md.log``, fallback to that attempt's OSZICAR.
+
     For remote workers, full timeseries parsing requires transferring large
-    OSZICAR files.  Phase 1 returns ``available=False`` with a warning for
-    remote workers; Phase 2 will implement streaming/chunked transfer.
+    files.  Phase 1 returns ``available=False`` with a warning for remote
+    workers; Phase 2 will implement streaming/chunked transfer.
     """
-    from ..output_postprocess import parse_md_data_from_oszicar
+    from ..output_postprocess import (
+        parse_md_data_from_oszicar,
+        parse_md_data_from_qdyn_log,
+    )
 
     # --- Resolve run_dir and step_type ---
     jc = manager._ensure_job_controller()
@@ -2167,42 +2179,85 @@ def get_job_md_timeseries(
             warning=f"MD timeseries not applicable for step_type '{step_type}'.",
         )
 
-    # --- Resolve attempt files ---
-    try:
-        oszicar_path, incar_path, selected_attempt, attempts = _resolve_md_attempt_files(
-            run_dir, step_type, attempt,
-        )
-    except FileNotFoundError as exc:
-        return JobMdTimeseriesResponse(
-            available=False,
-            step_type=step_type,
-            state=raw_state,
-            warning=str(exc),
-        )
+    # --- Parse MD data: strategy depends on step_type ---
+    used_qdyn_log = False
+    raw_data: dict | None = None
+    incar_path: Path | None = None
+    selected_attempt: int | None = None
+    attempts: list[MDAttemptItem] = []
 
-    # --- Parse OSZICAR ---
-    try:
-        raw_data = parse_md_data_from_oszicar(oszicar_path, incar_path)
-    except (FileNotFoundError, ValueError) as exc:
-        return JobMdTimeseriesResponse(
-            available=False,
-            step_type=step_type,
-            state=raw_state,
-            selected_attempt=selected_attempt,
-            attempts=attempts,
-            warning=str(exc),
-        )
+    if step_type == "nve":
+        # NVE: try root qdyn_md.log first, fallback to OSZICAR
+        qdyn_log_path = run_dir / "qdyn_md.log"
+        if qdyn_log_path.is_file():
+            try:
+                raw_data = parse_md_data_from_qdyn_log(qdyn_log_path)
+                used_qdyn_log = True
+                if (run_dir / "INCAR").is_file():
+                    incar_path = run_dir / "INCAR"
+                selected_attempt = 1
+                attempts = [
+                    MDAttemptItem(
+                        attempt=1, label="Attempt 1", is_current=True, archived=False,
+                    ),
+                ]
+            except (FileNotFoundError, ValueError) as exc:
+                logger.debug(
+                    "qdyn_md.log found but parse failed, falling back to OSZICAR: %s",
+                    exc,
+                )
+
+    if raw_data is None:
+        # NVT always, or NVE fallback: resolve attempt files then parse
+        try:
+            oszicar_path, incar_path, selected_attempt, attempts = (
+                _resolve_md_attempt_files(run_dir, step_type, attempt)
+            )
+        except FileNotFoundError as exc:
+            return JobMdTimeseriesResponse(
+                available=False,
+                step_type=step_type,
+                state=raw_state,
+                warning=str(exc),
+            )
+
+        # Within the selected attempt dir, try qdyn_md.log first
+        attempt_dir = oszicar_path.parent
+        attempt_qdyn_log = attempt_dir / "qdyn_md.log"
+        if attempt_qdyn_log.is_file():
+            try:
+                raw_data = parse_md_data_from_qdyn_log(attempt_qdyn_log)
+                used_qdyn_log = True
+            except (FileNotFoundError, ValueError):
+                pass
+
+        if raw_data is None:
+            try:
+                raw_data = parse_md_data_from_oszicar(oszicar_path, incar_path)
+            except (FileNotFoundError, ValueError) as exc:
+                return JobMdTimeseriesResponse(
+                    available=False,
+                    step_type=step_type,
+                    state=raw_state,
+                    selected_attempt=selected_attempt,
+                    attempts=attempts,
+                    warning=str(exc),
+                )
 
     original_points = len(raw_data['steps'])
 
-    # --- Build time_fs from POTIM ---
-    potim = None
+    # --- Build time_fs ---
+    potim: float | None = None
     if incar_path is not None:
         potim = _parse_incar_numeric_value(incar_path, "POTIM")
+
     if potim is not None and potim > 0:
         time_fs = [s * potim for s in raw_data['steps']]
+    elif used_qdyn_log and 'time_ps' in raw_data:
+        # INCAR absent or POTIM missing — use qdyn_md.log time column (ps -> fs)
+        time_fs = [t * 1000.0 for t in raw_data['time_ps']]
     else:
-        # Fallback: use step number directly
+        # Ultimate fallback: use step number directly
         time_fs = [float(s) for s in raw_data['steps']]
 
     series_dict = {
@@ -2228,12 +2283,18 @@ def get_job_md_timeseries(
     if potim is not None:
         references.potim_fs = potim
 
-    # --- NSW for total_steps ---
+    # --- NSW / total_steps ---
     total_steps: int | None = None
     if incar_path is not None:
         nsw_val = _parse_incar_numeric_value(incar_path, "NSW")
         if nsw_val is not None:
             total_steps = int(nsw_val)
+    # If INCAR is missing but qdyn_md.log header has total info, derive NSW
+    if total_steps is None and used_qdyn_log:
+        interval = raw_data.get('interval', 1)
+        total_logged = raw_data.get('total_logged_steps', 0)
+        if total_logged > 0:
+            total_steps = total_logged * interval
 
     stats = MDTimeseriesStats(
         current_step=raw_data['steps'][-1] if raw_data['steps'] else 0,

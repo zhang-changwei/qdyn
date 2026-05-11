@@ -582,6 +582,125 @@ def extract_band_edges(
 
 
 # ===========================================================================
+# qdyn_md.log parser (software-agnostic)
+# ===========================================================================
+def parse_md_data_from_qdyn_log(
+    log_path: 'os.PathLike[str] | str',
+) -> Dict:
+    """Parse MD data from a ``qdyn_md.log`` file written by MDProgressMonitor.
+
+    The file format is::
+
+        Step: <total_logged_steps>, Interval: <log_every>
+        Time[ps]      Etot[eV]     Epot[eV]     Ekin[eV]    T[K]
+        0.0010          -810.46      -814.53         4.07       294.00
+        ...
+
+    Parameters
+    ----------
+    log_path : path-like
+        Path to ``qdyn_md.log``.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys matching ``parse_md_data_from_oszicar`` output:
+        - ``steps``              : list[int]
+        - ``temperatures``       : list[float]
+        - ``total_energies``     : list[float]
+        - ``potential_energies`` : list[float]
+        - ``kinetic_energies``   : list[float]
+        - ``converged``          : list[bool]  (always True — no SCF info)
+        - ``time_ps``            : list[float] (raw Time[ps] column)
+        - ``interval``           : int         (log_every from header)
+        - ``total_logged_steps`` : int         (Step value from header)
+    """
+    from pathlib import Path as _Path
+
+    log_file = _Path(log_path)
+    if not log_file.is_file():
+        raise FileNotFoundError(f"qdyn_md.log not found at {log_path}")
+
+    steps: list[int] = []
+    temperatures: list[float] = []
+    total_energies: list[float] = []
+    potential_energies: list[float] = []
+    kinetic_energies: list[float] = []
+    time_ps: list[float] = []
+
+    interval: int = 1
+    total_logged_steps: int = 0
+
+    with open(log_file, 'r') as f:
+        for line_num, line in enumerate(f):
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Line 0: header  "Step: 100, Interval: 1"
+            if line_num == 0:
+                try:
+                    parts = stripped.split(',')
+                    for part in parts:
+                        kv = part.strip().split(':')
+                        if len(kv) == 2:
+                            key = kv[0].strip().lower()
+                            val = kv[1].strip()
+                            if key == 'step':
+                                total_logged_steps = int(val)
+                            elif key == 'interval':
+                                interval = int(val)
+                except (ValueError, IndexError):
+                    logging.warning(
+                        'Failed to parse qdyn_md.log header: %s', stripped
+                    )
+                continue
+
+            # Line 1: column header — skip
+            if line_num == 1:
+                continue
+
+            # Data lines: Time[ps]  Etot  Epot  Ekin  T
+            try:
+                fields = stripped.split()
+                if len(fields) < 5:
+                    continue  # incomplete trailing line
+                t = float(fields[0])
+                etot = float(fields[1])
+                epot = float(fields[2])
+                ekin = float(fields[3])
+                temp = float(fields[4])
+            except (ValueError, IndexError):
+                # Tolerate incomplete trailing lines (file still being written)
+                continue
+
+            row_index = len(steps) + 1  # 1-based row counter
+            step_number = row_index * interval
+
+            time_ps.append(t)
+            steps.append(step_number)
+            total_energies.append(etot)
+            potential_energies.append(epot)
+            kinetic_energies.append(ekin)
+            temperatures.append(temp)
+
+    if len(steps) == 0:
+        raise ValueError("No valid MD data found in qdyn_md.log.")
+
+    return {
+        'steps': steps,
+        'temperatures': temperatures,
+        'total_energies': total_energies,
+        'potential_energies': potential_energies,
+        'kinetic_energies': kinetic_energies,
+        'converged': [True] * len(steps),
+        'time_ps': time_ps,
+        'interval': interval,
+        'total_logged_steps': total_logged_steps,
+    }
+
+
+# ===========================================================================
 # VASP specific functions
 # ===========================================================================
 def parse_md_data_from_oszicar(
