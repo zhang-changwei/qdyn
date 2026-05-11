@@ -97,13 +97,17 @@ class MDProgressMonitor:
 
                     # SCF convergence check
                     # Diff_total_energy, diff_band_structure_energy < scf_thr
-                    if self.check_convergence:
-                        parts = self.prev_line[4:].split()
-                        dE = float(parts[2])
-                        deps = float(parts[4])
-                        if abs(dE) > self.scf_thr or abs(deps) > self.scf_thr:
-                            logging.error(f"SCF not converged at step={step}.")
-                            return DFTStatus.NOT_CONVERGED_ERROR
+                    if self.check_convergence and self.prev_line.strip():
+                        try:
+                            scf_parts = self.prev_line[4:].split()
+                            dE = float(scf_parts[2])
+                            deps = float(scf_parts[3])
+                        except (IndexError, ValueError):
+                            pass
+                        else:
+                            if abs(dE) > self.scf_thr or abs(deps) > self.scf_thr:
+                                logging.error(f"SCF not converged at step={step}.")
+                                return DFTStatus.NOT_CONVERGED_ERROR
                     
                     # skip logging if not at the specified interval
                     if step % self.log_every != 0:
