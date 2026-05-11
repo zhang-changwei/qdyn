@@ -151,7 +151,7 @@ def load_config(
     if not isinstance(expected_hash, str) or not expected_hash:
         raise ConfigError(
             "Missing 'basic.jf_config_hash' in QDYN config.\n"
-            "Run scripts/generate_jf_config.py to generate jf-remote config "
+            "Run src/scripts/generate_jf_config.py to generate jf-remote config "
             "and write the matching hash back to qdyn.yaml."
         )
 
@@ -161,7 +161,7 @@ def load_config(
             "jobflow-remote config hash mismatch.\n"
             f"Expected: {expected_hash}\n"
             f"Actual:   {actual_hash}\n"
-            "Re-run scripts/generate_jf_config.py and do not edit jf_remote_cfg manually."
+            "Re-run src/scripts/generate_jf_config.py and do not edit jf_remote_cfg manually."
         )
 
     return cfg, jf_cfg

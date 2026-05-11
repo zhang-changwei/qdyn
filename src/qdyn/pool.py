@@ -61,7 +61,7 @@ class WorkerPool:
             if not workers:
                 raise ConfigError(
                     f"No runtime workers found for pool '{self.name}'. "
-                    "Run scripts/generate_jf_config.py and "
+                    "Run src/scripts/generate_jf_config.py and "
                     "ensure jf-remote config is up to date."
                 )
             self._workers = workers
@@ -276,7 +276,7 @@ class WorkerPool:
         if not pool_workers:
             logging.warning(
                 f"No runtime workers found for pool '{name}'. "
-                f"Did you run generate_jf_config.py?"
+                f"Did you run src/scripts/generate_jf_config.py?"
             )
             return None, "pool_full"
 
