@@ -65,6 +65,25 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 # Validation
 # ---------------------------------------------------------------------------
 
+REMOTE_WORKER_TYPES = {"remote", "separated_transfer"}
+REMOTE_WORKER_FIELDS = (
+    "host",
+    "user",
+    "port",
+    "password",
+    "key_filename",
+    "passphrase",
+    "gateway",
+    "connect_kwargs",
+    "forward_agent",
+    "connect_timeout",
+    "inline_ssh_env",
+    "keepalive",
+    "shell_cmd",
+    "login_shell",
+    "interactive_login",
+)
+
 
 def _validate(
     qdyn_cfg: Dict[str, Any],
@@ -123,6 +142,19 @@ def _validate(
                 if not pool_params.get("work_dir_base"):
                     errors.append(
                         f"{qdyn_path}: worker_pools.{pool_name}.pool.work_dir_base is required"
+                    )
+
+                worker_params = pool_def.get("worker", {})
+                worker_type = worker_params.get("type", "local")
+                if worker_type in REMOTE_WORKER_TYPES and not worker_params.get("host"):
+                    errors.append(
+                        f"{qdyn_path}: worker_pools.{pool_name}.worker.host is required "
+                        f"for {worker_type} workers"
+                    )
+                if worker_type == "separated_transfer" and not worker_params.get("transfer"):
+                    errors.append(
+                        f"{qdyn_path}: worker_pools.{pool_name}.worker.transfer is required "
+                        "for separated_transfer workers"
                     )
 
                 # Reject jf-remote fields still under 'pool' (should be under 'worker')
@@ -194,6 +226,12 @@ def _expand_pool_workers(
         }
         if resources:
             worker_cfg["resources"] = dict(resources)
+        if worker_type in REMOTE_WORKER_TYPES:
+            for field in REMOTE_WORKER_FIELDS:
+                if field in worker_params:
+                    worker_cfg[field] = worker_params[field]
+        if worker_type == "separated_transfer" and "transfer" in worker_params:
+            worker_cfg["transfer"] = worker_params["transfer"]
         workers[worker_name] = worker_cfg
 
     return workers

@@ -18,6 +18,7 @@ from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
 from .run_dir_access import (
     FileInfo,
+    LocalRunDirAccess,
     RunDirAccess,
 )
 from .models import (
@@ -2518,7 +2519,7 @@ def _try_preview_for_task(
     if not first_job_uuid:
         return None
 
-    access = get_run_dir_access(first_job_uuid, manager)
+    access = _get_task_run_dir_access(manager, task_id, first_job_uuid)
     access_ok = access is not None and access.is_available()
 
     # Determine software from task payload or default to vasp
