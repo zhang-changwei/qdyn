@@ -2,6 +2,7 @@ import ast
 import json
 import operator
 import os
+import re
 from pathlib import Path
 from ase import Atoms
 import ase.io
@@ -111,20 +112,21 @@ def safe_eval(expr: str) -> Any:
 
     return _eval(tree.body)
 
+_BAND_SYMBOL_RE = re.compile(r"\b(vbm|homo|cbm|lumo)\b")
+
 def parse_band_index(
-    expr: str, 
+    expr: str,
     vbm: int,
     nbands: int,
 ) -> int:
     """1-based"""
-    expr = expr.lower()
+    values = {"vbm": vbm, "homo": vbm, "cbm": vbm + 1, "lumo": vbm + 1}
+    normalized = _BAND_SYMBOL_RE.sub(
+        lambda m: str(values[m.group(1)]),
+        expr.lower(),
+    ).strip()
 
-    expr = expr.replace("vbm", f" {vbm} ")
-    expr = expr.replace("homo", f" {vbm} ")
-    expr = expr.replace("cbm", f" {vbm + 1} ")
-    expr = expr.replace("lumo", f" {vbm + 1} ")
-    
-    band = safe_eval(expr)
+    band = safe_eval(normalized)
 
     # validate band <= nbands
     band = 1 if band < 1 else band
