@@ -633,27 +633,18 @@ def parse_md_data_from_qdyn_log(
 
     with open(log_file, 'r') as f:
         for line_num, line in enumerate(f):
+            if not line.endswith('\n'):
+                break
+
             stripped = line.strip()
             if not stripped:
                 continue
 
             # Line 0: header  "Step: 100, Interval: 1"
             if line_num == 0:
-                try:
-                    parts = stripped.split(',')
-                    for part in parts:
-                        kv = part.strip().split(':')
-                        if len(kv) == 2:
-                            key = kv[0].strip().lower()
-                            val = kv[1].strip()
-                            if key == 'step':
-                                total_logged_steps = int(val)
-                            elif key == 'interval':
-                                interval = int(val)
-                except (ValueError, IndexError):
-                    logging.warning(
-                        'Failed to parse qdyn_md.log header: %s', stripped
-                    )
+                step_part, interval_part = stripped.split(',')
+                total_logged_steps = int(step_part.split(':')[1].strip())
+                interval = int(interval_part.split(':')[1].strip())
                 continue
 
             # Line 1: column header — skip
@@ -661,18 +652,7 @@ def parse_md_data_from_qdyn_log(
                 continue
 
             # Data lines: Time[ps]  Etot  Epot  Ekin  T
-            try:
-                fields = stripped.split()
-                if len(fields) < 5:
-                    continue  # incomplete trailing line
-                t = float(fields[0])
-                etot = float(fields[1])
-                epot = float(fields[2])
-                ekin = float(fields[3])
-                temp = float(fields[4])
-            except (ValueError, IndexError):
-                # Tolerate incomplete trailing lines (file still being written)
-                continue
+            t, etot, epot, ekin, temp = map(float, stripped.split())
 
             row_index = len(steps) + 1  # 1-based row counter
             step_number = row_index * interval
