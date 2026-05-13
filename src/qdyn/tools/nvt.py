@@ -109,7 +109,6 @@ def qdyn_nvt(
             scf_thr=parameters.scf_thr,
             md_dt=parameters.md_dt,
             log_every=1,
-            check_convergence=False,
         ) as m:
             run_software(software_lower, nprocs, monitor=m)
 
