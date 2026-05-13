@@ -56,7 +56,7 @@ class MDProgressMonitor:
             # Write header
             self.log_file.write(
                 f"Step: {self.nstep // self.log_every}, Interval: {self.log_every}\n"
-                f"Time[ps]          Etot[eV]         Epot[eV]         Ekin[eV]       T[K]\n"
+                f"Time[ps]       Etot[eV]     Epot[eV]     Ekin[eV]         T[K]\n"
             )
             self.log_file.flush()
 
@@ -120,7 +120,7 @@ class MDProgressMonitor:
                         continue
 
                     log_file.write(
-                        "{:<10.4f} {:16.4f} {:16.4f} {:16.4f} {:12.4f}\n".format(
+                        "{:<10.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f}\n".format(
                             self.cur_time, Etot, Epot, Ekin, T
                         )
                     )
