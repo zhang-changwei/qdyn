@@ -584,43 +584,13 @@ def extract_band_edges(
 # ===========================================================================
 # qdyn_md.log parser (software-agnostic)
 # ===========================================================================
-def parse_md_data_from_qdyn_log(
-    log_path: 'os.PathLike[str] | str',
-) -> Dict:
-    """Parse MD data from a ``qdyn_md.log`` file written by MDProgressMonitor.
+def parse_qdyn_log_text(text: str) -> Dict:
+    """Parse qdyn_md.log content from a string.
 
-    The file format is::
-
-        Step: <total_logged_steps>, Interval: <log_every>
-        Time[ps]      Etot[eV]     Epot[eV]     Ekin[eV]    T[K]
-        0.0010          -810.46      -814.53         4.07       294.00
-        ...
-
-    Parameters
-    ----------
-    log_path : path-like
-        Path to ``qdyn_md.log``.
-
-    Returns
-    -------
-    dict
-        Dictionary with keys matching ``parse_md_data_from_oszicar`` output:
-        - ``steps``              : list[int]
-        - ``temperatures``       : list[float]
-        - ``total_energies``     : list[float]
-        - ``potential_energies`` : list[float]
-        - ``kinetic_energies``   : list[float]
-        - ``converged``          : list[bool]  (always True — no SCF info)
-        - ``time_ps``            : list[float] (raw Time[ps] column)
-        - ``interval``           : int         (log_every from header)
-        - ``total_logged_steps`` : int         (Step value from header)
+    Returns dict with keys: steps, temperatures, total_energies,
+    potential_energies, kinetic_energies, converged, time_ps,
+    interval, total_logged_steps.
     """
-    from pathlib import Path as _Path
-
-    log_file = _Path(log_path)
-    if not log_file.is_file():
-        raise FileNotFoundError(f"qdyn_md.log not found at {log_path}")
-
     steps: list[int] = []
     temperatures: list[float] = []
     total_energies: list[float] = []
@@ -628,43 +598,28 @@ def parse_md_data_from_qdyn_log(
     kinetic_energies: list[float] = []
     time_ps: list[float] = []
 
-    interval: int = 1
-    total_logged_steps: int = 0
+    lines = text.splitlines()
+    if len(lines) < 2:
+        raise ValueError("No valid MD data found in qdyn_md.log.")
 
-    with open(log_file, 'r') as f:
-        for line_num, line in enumerate(f):
-            if not line.endswith('\n'):
-                break
+    step_part, interval_part = lines[0].split(',')
+    total_logged_steps = int(step_part.split(':')[1])
+    interval = int(interval_part.split(':')[1])
 
-            stripped = line.strip()
-            if not stripped:
-                continue
+    for line in lines[2:]:
+        stripped = line.strip()
+        if not stripped or len(stripped.split()) != 5:
+            continue
+        t, etot, epot, ekin, temp = map(float, stripped.split())
+        row_index = len(steps) + 1
+        steps.append(row_index * interval)
+        time_ps.append(t)
+        total_energies.append(etot)
+        potential_energies.append(epot)
+        kinetic_energies.append(ekin)
+        temperatures.append(temp)
 
-            # Line 0: header  "Step: 100, Interval: 1"
-            if line_num == 0:
-                step_part, interval_part = stripped.split(',')
-                total_logged_steps = int(step_part.split(':')[1].strip())
-                interval = int(interval_part.split(':')[1].strip())
-                continue
-
-            # Line 1: column header — skip
-            if line_num == 1:
-                continue
-
-            # Data lines: Time[ps]  Etot  Epot  Ekin  T
-            t, etot, epot, ekin, temp = map(float, stripped.split())
-
-            row_index = len(steps) + 1  # 1-based row counter
-            step_number = row_index * interval
-
-            time_ps.append(t)
-            steps.append(step_number)
-            total_energies.append(etot)
-            potential_energies.append(epot)
-            kinetic_energies.append(ekin)
-            temperatures.append(temp)
-
-    if len(steps) == 0:
+    if not steps:
         raise ValueError("No valid MD data found in qdyn_md.log.")
 
     return {
@@ -678,6 +633,18 @@ def parse_md_data_from_qdyn_log(
         'interval': interval,
         'total_logged_steps': total_logged_steps,
     }
+
+
+def parse_md_data_from_qdyn_log(
+    log_path: 'os.PathLike[str] | str',
+) -> Dict:
+    """Parse MD data from a ``qdyn_md.log`` file path."""
+    from pathlib import Path as _Path
+    log_file = _Path(log_path)
+    if not log_file.is_file():
+        raise FileNotFoundError(f"qdyn_md.log not found at {log_path}")
+    with open(log_file, 'r') as f:
+        return parse_qdyn_log_text(f.read())
 
 
 # ===========================================================================

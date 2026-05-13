@@ -1606,7 +1606,7 @@ def get_job_progress(
     """
     Get the progress of a running or completed job.
 
-    For NVT/NVE jobs, parses OSZICAR for MD step count and temperature.
+    For NVT/NVE jobs, parses qdyn_md.log for MD step count and temperature.
     For SCF jobs, returns a basic available=True with step_type="scf".
 
     Uses a single ``jc.get_job_info()`` call to retrieve state, run_dir,
@@ -1649,44 +1649,33 @@ def get_job_progress(
 
 
 def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressResponse:
-    """
-    Parse OSZICAR in run_dir to get MD progress.
+    """Parse qdyn_md.log for MD progress (step, temperature, energy)."""
+    from ..output_postprocess import parse_qdyn_log_text
 
-    Reads only the tail of the OSZICAR to avoid transferring entire
-    files for long MD simulations.  Works for both local and remote
-    workers via ``RunDirAccess``.
-    """
     current_step = 0
+    total_steps: int | None = None
     last_temp: float | None = None
     last_energy: float | None = None
 
     try:
-        if access.root_file_exists("OSZICAR"):
-            # Read last 64KB of OSZICAR (enough for recent ionic steps)
-            tail = access.read_root_tail("OSZICAR", max_bytes=65536)
-            if tail:
-                for line in reversed(tail.splitlines()):
-                    if "T=" in line:
-                        try:
-                            values = line.split()
-                            current_step = int(values[0])
-                            last_temp = float(values[2])
-                            last_energy = float(values[8])
-                        except (ValueError, IndexError):
-                            continue
-                        break
+        if access.root_file_exists("qdyn_md.log"):
+            data = parse_qdyn_log_text(access.read_root_text("qdyn_md.log"))
+            current_step = data['steps'][-1]
+            total_steps = data['total_logged_steps'] * data['interval']
+            last_temp = data['temperatures'][-1]
+            last_energy = data['potential_energies'][-1]
     except Exception as exc:
         logger.warning(
-            "Failed to read OSZICAR from %s: %s", access.run_dir_path, exc
+            "Failed to read qdyn_md.log from %s: %s", access.run_dir_path, exc
         )
 
-    total_steps: int | None = None
-    try:
-        if access.root_file_exists("INCAR"):
-            incar_text = access.read_root_text("INCAR")
-            total_steps = _parse_nsw_from_text(incar_text)
-    except Exception:
-        pass
+    if total_steps is None:
+        try:
+            if access.root_file_exists("INCAR"):
+                incar_text = access.read_root_text("INCAR")
+                total_steps = _parse_nsw_from_text(incar_text)
+        except Exception:
+            pass
 
     percent: float | None = None
     if total_steps and total_steps > 0:
@@ -1902,11 +1891,11 @@ def _resolve_md_attempt_files(
     step_type: str,
     attempt: int | None,
 ) -> tuple[Path, Path | None, int, list[MDAttemptItem]]:
-    """Discover NVT retry attempt directories and resolve file paths.
+    """Discover NVT retry attempt directories and resolve source directories.
 
     Returns
     -------
-    tuple of (oszicar_path, incar_path_or_None, selected_attempt, attempts_list)
+    tuple of (attempt_dir, incar_path_or_None, selected_attempt, attempts_list)
     """
     # Discover nvt_attempt_* directories
     attempt_dirs: list[Path] = sorted(
@@ -1914,7 +1903,8 @@ def _resolve_md_attempt_files(
         key=lambda p: int(p.name.split("_")[-1]) if p.name.split("_")[-1].isdigit() else 0,
     )
 
-    # Build attempt list
+    # Build attempt list. All valid archived directories count for numbering,
+    # but only attempts with qdyn_md.log can be selected for timeseries data.
     attempts: list[MDAttemptItem] = []
     max_archived = 0
     for d in attempt_dirs:
@@ -1924,34 +1914,25 @@ def _resolve_md_attempt_files(
             num = int(d.name.split("_")[-1])
         except ValueError:
             continue
-        if (d / "OSZICAR").is_file():
+        max_archived = max(max_archived, num)
+        if (d / "qdyn_md.log").is_file():
             attempts.append(MDAttemptItem(
                 attempt=num,
                 label=f"Attempt {num}",
                 is_current=False,
                 archived=True,
             ))
-            max_archived = max(max_archived, num)
 
-    # The root-directory OSZICAR is the "current / latest" attempt
+    # The root-directory qdyn_md.log is the "current / latest" attempt
     current_num = max_archived + 1
-    root_oszicar = run_dir / "OSZICAR"
-    if root_oszicar.is_file():
+    root_qdyn_log = run_dir / "qdyn_md.log"
+    if root_qdyn_log.is_file():
         attempts.append(MDAttemptItem(
             attempt=current_num,
             label=f"Attempt {current_num} (latest)" if attempts else f"Attempt {current_num}",
             is_current=True,
             archived=False,
         ))
-
-    # NVE: no retry concept — one single attempt
-    if step_type == "nve":
-        if root_oszicar.is_file():
-            incar_path = (run_dir / "INCAR") if (run_dir / "INCAR").is_file() else None
-            return root_oszicar, incar_path, 1, [
-                MDAttemptItem(attempt=1, label="Attempt 1", is_current=True, archived=False),
-            ]
-        raise FileNotFoundError("OSZICAR not found in run_dir for NVE job.")
 
     # Determine which attempt to serve
     if attempt is None:
@@ -1961,20 +1942,20 @@ def _resolve_md_attempt_files(
         selected = attempt
 
     # Resolve paths for the selected attempt
-    if selected == current_num and root_oszicar.is_file():
-        oszicar_path = root_oszicar
+    if selected == current_num and root_qdyn_log.is_file():
+        attempt_dir = run_dir
         incar_path = (run_dir / "INCAR") if (run_dir / "INCAR").is_file() else None
     else:
         attempt_dir = run_dir / f"nvt_attempt_{selected}"
-        oszicar_path = attempt_dir / "OSZICAR"
-        if not oszicar_path.is_file():
+        qdyn_log_path = attempt_dir / "qdyn_md.log"
+        if not qdyn_log_path.is_file():
             raise FileNotFoundError(
-                f"OSZICAR not found for attempt {selected} "
+                f"qdyn_md.log not found for attempt {selected} "
                 f"(looked in {attempt_dir})."
             )
         incar_path = (attempt_dir / "INCAR") if (attempt_dir / "INCAR").is_file() else None
 
-    return oszicar_path, incar_path, selected, attempts
+    return attempt_dir, incar_path, selected, attempts
 
 
 def _sample_series(series: dict, max_points: int) -> dict:
@@ -2123,21 +2104,17 @@ def get_job_md_timeseries(
 
     Resolution order depends on step_type:
 
-    **NVE**: try ``run_dir/qdyn_md.log`` first (written by MDProgressMonitor),
-    fallback to OSZICAR via ``_resolve_md_attempt_files()``.
+    **NVE**: read ``run_dir/qdyn_md.log`` written by MDProgressMonitor.
 
     **NVT**: resolve selected attempt via ``_resolve_md_attempt_files()``
-    first (preserves retry history), then within the selected attempt
-    directory try ``qdyn_md.log``, fallback to that attempt's OSZICAR.
+    first (preserves retry history), then read ``qdyn_md.log`` from the
+    selected attempt directory.
 
     For remote workers, full timeseries parsing requires transferring large
     files.  Phase 1 returns ``available=False`` with a warning for remote
     workers; Phase 2 will implement streaming/chunked transfer.
     """
-    from ..output_postprocess import (
-        parse_md_data_from_oszicar,
-        parse_md_data_from_qdyn_log,
-    )
+    from ..output_postprocess import parse_md_data_from_qdyn_log
 
     # --- Resolve run_dir and step_type ---
     jc = manager._ensure_job_controller()
@@ -2180,37 +2157,37 @@ def get_job_md_timeseries(
         )
 
     # --- Parse MD data: strategy depends on step_type ---
-    used_qdyn_log = False
     raw_data: dict | None = None
     incar_path: Path | None = None
     selected_attempt: int | None = None
     attempts: list[MDAttemptItem] = []
 
     if step_type == "nve":
-        # NVE: try root qdyn_md.log first, fallback to OSZICAR
+        # NVE: only root qdyn_md.log is supported for timeseries data.
         qdyn_log_path = run_dir / "qdyn_md.log"
-        if qdyn_log_path.is_file():
-            try:
-                raw_data = parse_md_data_from_qdyn_log(qdyn_log_path)
-                used_qdyn_log = True
-                if (run_dir / "INCAR").is_file():
-                    incar_path = run_dir / "INCAR"
-                selected_attempt = 1
-                attempts = [
-                    MDAttemptItem(
-                        attempt=1, label="Attempt 1", is_current=True, archived=False,
-                    ),
-                ]
-            except (FileNotFoundError, ValueError) as exc:
-                logger.debug(
-                    "qdyn_md.log found but parse failed, falling back to OSZICAR: %s",
-                    exc,
-                )
-
-    if raw_data is None:
-        # NVT always, or NVE fallback: resolve attempt files then parse
+        selected_attempt = 1
+        attempts = [
+            MDAttemptItem(
+                attempt=1, label="Attempt 1", is_current=True, archived=False,
+            ),
+        ]
+        if (run_dir / "INCAR").is_file():
+            incar_path = run_dir / "INCAR"
         try:
-            oszicar_path, incar_path, selected_attempt, attempts = (
+            raw_data = parse_md_data_from_qdyn_log(qdyn_log_path)
+        except (FileNotFoundError, ValueError) as exc:
+            return JobMdTimeseriesResponse(
+                available=False,
+                step_type=step_type,
+                state=raw_state,
+                selected_attempt=selected_attempt,
+                attempts=attempts,
+                warning=str(exc),
+            )
+    else:
+        # NVT: resolve selected attempt directory, then parse qdyn_md.log.
+        try:
+            attempt_dir, incar_path, selected_attempt, attempts = (
                 _resolve_md_attempt_files(run_dir, step_type, attempt)
             )
         except FileNotFoundError as exc:
@@ -2221,28 +2198,19 @@ def get_job_md_timeseries(
                 warning=str(exc),
             )
 
-        # Within the selected attempt dir, try qdyn_md.log first
-        attempt_dir = oszicar_path.parent
+        # Within the selected attempt dir, read qdyn_md.log only.
         attempt_qdyn_log = attempt_dir / "qdyn_md.log"
-        if attempt_qdyn_log.is_file():
-            try:
-                raw_data = parse_md_data_from_qdyn_log(attempt_qdyn_log)
-                used_qdyn_log = True
-            except (FileNotFoundError, ValueError):
-                pass
-
-        if raw_data is None:
-            try:
-                raw_data = parse_md_data_from_oszicar(oszicar_path, incar_path)
-            except (FileNotFoundError, ValueError) as exc:
-                return JobMdTimeseriesResponse(
-                    available=False,
-                    step_type=step_type,
-                    state=raw_state,
-                    selected_attempt=selected_attempt,
-                    attempts=attempts,
-                    warning=str(exc),
-                )
+        try:
+            raw_data = parse_md_data_from_qdyn_log(attempt_qdyn_log)
+        except (FileNotFoundError, ValueError) as exc:
+            return JobMdTimeseriesResponse(
+                available=False,
+                step_type=step_type,
+                state=raw_state,
+                selected_attempt=selected_attempt,
+                attempts=attempts,
+                warning=str(exc),
+            )
 
     original_points = len(raw_data['steps'])
 
@@ -2253,7 +2221,7 @@ def get_job_md_timeseries(
 
     if potim is not None and potim > 0:
         time_fs = [s * potim for s in raw_data['steps']]
-    elif used_qdyn_log and 'time_ps' in raw_data:
+    elif 'time_ps' in raw_data:
         # INCAR absent or POTIM missing — use qdyn_md.log time column (ps -> fs)
         time_fs = [t * 1000.0 for t in raw_data['time_ps']]
     else:
@@ -2290,7 +2258,7 @@ def get_job_md_timeseries(
         if nsw_val is not None:
             total_steps = int(nsw_val)
     # If INCAR is missing but qdyn_md.log header has total info, derive NSW
-    if total_steps is None and used_qdyn_log:
+    if total_steps is None:
         interval = raw_data.get('interval', 1)
         total_logged = raw_data.get('total_logged_steps', 0)
         if total_logged > 0:
