@@ -16,7 +16,7 @@ from ..input import NVTInputT
 from ..params import params_default, backup_files
 from ..input_prepare import DFTInputs
 from ..output_postprocess import MDOutpus
-from .run_software import run_software
+from .run_software import run_software, MDProgressMonitor
 from .seldyn import add_constraints
 
 
@@ -102,8 +102,15 @@ def qdyn_nvt(
                 'stru': [],
             }
 
-        # Run the software
-        run_software(software_lower, nprocs)
+        # Run the software with progress monitoring
+        with MDProgressMonitor(
+            software=software_lower,
+            nstep=parameters.md_step,
+            scf_thr=parameters.scf_thr,
+            md_dt=parameters.md_dt,
+            log_every=1,
+        ) as m:
+            run_software(software_lower, nprocs, monitor=m)
 
         # Process output and check convergence
         current_structure, mdoutputs = _process_nvt_output(
@@ -173,6 +180,8 @@ def qdyn_nvt(
                 logging.warning(
                     f'File {image_filename} not found, backup files may be uncomplete.'
                 )
+            if os.path.isfile('qdyn_md.log'):
+                shutil.move('qdyn_md.log', os.path.join(backup_dir, 'qdyn_md.log'))
 
     stru_dict = current_structure.todict()
     if stru_dict.get('constraints') is not None:

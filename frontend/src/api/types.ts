@@ -510,15 +510,42 @@ export interface NVTInput {
   parameters: string
 }
 
-/** NVE input parameters */
-export interface NVEInput {
+/** DFT calculator input parameters (used as NVE calculator branch for software=vasp) */
+export interface DFTBaseInput {
   nodes?: number | null
   kspacing: number
+  scf_thr: number
+  parameters: string
+}
+
+/** NequIP calculator input parameters */
+export interface NequipInput {
+  version: string
+  use_gpu: boolean
+  use_pretrained_model: boolean
+  model_name: string
+  model_hash: string
+  energy_unit: string
+  length_unit: string
+}
+
+/** MACE calculator input parameters */
+export interface MACEInput {
+  version: string
+  use_gpu: boolean
+  use_pretrained_model: boolean
+  model_name: string
+  model_hash: string
+  default_dtype: string
+}
+
+/** NVE input parameters */
+export interface NVEInput {
   md_dt: number
   md_step: number
-  scf_thr: number
+  software: 'vasp' | 'nequip' | 'mace'
+  calculator: DFTBaseInput | NequipInput | MACEInput | Record<string, unknown>
   sel?: SelDynInput
-  parameters: string
 }
 
 /** Request payload for computing constraint mask.

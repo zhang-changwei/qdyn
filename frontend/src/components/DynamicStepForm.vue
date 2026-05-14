@@ -322,19 +322,105 @@ interface FieldDescriptor {
 }
 
 /**
+ * Resolve an anyOf union of $ref branches using a discriminator field.
+ *
+ * When a property has `anyOf: [{$ref: A}, {$ref: B}, ...]`, we look for a
+ * sibling property in the same parent that has an `enum` whose values can
+ * be mapped to the $ref branches. The mapping is built by lower-casing the
+ * $ref target's title (with common suffixes stripped) and matching against
+ * enum values. Any unmatched branches are assigned to remaining enum values
+ * in order (fallback for names like "DFTBaseInputT" ↔ "vasp").
+ *
+ * Returns the resolved $ref schema for the branch matching the current
+ * discriminator value in modelValue, or the first branch as fallback.
+ */
+function resolveAnyOfDiscriminator(
+  prop: JsonSchemaObject,
+  rootSchema: JsonSchemaObject,
+  siblingProperties: Record<string, JsonSchemaObject>,
+  modelValue: Record<string, unknown>,
+): JsonSchemaObject | undefined {
+  if (!prop.anyOf) return undefined
+
+  // Collect non-null $ref branches
+  const refBranches: { ref: string; schema: JsonSchemaObject }[] = []
+  for (const branch of prop.anyOf) {
+    if (branch.$ref) {
+      const resolved = resolveLocalRef(rootSchema, branch.$ref)
+      if (resolved?.properties) {
+        refBranches.push({ ref: branch.$ref, schema: resolved })
+      }
+    }
+    // Ignore {type: "null"} branches — those are for Optional
+  }
+
+  // Only handle when we have 2+ object $ref branches (a real union)
+  if (refBranches.length < 2) return undefined
+
+  // Find a discriminator: a sibling enum property
+  let discriminatorKey: string | undefined
+  let enumValues: unknown[] | undefined
+  for (const [sibKey, sibProp] of Object.entries(siblingProperties)) {
+    if (sibProp.enum && sibProp.enum.length >= 2) {
+      discriminatorKey = sibKey
+      enumValues = sibProp.enum
+      break
+    }
+  }
+
+  if (!discriminatorKey || !enumValues) {
+    // No discriminator found — return first branch
+    return refBranches[0].schema
+  }
+
+  // Build mapping: enum value → ref branch
+  // Strategy: lowercase match of title (minus InputT/Input suffix) against enum value
+  const enumStrings = enumValues.map(String)
+  const branchByEnum = new Map<string, JsonSchemaObject>()
+  const unmatchedBranches: JsonSchemaObject[] = []
+
+  for (const { schema } of refBranches) {
+    const title = (schema.title ?? '').replace(/InputT?$/i, '').toLowerCase()
+    const matched = enumStrings.find(
+      (ev) => title === ev.toLowerCase() || title.includes(ev.toLowerCase())
+    )
+    if (matched && !branchByEnum.has(matched)) {
+      branchByEnum.set(matched, schema)
+    } else {
+      unmatchedBranches.push(schema)
+    }
+  }
+
+  // Assign unmatched branches to remaining enum values in order
+  const unmatchedEnums = enumStrings.filter((ev) => !branchByEnum.has(ev))
+  for (let i = 0; i < Math.min(unmatchedBranches.length, unmatchedEnums.length); i++) {
+    branchByEnum.set(unmatchedEnums[i], unmatchedBranches[i])
+  }
+
+  // Look up current discriminator value
+  const currentValue = String(modelValue[discriminatorKey] ?? enumStrings[0])
+  return branchByEnum.get(currentValue) ?? refBranches[0].schema
+}
+
+/**
  * Flatten schema properties into FieldDescriptors, expanding $ref objects
  * into their child properties.
+ *
+ * @param modelValue - current form values, used to resolve anyOf discriminators
  */
 function buildFieldDescriptors(
   properties: Record<string, JsonSchemaObject>,
   rootSchema: JsonSchemaObject,
   pathPrefix: string = '',
+  modelValue: Record<string, unknown> = {},
 ): FieldDescriptor[] {
   const result: FieldDescriptor[] = []
 
   for (const [key, prop] of Object.entries(properties)) {
     // Skip hidden fields
     if (prop.hidden) continue
+    // Skip const fields (e.g. log_every with const: 1)
+    if ('const' in prop) continue
 
     const fullPath = pathPrefix ? `${pathPrefix}.${key}` : key
 
@@ -345,7 +431,7 @@ function buildFieldDescriptors(
         // Expand nested object's properties as flat fields
         // Inherit parent's group (e.g. adv with group:"advanced")
         const parentGroup = prop.group
-        const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath)
+        const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath, modelValue)
         if (parentGroup) {
           for (const f of nested) {
             if (!f.group) f.group = parentGroup
@@ -356,9 +442,31 @@ function buildFieldDescriptors(
       }
     }
 
+    // Check if this is an anyOf with multiple $ref branches (union type with discriminator)
+    if (prop.anyOf) {
+      const resolvedBranch = resolveAnyOfDiscriminator(
+        prop, rootSchema, properties, modelValue,
+      )
+      if (resolvedBranch?.properties) {
+        const parentGroup = prop.group
+        const nested = buildFieldDescriptors(
+          resolvedBranch.properties, rootSchema, fullPath, modelValue,
+        )
+        if (parentGroup) {
+          for (const f of nested) {
+            if (!f.group) f.group = parentGroup
+          }
+        }
+        result.push(...nested)
+        continue
+      }
+      // If resolveAnyOfDiscriminator returned undefined, fall through to
+      // normalizeNullableSchema which handles simple Optional[T] anyOf
+    }
+
     // Check if this is an inline object type — expand it
     if (prop.type === 'object' && prop.properties && !prop.widget) {
-      const nested = buildFieldDescriptors(prop.properties, rootSchema, fullPath)
+      const nested = buildFieldDescriptors(prop.properties, rootSchema, fullPath, modelValue)
       result.push(...nested)
       continue
     }
@@ -396,7 +504,7 @@ function buildFieldDescriptors(
 
 const allFields = computed(() => {
   if (!props.schema?.properties) return []
-  return buildFieldDescriptors(props.schema.properties, props.schema)
+  return buildFieldDescriptors(props.schema.properties, props.schema, '', props.modelValue)
 })
 
 const regularFields = computed(() =>

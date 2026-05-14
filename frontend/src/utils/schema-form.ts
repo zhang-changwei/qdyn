@@ -138,6 +138,24 @@ export function buildDefaultsFromSchema(
       }
     }
 
+    // Handle anyOf with multiple $ref branches (discriminated union).
+    // Use the first $ref branch to generate defaults (e.g. DFTBaseInputT for calculator).
+    if (prop.anyOf) {
+      const refBranches = prop.anyOf
+        .filter((b: JsonSchemaObject) => b.$ref)
+        .map((b: JsonSchemaObject) => resolveLocalRef(root, b.$ref!))
+        .filter((s): s is JsonSchemaObject => !!s?.properties)
+      if (refBranches.length >= 2) {
+        // Discriminated union — pick the first branch for default values
+        if (prop.default != null && typeof prop.default === 'object') {
+          result[key] = prop.default
+        } else {
+          result[key] = buildDefaultsFromSchema(refBranches[0], root)
+        }
+        continue
+      }
+    }
+
     // Normalize nullable schemas
     const { schema: normalized } = normalizeNullableSchema(prop)
 
@@ -147,6 +165,10 @@ export function buildDefaultsFromSchema(
       result[key] = normalized.default
     } else if (normalized.type === 'object' && normalized.properties) {
       result[key] = buildDefaultsFromSchema(normalized, root)
+    }
+    // Required boolean without default → false
+    else if (normalized.type === 'boolean' && schema.required?.includes(key)) {
+      result[key] = false
     }
     // If no default, omit — the field is optional or required without default
   }

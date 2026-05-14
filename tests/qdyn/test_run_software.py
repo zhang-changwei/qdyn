@@ -34,6 +34,19 @@ def test_md_progress_monitor_accepts_first_valid_step_without_prev_line():
     assert log_file.getvalue().startswith("0.0010")
 
 
+def test_md_progress_monitor_uses_d_eps_not_ncg_for_convergence_check():
+    monitor = MDProgressMonitor("vasp", nstep=10, scf_thr=1e-5, check_convergence=True)
+    monitor.prev_line = (
+        "DAV:   7    -0.814807001502E+03   -0.45219E-06"
+        "   -0.28315E-06   672   0.277E-03\n"
+    )
+    monitor_file = io.StringIO("1 0 300.0 3 4 5 6 7 -10.0 9 1.5 T=\n")
+    log_file = io.StringIO()
+
+    assert monitor.monitor_vasp(monitor_file, log_file) == DFTStatus.NORMAL
+    assert log_file.getvalue().startswith("0.0010")
+
+
 def test_run_vasp_calls_monitor_after_process_exit(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "KPOINTS").write_text("kpoints\n0\nGamma\n1 1 1\n", encoding="utf-8")

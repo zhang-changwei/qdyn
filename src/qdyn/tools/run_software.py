@@ -26,7 +26,7 @@ class MDProgressMonitor:
                  scf_thr: float = 1e-6,
                  md_dt: float = 1.0,
                  log_every: int = 1,
-                 check_convergence: bool = True,
+                 check_convergence: bool | str = True,
                  ):
         self.software = software
         self.nstep = nstep
@@ -56,7 +56,7 @@ class MDProgressMonitor:
             # Write header
             self.log_file.write(
                 f"Step: {self.nstep // self.log_every}, Interval: {self.log_every}\n"
-                f"Time[ps]      Etot[eV]     Epot[eV]     Ekin[eV]    T[K]\n"
+                f"Time[ps]       Etot[eV]     Epot[eV]     Ekin[eV]         T[K]\n"
             )
             self.log_file.flush()
 
@@ -97,13 +97,22 @@ class MDProgressMonitor:
 
                     # SCF convergence check
                     # Diff_total_energy, diff_band_structure_energy < scf_thr
-                    if self.check_convergence:
-                        parts = self.prev_line[4:].split()
-                        dE = float(parts[2])
-                        deps = float(parts[4])
-                        if abs(dE) > self.scf_thr or abs(deps) > self.scf_thr:
-                            logging.error(f"SCF not converged at step={step}.")
-                            return DFTStatus.NOT_CONVERGED_ERROR
+                    if (
+                        self.check_convergence in (True, 'rigorous')
+                        and self.prev_line.strip()
+                    ):
+                        try:
+                            scf_parts = self.prev_line[4:].split()
+                            dE = float(scf_parts[2])
+                            deps = float(scf_parts[3])
+                        except (IndexError, ValueError):
+                            if self.check_convergence == 'rigorous':
+                                raise
+                            pass
+                        else:
+                            if abs(dE) > self.scf_thr or abs(deps) > self.scf_thr:
+                                logging.error(f"SCF not converged at step={step}.")
+                                return DFTStatus.NOT_CONVERGED_ERROR
                     
                     # skip logging if not at the specified interval
                     if step % self.log_every != 0:
@@ -111,7 +120,7 @@ class MDProgressMonitor:
                         continue
 
                     log_file.write(
-                        "{:<10.4f} {:12.2f} {:12.2f} {:12.2f} {:12.2f}\n".format(
+                        "{:<10.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f}\n".format(
                             self.cur_time, Etot, Epot, Ekin, T
                         )
                     )

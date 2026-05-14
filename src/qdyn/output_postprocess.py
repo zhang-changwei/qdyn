@@ -582,6 +582,72 @@ def extract_band_edges(
 
 
 # ===========================================================================
+# qdyn_md.log parser (software-agnostic)
+# ===========================================================================
+def parse_qdyn_log_text(text: str) -> Dict:
+    """Parse qdyn_md.log content from a string.
+
+    Returns dict with keys: steps, temperatures, total_energies,
+    potential_energies, kinetic_energies, converged, time_ps,
+    interval, total_logged_steps.
+    """
+    steps: list[int] = []
+    temperatures: list[float] = []
+    total_energies: list[float] = []
+    potential_energies: list[float] = []
+    kinetic_energies: list[float] = []
+    time_ps: list[float] = []
+
+    lines = text.splitlines()
+    if len(lines) < 2:
+        raise ValueError("No valid MD data found in qdyn_md.log.")
+
+    step_part, interval_part = lines[0].split(',')
+    total_logged_steps = int(step_part.split(':')[1])
+    interval = int(interval_part.split(':')[1])
+
+    for line in lines[2:]:
+        stripped = line.strip()
+        if not stripped or len(stripped.split()) != 5:
+            continue
+        t, etot, epot, ekin, temp = map(float, stripped.split())
+        row_index = len(steps) + 1
+        steps.append(row_index * interval)
+        time_ps.append(t)
+        total_energies.append(etot)
+        potential_energies.append(epot)
+        kinetic_energies.append(ekin)
+        temperatures.append(temp)
+
+    if not steps:
+        raise ValueError("No valid MD data found in qdyn_md.log.")
+
+    return {
+        'steps': steps,
+        'temperatures': temperatures,
+        'total_energies': total_energies,
+        'potential_energies': potential_energies,
+        'kinetic_energies': kinetic_energies,
+        'converged': [True] * len(steps),
+        'time_ps': time_ps,
+        'interval': interval,
+        'total_logged_steps': total_logged_steps,
+    }
+
+
+def parse_md_data_from_qdyn_log(
+    log_path: 'os.PathLike[str] | str',
+) -> Dict:
+    """Parse MD data from a ``qdyn_md.log`` file path."""
+    from pathlib import Path as _Path
+    log_file = _Path(log_path)
+    if not log_file.is_file():
+        raise FileNotFoundError(f"qdyn_md.log not found at {log_path}")
+    with open(log_file, 'r') as f:
+        return parse_qdyn_log_text(f.read())
+
+
+# ===========================================================================
 # VASP specific functions
 # ===========================================================================
 def parse_md_data_from_oszicar(
