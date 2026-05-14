@@ -6,337 +6,57 @@ import logging
 from pathlib import Path
 from typing import Dict, Tuple
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
-
-class MDOutpus:
+      
     
-    def __init__(self, software: str):
-        self.software = software
-        self.md_data: dict | None = None
-        # self.current_structure: Atoms | None = None
-        self.scf_converged: bool | None = None
-        self.temp_converged: bool | None = None
-        self.max_deviation: float | None = None
-        self.md_file: str = ''
-        self.image: str = ''
-        
-    @classmethod
-    def from_md_tracks(cls, software: str) -> "MDOutpus":
-        obj = cls(software=software)
-        
-        if software == 'vasp':
-            obj.md_data = extract_md_data_from_oszicar()
-        else:
-            raise NotImplementedError(f"Software '{software}' is not supported yet.")
-        
-        if obj.md_data is None or len(obj.md_data['steps']) == 0:
-            raise FileNotFoundError("Failed to extract MD data from output files. "
-                                    "Please check the output for errors.")
-        return obj
-    
-    def check_scf_convergence(
-        self, 
-        check_nsw: int | None = None,
-        max_unconverged_ratio: float = 0.01,
-    ):
-        converged_list = self.md_data['converged'] 
-        n_steps = len(converged_list)
+def plot_md_results(md_data: dict, filename: str, target_temp: float | None = None):
+    import matplotlib
+    matplotlib.use('agg')
+    import matplotlib.pyplot as plt
 
-        if n_steps == 0:
-            raise ValueError("No convergence data available to check SCF convergence.")
+    times = md_data['time_ps']
+    temperatures = md_data['temperatures']
+    total_energies = md_data['total_energies'] 
+    potential_energies = md_data['potential_energies']
 
-        # Default: check last 5% of steps
-        if check_nsw is None:
-            check_nsw = n_steps // 10
+    fig, axes = plt.subplots(3, 1, figsize=(8, 10))
 
-        # Get the range to check
-        check_range = converged_list[-check_nsw:]
+    # Plot temperature
+    ax1 = axes[0]
+    ax1.plot(times, temperatures, color='tab:red', linewidth=0.8)
 
-        # n_total = len(check_range)
-        n_unconverged = sum(1 for c in check_range if not c)
-        max_unconverged = int(check_nsw * max_unconverged_ratio)
+    if target_temp is not None:
+        ax1.axhline(
+            y=target_temp,
+            color='gray',
+            linestyle='--',
+            linewidth=1,
+            label=f'Target: {target_temp} K',
+        )
 
-        # Converged if unconverged steps in check range <= max_unconverged
-        self.scf_converged = n_unconverged <= max_unconverged
-        
-    def check_temperature_convergence(
-        self,
-        target_temp: float,
-        n_last: int = 1000,
-        threshold_ratio: float = 0.10,
-    ):
-        temps = np.array(self.md_data['temperatures']) 
-        n_steps = len(temps)
-        n_last = min(len(self.md_data['temperatures']), n_last, 1000)
+    ax1.set_xlabel('Step')
+    ax1.set_ylabel('Temperature (K)')
+    ax1.legend(loc='upper right')
+    ax1.set_title('Temperature Evolution')
 
-        if n_steps == 0:
-            raise ValueError("No temperature data available to check convergence.")
+    # Plot potential energy
+    ax2 = axes[1]
+    ax2.plot(times, potential_energies, color='tab:green', linewidth=0.8)
+    ax2.set_xlabel('Step')
+    ax2.set_ylabel('Potential Energy (eV)')
+    ax2.set_title('Potential Energy Evolution')
 
-        # Use last n_last steps (or all if fewer)
-        n_check = min(n_steps, n_last)
-        last_ntemps = temps[-n_check:]
+    # Plot total energy
+    ax3 = axes[2]
+    ax3.plot(times, total_energies, color='tab:blue', linewidth=0.8)
+    ax3.set_xlabel('Step')
+    ax3.set_ylabel('Total Energy (eV)')
+    ax3.set_title('Total Energy Evolution')
 
-        temp_deviation = np.abs(last_ntemps - target_temp)
-        self.max_deviation = np.max(temp_deviation)
-
-        # Check if max deviation is within threshold
-        threshold = target_temp * threshold_ratio
-        self.temp_converged = self.max_deviation <= threshold # type: ignore
-        
-    def save_md_data(self, md_dt: float, filename: str = 'md.dat'):
-        md_data = self.md_data
-        with open(filename, 'w') as f:
-            f.write(f"# Time step (fs): {md_dt}\n")
-            f.write(
-                "# Step  Temperature(K)  Total_Energy(eV)  E_pot(eV)  E_kin(eV)  Converged\n"
-            )
-
-            for i in range(len(md_data['steps'])):
-                conv_flag = 1 if md_data['converged'][i] else 0
-                f.write(
-                    f"{md_data['steps'][i]:6d} "
-                    f"{md_data['temperatures'][i]:12.2f} "
-                    f"{md_data['total_energies'][i]:16.8f} "
-                    f"{md_data['potential_energies'][i]:14.8f} "
-                    f"{md_data['kinetic_energies'][i]:14.8f} "
-                    f"{conv_flag}\n"
-                )
-
-            # Summary lines
-            temps = np.array(md_data['temperatures'])
-            converged_list = md_data['converged']
-            n_converged = sum(converged_list)
-            n_total = len(converged_list)
-
-            f.write(f"# Total steps: {n_total}\n")
-            f.write(f"# Converged steps: {n_converged}/{n_total}\n")
-            f.write(f"# Average T (K): {np.mean(temps):.2f}\n")
-
-        self.md_file =  os.path.abspath(filename)
-    
-    def plot_md_results(self, filename: str, target_temp: float | None = None):
-        md_data = self.md_data      
-        steps = md_data['steps']
-        temperatures = md_data['temperatures']
-        total_energies = md_data['total_energies'] 
-        potential_energies = md_data['potential_energies']
-
-        fig, axes = plt.subplots(3, 1, figsize=(8, 10))
-
-        # Plot temperature
-        ax1 = axes[0]
-        ax1.plot(steps, temperatures, color='tab:red', linewidth=0.8)
-
-        if target_temp is not None:
-            ax1.axhline(
-                y=target_temp,
-                color='gray',
-                linestyle='--',
-                linewidth=1,
-                label=f'Target: {target_temp} K',
-            )
-
-        ax1.set_xlabel('Step')
-        ax1.set_ylabel('Temperature (K)')
-        ax1.legend(loc='upper right')
-        ax1.set_title('Temperature Evolution')
-
-        # Plot potential energy
-        ax2 = axes[1]
-        ax2.plot(steps, potential_energies, color='tab:green', linewidth=0.8)
-        ax2.set_xlabel('Step')
-        ax2.set_ylabel('Potential Energy (eV)')
-        ax2.set_title('Potential Energy Evolution')
-
-        # Plot total energy
-        ax3 = axes[2]
-        ax3.plot(steps, total_energies, color='tab:blue', linewidth=0.8)
-        ax3.set_xlabel('Step')
-        ax3.set_ylabel('Total Energy (eV)')
-        ax3.set_title('Total Energy Evolution')
-
-        fig.tight_layout()
-        plt.savefig(filename, dpi=300)
-        plt.close()
-
-        self.image = os.path.abspath(filename)
-        
-
-# ===========================================================================
-# Universal functions
-# ===========================================================================
-# def check_scf_convergence(
-#     converged_list: list[bool],
-#     check_nsw: int | None = None,
-#     max_unconverged_ratio: float = 0.01,
-# ) -> bool:
-#     """Check SCF convergence from MD data (universal for all software).
-
-#     This function checks if SCF converged properly based on the converged
-#     flags in the MD data.
-
-#     Parameters
-#     ----------
-#     converged_list : list of bool
-#         List of SCF convergence flags for each MD step.
-#     check_nsw : int, optional
-#         Number of steps to check (from the end). If None, check last 5% of steps.
-#     max_unconverged_ratio : float
-#         Maximum ratio of unconverged steps allowed (default: 0.01 = 1%).
-
-#     Returns
-#     -------
-#     bool
-#         True if SCF converged properly, False if there are too many unconverged steps.
-#     """
-
-#     n_steps = len(converged_list)
-
-#     if n_steps == 0:
-#         raise ValueError("No convergence data available to check SCF convergence.")
-
-#     # Default: check last 5% of steps
-#     if check_nsw is None:
-#         check_nsw = n_steps // 10
-
-#     # Get the range to check
-#     check_range = converged_list[-check_nsw:]
-
-#     # n_total = len(check_range)
-#     n_unconverged = sum(1 for c in check_range if not c)
-#     max_unconverged = int(check_nsw * max_unconverged_ratio)
-
-#     # Converged if unconverged steps in check range <= max_unconverged
-#     converged = n_unconverged <= max_unconverged
-
-#     return converged
-
-
-# def save_md_data(md_data: Dict, md_dt: float, filename: str = 'md.dat') -> str:
-#     """Save MD data to a file in unified format.
-
-#     This function saves MD data in a unified format that works for all
-#     supported software (VASP, CP2K, SIESTA, ABACUS, OpenMX, etc.).
-
-#     Parameters
-#     ----------
-#     md_data : dict
-#         MD data dictionary with unified format:
-#         - 'steps': list of step numbers
-#         - 'temperatures': list of temperatures (K)
-#         - 'total_energies': list of total energies (eV)
-#         - 'potential_energies': list of potential energies (eV)
-#         - 'kinetic_energies': list of kinetic energies (eV)
-#         - 'converged': list of bool, SCF convergence status for each step
-#         - 'md_dt': time step (fs)
-#     filename : str
-#         Output filename (default: 'md.dat').
-
-#     Returns
-#     -------
-#     str
-#         Path to the saved file.
-#     """
-#     with open(filename, 'w') as f:
-#         f.write(f"# Time step (fs): {md_dt}\n")
-#         f.write(
-#             "# Step  Temperature(K)  Total_Energy(eV)  E_pot(eV)  E_kin(eV)  Converged\n"
-#         )
-
-#         for i in range(len(md_data['steps'])):
-#             conv_flag = 1 if md_data['converged'][i] else 0
-#             f.write(
-#                 f"{md_data['steps'][i]:6d} "
-#                 f"{md_data['temperatures'][i]:12.2f} "
-#                 f"{md_data['total_energies'][i]:16.8f} "
-#                 f"{md_data['potential_energies'][i]:14.8f} "
-#                 f"{md_data['kinetic_energies'][i]:14.8f} "
-#                 f"{conv_flag}\n"
-#             )
-
-#         # Summary lines
-#         temps = np.array(md_data['temperatures'])
-#         converged_list = md_data['converged']
-#         n_converged = sum(converged_list)
-#         n_total = len(converged_list)
-
-#         f.write(f"# Total steps: {n_total}\n")
-#         f.write(f"# Converged steps: {n_converged}/{n_total}\n")
-#         f.write(f"# Average T (K): {np.mean(temps):.2f}\n")
-
-#     return os.path.abspath(filename)
-
-
-# def plot_md_results(
-#     md_data: Dict,
-#     filename: str,
-#     target_temp: float | None = None,
-# ) -> str:
-#     """Plot MD simulation results.
-
-#     Parameters
-#     ----------
-#     md_data : dict
-#         MD data dictionary from extract_md_data_from_oszicar().
-#     target_temp : float
-#         Target temperature for reference line.
-#     filename : str
-#         Output filename for the plot.
-
-#     Returns
-#     -------
-#     str
-#         Path to the saved plot.
-#     """
-#     steps = md_data['steps']
-#     temperatures = md_data['temperatures']
-#     total_energies = md_data['total_energies']
-#     potential_energies = md_data['potential_energies']
-
-#     fig, axes = plt.subplots(3, 1, figsize=(8, 10))
-
-#     # Plot temperature
-#     ax1 = axes[0]
-#     ax1.plot(steps, temperatures, color='tab:red', linewidth=0.8)
-
-#     if target_temp is not None:
-#         ax1.axhline(
-#             y=target_temp,
-#             color='gray',
-#             linestyle='--',
-#             linewidth=1,
-#             label=f'Target: {target_temp} K',
-#         )
-
-#     ax1.set_xlabel('Step')
-#     ax1.set_ylabel('Temperature (K)')
-#     ax1.legend(loc='upper right')
-#     ax1.set_title('Temperature Evolution')
-
-#     # Plot potential energy
-#     ax2 = axes[1]
-#     ax2.plot(steps, potential_energies, color='tab:green', linewidth=0.8)
-#     ax2.set_xlabel('Step')
-#     ax2.set_ylabel('Potential Energy (eV)')
-#     ax2.set_title('Potential Energy Evolution')
-
-#     # Plot total energy
-#     ax3 = axes[2]
-#     ax3.plot(steps, total_energies, color='tab:blue', linewidth=0.8)
-#     ax3.set_xlabel('Step')
-#     ax3.set_ylabel('Total Energy (eV)')
-#     ax3.set_title('Total Energy Evolution')
-
-#     fig.tight_layout()
-#     plt.savefig(filename, dpi=300)
-#     plt.close()
-
-#     return os.path.abspath(filename)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=300, transparent=True)
+    plt.close()
 
 
 def parallel_wht(

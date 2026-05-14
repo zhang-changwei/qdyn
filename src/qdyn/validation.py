@@ -9,7 +9,7 @@ import ase.io
 import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
-from .input import (InputT, NVEInputT, 
+from .input import (InputT, NVEInputT, NVTInputT,
                     DFTBaseInputT, NequipInputT, MACEInputT)
 from .tools.mlff_wrapper import (
     mace_pretrained_model_filename,
@@ -526,33 +526,45 @@ def validate_workflow_input(
             "Either stru, stru_hash, or resume with valid prev_task_id must be provided."
         )
     
+    # nvt specific check
+    if isinstance(input.nvt_input, NVTInputT):
+        if len(input.nvt_input.thermostats_algo) != len(input.nvt_input.md_step):
+            raise ValidationError(
+                "Length of thermostats_algo and md_step must be the same in nvt_input."
+            )
+        if not input.nvt_input.thermostats_algo:
+            raise ValidationError(
+                "thermostats_algo cannot be empty when nvt_input is provided."
+            )
+        validate_md_input(input.nvt_input, active_pool, worker_cfg, check_list)
+
     # nve specific check
     if isinstance(input.nve_input, NVEInputT):
-        validate_nve_input(input.nve_input, active_pool, worker_cfg, check_list)
+        validate_md_input(input.nve_input, active_pool, worker_cfg, check_list)
 
 
-def validate_nve_input(
-    nve: NVEInputT,
+def validate_md_input(
+    md: NVTInputT | NVEInputT,
     pool: WorkerPool,
     worker_cfg: dict[str, Any],
     check_list: dict[str, Any],
 ):
-    CALCULATOR_MISMATCH_MSG = (r"Invalid calculator for NVE step "
+    CALCULATOR_MISMATCH_MSG = (r"Invalid calculator for MD step "
                                 r"with software '{}'.")
     # dft
-    if (nve.software in ['vasp'] and
-        not isinstance(nve.calculator, DFTBaseInputT)):
+    if (md.software in ['vasp'] and
+        not isinstance(md.calculator, DFTBaseInputT)):
 
-        raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+        raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
     
     # nequip
-    elif nve.software == 'nequip':
-        if not isinstance(nve.calculator, NequipInputT):
-            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+    elif md.software == 'nequip':
+        if not isinstance(md.calculator, NequipInputT):
+            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
         
-        calc = nve.calculator
+        calc = md.calculator
         device = 'cuda' if calc.use_gpu else 'cpu'
-        if calc.use_gpu:
+        if calc.use_gpu and not check_list['gpu']:
             validate_gpu_availability(pool, worker_cfg)
             check_list['gpu'] = True
         
@@ -574,19 +586,18 @@ def validate_nve_input(
                 not calc.model_hash or 
                 not pool.user_file_exists("model", calc.model_hash)
             ):
-
                 raise ValidationError(
                     f"Custom model with hash '{calc.model_hash}' not found in the active pool.\n"
                     "Please upload the model file and provide the correct hash."
                 )
     
     # mace
-    elif nve.software == 'mace':
-        if not isinstance(nve.calculator, MACEInputT):
-            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(nve.software))
+    elif md.software == 'mace':
+        if not isinstance(md.calculator, MACEInputT):
+            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
         
-        calc = nve.calculator
-        if calc.use_gpu:
+        calc = md.calculator
+        if calc.use_gpu and not check_list['gpu']:
             validate_gpu_availability(pool, worker_cfg)
             check_list['gpu'] = True
 

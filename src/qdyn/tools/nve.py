@@ -1,18 +1,17 @@
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import ase.io
 from ase import Atoms
-from jobflow import job
+from jobflow.core.job import job
 import numpy as np
 
 
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import params_default, TRAJ_FNAME_MAPPING
 from ..input_prepare import DFTInputs
-from ..output_postprocess import MDOutpus
+from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .run_software import run_software, MDProgressMonitor
 from .seldyn import add_constraints
 
@@ -23,14 +22,14 @@ def qdyn_nve(
     parameters: NVEInputT,
     pp_path: str,
     orb_path: str,
-    structure: Dict,
+    structure: dict,
     model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
     threads_per_process: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> Dict:
+) -> dict:
     """Run NVE molecular dynamics simulation.
 
     Jobflow automatically manages the working directory, so all input files
@@ -84,9 +83,6 @@ def qdyn_nve(
             return {
                 'run_dir': str(Path.cwd()),
                 'software': software,
-                'md_files': [],
-                'images': [],
-                'strus': [],
             }
 
         # Run the software
@@ -96,39 +92,35 @@ def qdyn_nve(
             scf_thr=parameters.calculator.scf_thr,
             md_dt=parameters.md_dt,
             log_every=1,
+            check_convergence='rigorous'
         ) as m:
             run_software(software_lower, nprocs, monitor=m)
     
     else:
+        if prepare_input_only:
+            return {
+                'run_dir': str(Path.cwd()),
+                'software': software,
+            }
+
         converged, _ = _run_ase_nve(cstru, parameters, model_path)
         if not converged:
             raise RuntimeError(
                 "NVE calculation failed: ASE MD did not converge properly. "
                 "Please check the log files for details."
             )
-
-    # Process output and check convergence
-    # mdoutputs = _process_nve_output(
-    #     software=software_lower,
-    #     md_dt=parameters.md_dt,
-    #     plot=plot,
-    # )
-
-    # if not mdoutputs.scf_converged:
-    #     raise RuntimeError(
-    #         "NVE calculation failed: SCF did not converge properly in the "
-    #         "last portion of the trajectory. Please check the output files."
-    #     )
     
     images = []
-
+    if plot:
+        md_data = parse_md_data_from_qdyn_log('qdyn_md.log')
+        plot_md_results(md_data, 'qdyn_nve.png')
+        images.append(str(Path('qdyn_nve.log').resolve()))
 
     return {
         'run_dir': str(Path.cwd()),
         'software': software,
-        'md_files': 'qdyn_md.log',
+        'md_logs': [str(Path('qdyn_md.log').resolve())],
         'images': images,
-        # 'strus': strus_list,
         'traj_path': str(
             Path.cwd() / TRAJ_FNAME_MAPPING[software_lower]
         ),  # constraints information may also remain in some software's trajectory files, may raise error when changing to dict.
@@ -151,6 +143,7 @@ def _prepare_nve_input(
         pp_path: Path to pseudopotential directory.
         orb_path: Path to orbital files.
     """
+    assert isinstance(parameters.calculator, DFTBaseInputT)
 
     input = deepcopy(params_default['nve'][software])
     if software == 'vasp':
@@ -172,53 +165,6 @@ def _prepare_nve_input(
         raise NotImplementedError(
             f"Software {software} is not supported for NVE input preparation yet."
         )
-
-
-def _process_nve_output(
-    software: str,
-    md_dt: float,
-    plot: bool,
-) -> MDOutpus:
-    """Process NVE output files and check convergence.
-
-    In the old workflow, NVE convergence check uses:
-    - check_nsw = wavecar_steps + 100 (last portion of trajectory needed for SCF)
-    - max_unconverged = nsw // 100
-
-    Here we check convergence of the last 10% of steps with a strict threshold.
-
-    Args:
-        software: Software name.
-        md_dt: MD time step in fs (used for saving MD data).
-        plot: Whether to generate plots.
-
-    Returns:
-        (scf_converged, md_file, images)
-    """
-
-    if software == 'vasp':
-        mdoutputs = MDOutpus.from_md_tracks(software='vasp')
-    else:
-        raise NotImplementedError(
-            f"MD data extraction for {software} is not implemented yet."
-        )
-
-    # Check SCF convergence on the last portion of the trajectory
-    # In old workflow: check_nsw = wavecar_steps + 100, max_unconverged = nsw // 100
-    # Here we check the last 10% of steps with 1% unconverged tolerance
-    mdoutputs.check_scf_convergence(
-        check_nsw=None,
-        max_unconverged_ratio=0.01,
-    )
-
-    # Save MD data
-    mdoutputs.save_md_data(md_dt, filename='md_nve.dat')
-
-    # Generate plots if requested
-    if plot:
-        mdoutputs.plot_md_results(filename='nve_results.png')
-
-    return mdoutputs
 
 
 def _run_ase_nve(structure: Atoms, parameters: NVEInputT, model_path: str):
@@ -252,7 +198,7 @@ def _run_ase_nve(structure: Atoms, parameters: NVEInputT, model_path: str):
 
     dyn = VelocityVerlet(structure, 
                          timestep=md_dt * ase.units.fs)
-    logfile = open('qdyn_nve.log', 'w')
+    logfile = open('qdyn_md.log', 'w')
     logfile.write(f'Step: {md_step + 1}, Interval: 1\n')
     md_logger = MDLogger(dyn, structure, logfile, mode='w')
     dyn.attach(md_logger, interval=1)

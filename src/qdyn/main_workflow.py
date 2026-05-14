@@ -229,8 +229,8 @@ class MainWorkflow:
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        software = input.basic_input.software
         assert input.nvt_input is not None
+        software = input.nvt_input.software
         if is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nvt'][0]
@@ -249,14 +249,31 @@ class MainWorkflow:
                 "No structure provided for the nvt step. \n"
                 "Provide a structure string or set resume=True with a valid prev_task_id."
             )
+        
+        calculator = input.nvt_input.calculator
 
-        nodes = (
-            input.nvt_input.nodes
-            if input.nvt_input.nodes is not None
-            else active_worker_cfg['nvt'][software]['nodes']
-        )
-        processes_per_node = active_worker_cfg['nvt'][software]['processes_per_node']
-        threads_per_process = active_worker_cfg['nvt'][software]['threads_per_process']
+        if isinstance(calculator, DFTBaseInputT):
+            nodes = (
+                calculator.nodes
+                if  calculator.nodes is not None
+                else active_worker_cfg['nvt'][software]['nodes']
+            )
+            processes_per_node = active_worker_cfg['nvt'][software]['processes_per_node']
+            threads_per_process = active_worker_cfg['nvt'][software]['threads_per_process']
+            pp_path = active_worker_cfg["pp_path"][software]
+            orb_path = active_worker_cfg["orb_path"][software]
+            model_path = ''
+            res_software = software
+            use_gpu = False
+        else:
+            nodes = 1
+            processes_per_node = 1
+            threads_per_process = active_worker_cfg['cpus_per_node']
+            pp_path = ''
+            orb_path = ''
+            model_path = resolve_model_path(self.active_pool, calculator)
+            res_software = 'python'
+            use_gpu = calculator.use_gpu
 
         job_nvt = qdyn_nvt(
             software=software,
@@ -270,14 +287,20 @@ class MainWorkflow:
             plot=input.basic_input.plot,
             prepare_input_only=prepare_input_only,
         )
+        qres = build_qresources(
+            active_worker_cfg,
+            use_gpu=use_gpu,
+            nodes=nodes,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
+        )
         job_nvt = set_run_config(
             job_nvt,
-            exec_config=self._build_exec_config([software]),
-            resources=build_qresources(
-                active_worker_cfg,
-                active_worker_cfg['nvt'][software],
-                nodes=nodes,
+            exec_config=self._build_exec_config(
+                [res_software],
+                omp_threads=qres.threads_per_process,
             ),
+            resources=qres,
         )
         return [job_nvt]
 

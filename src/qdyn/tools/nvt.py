@@ -2,7 +2,7 @@ import os
 import shutil
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Tuple
+from typing import Literal
 from copy import deepcopy
 
 import ase.io
@@ -10,17 +10,15 @@ import numpy as np
 
 
 from ase import Atoms
-from jobflow import job  # type: ignore
+from jobflow.core.job import job
 
-from ..input import NVTInputT
-from ..params import params_default, backup_files
+from ..input import NVTInputT, DFTBaseInputT
+from ..params import params_default, BAK_FNAMES, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
-from ..output_postprocess import MDOutpus
+from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .run_software import run_software, MDProgressMonitor
 from .seldyn import add_constraints
 
-
-MAX_NVT_RETRIES = 10  # Maximum number of NVT retries for temperature convergence
 
 @job
 def qdyn_nvt(
@@ -28,13 +26,14 @@ def qdyn_nvt(
     parameters: NVTInputT,
     pp_path: str,
     orb_path: str,
-    structure: Dict,
+    structure: dict,
+    model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
     threads_per_process: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> Dict:
+) -> dict:
     """Run NVT molecular dynamics simulation with automatic retry on temperature divergence.
 
     Jobflow automatically manages the working directory, so all input files
@@ -50,6 +49,7 @@ def qdyn_nvt(
         pp_path: Path to pseudopotential files.
         orb_path: Path to orbital files (for SIESTA/ABACUS/OpenMX).
         structure: Atomic structure.
+        model_path: Path to the model file.
         nodes: Number of nodes for parallel calculation.
         processes_per_node: Number of MPI tasks per node.
         threads_per_process: Number of CPUs per task.
@@ -72,125 +72,137 @@ def qdyn_nvt(
     software_lower = software.lower()
 
     structure.pop('momenta', None)
-    current_structure = Atoms.fromdict(structure)
+    cur_stru = Atoms.fromdict(structure)
     if (
         parameters.sel.constraint_layers is not None
-        and not current_structure.constraints
+        and not cur_stru.constraints
     ):
-        current_structure = add_constraints(current_structure, parameters.sel)
+        cur_stru = add_constraints(cur_stru, parameters.sel)
 
     nprocs = nodes * processes_per_node
     images = []
-    md_files = []
+    md_logs = []
 
-    for attempt in range(1, MAX_NVT_RETRIES + 1):
-        # Prepare input files
-        _prepare_nvt_input(
-            software=software_lower,
-            structure=current_structure,
-            parameters=parameters,
-            pp_path=pp_path,
-            orb_path=orb_path,
-        )
+    thermostats_algos = parameters.thermostats_algo
+    md_steps = parameters.md_step
+    temp_beg = parameters.temp_begin
+    temp_end = parameters.temp_end
+    calculator = parameters.calculator
+    check_convergence = False
+    nrounds = len(md_steps)
+    
+    for idx, (algo, md_step) in enumerate(zip(thermostats_algos, md_steps)):
+        attempt = idx + 1
 
-        if prepare_input_only:
-            return {
-                'run_dir': str(Path.cwd()),
-                'software': software,
-                'md_files': [],
-                'images': [],
-                'stru': [],
-            }
-
-        # Run the software with progress monitoring
-        with MDProgressMonitor(
-            software=software_lower,
-            nstep=parameters.md_step,
-            scf_thr=parameters.scf_thr,
-            md_dt=parameters.md_dt,
-            log_every=1,
-        ) as m:
-            run_software(software_lower, nprocs, monitor=m)
-
-        # Process output and check convergence
-        current_structure, mdoutputs = _process_nvt_output(
-            software=software_lower,
-            target_temp=parameters.temp_end,
-            md_dt=parameters.md_dt,
-            plot=plot,
-            attempt=attempt,
-        )
-        md_files.append(mdoutputs.md_file)
-        images.append(mdoutputs.image)
-
-        # Check 1: SCF convergence - if failed, raise error immediately
-        if not mdoutputs.scf_converged:
-            error_msg = (
-                f"NVT calculation failed: SCF did not converge properly. "
-                f"Please check the output files for details."
+        if isinstance(calculator, DFTBaseInputT):
+            # Prepare input files
+            _prepare_nvt_input(
+                software=software_lower,
+                structure=cur_stru, # type: ignore
+                parameters=parameters,
+                pp_path=pp_path,
+                orb_path=orb_path,
+                thermostats=algo,
+                md_step=md_step,
+                temp_beg=temp_beg,
+                temp_end=temp_end,
             )
-            raise RuntimeError(error_msg)
 
-        # Check 2: Temperature convergence
-        if mdoutputs.temp_converged:
+            if prepare_input_only:
+                return {
+                    'run_dir': str(Path.cwd()),
+                    'software': software,
+                }
+
+            # Run the software with progress monitoring
+            with MDProgressMonitor(
+                software=software_lower, # type: ignore
+                nstep=md_step,
+                scf_thr=calculator.scf_thr,
+                md_dt=parameters.md_dt,
+                log_every=parameters.log_every,
+                check_convergence=check_convergence
+            ) as m:
+                run_software(software_lower, nprocs, monitor=m)
+            # update structure
+            cur_stru = ase.io.read(STRU2_FNAME_MAPPING[software_lower],
+                                   format=STRU_FORMAT_MAPPING[software_lower])
+        else:
+            if prepare_input_only:
+                return {
+                    'run_dir': str(Path.cwd()),
+                    'software': software,
+                }
+            scf_converged, cur_stru = _run_ase_nvt(
+                cur_stru, # type: ignore
+                parameters, 
+                model_path,
+                thermostats=algo,
+                md_step=md_step,
+                temp_beg=temp_beg,
+                temp_end=temp_end,
+            )
+            if check_convergence and not scf_converged:
+                raise RuntimeError("NVT calculation failed: "
+                                   "SCF did not converge in ASE MD run.")
+
+        # Process output and update current structure
+        backup_dir = Path(f"nvt_attempt_{attempt}").resolve()
+        md_data = parse_md_data_from_qdyn_log('qdyn_md.log')
+        md_logs.append(str(backup_dir / 'qdyn_md.log'))
+        if plot:
+            plot_md_results(md_data, 'qdyn_nvt.png', target_temp=temp_end)
+            images.append(str(backup_dir / 'qdyn_nvt.png'))
+
+        # check convergence
+        converged = False
+        if check_convergence or nrounds == 1:
+            converged, temp_avg, temp_std = check_nvt_convergence(
+                cur_stru, # type: ignore
+                md_data,
+                target_temp=temp_end,
+            )
+
+        # finish condition
+        if converged:
             break
         else:
-            # Check if we've exhausted retries
-            if attempt >= MAX_NVT_RETRIES:
-                error_msg = (
-                    f"NVT calculation failed: Temperature did not converge after "
-                    f"{MAX_NVT_RETRIES} attempts. Max deviation: {mdoutputs.max_deviation:.1f} K. "
-                    f"Please check the system or increase MAX_NVT_RETRIES."
-                )
-                raise RuntimeError(error_msg)
-
-            # Read CONTCAR for next iteration
-            if not os.path.isfile('CONTCAR'):
-                error_msg = "CONTCAR not found after NVT calculation."
-                raise RuntimeError(error_msg)
-
             # Backup current round files
-            backup_dir = f"nvt_attempt_{attempt}"
-            md_filename = f'md_attempt_{attempt}.dat'
-            image_filename = f'nvt_results_attempt_{attempt}.png'
-            os.makedirs(backup_dir, exist_ok=True)
-            for f in backup_files[software_lower]:
-                if os.path.isfile(f):
-                    shutil.copy(f, os.path.join(backup_dir, f))
-                else:
-                    logging.warning(
-                        f'File {f} not found, backup files may be uncomplete.'
-                    )
-            if os.path.isfile(md_filename):
-                md_dstpath = os.path.join(backup_dir, md_filename)
-                shutil.move(md_filename, md_dstpath)
-                md_files[attempt - 1] = os.path.abspath(md_dstpath)
-            else:
-                logging.warning(
-                    f'File {md_filename} not found, backup files may be uncomplete.'
-                )
-            if os.path.isfile(image_filename):
-                image_dstpath = os.path.join(backup_dir, image_filename)
-                shutil.move(
-                    image_filename,
-                    image_dstpath,
-                )
-                images[attempt - 1] = os.path.abspath(image_dstpath)
-            else:
-                logging.warning(
-                    f'File {image_filename} not found, backup files may be uncomplete.'
-                )
-            if os.path.isfile('qdyn_md.log'):
-                shutil.move('qdyn_md.log', os.path.join(backup_dir, 'qdyn_md.log'))
+            backup_dir.mkdir(exist_ok=True)
 
-    stru_dict = current_structure.todict()
+            backups = BAK_FNAMES[software_lower].copy()
+            backups.extend(['qdyn_md.log', 'qdyn_nvt.png'])
+
+            for f in backups:
+                if os.path.isfile(f):
+                    shutil.move(f, backup_dir / f)
+                else:
+                    logging.warning(f'File {f} not found, '
+                                    'backup files may be incomplete.')
+        # updates
+        temp_beg = temp_end
+        check_convergence = True
+
+    else:
+        error_msg = (
+            f"NVT calculation failed: Not converge after {nrounds} attempts"
+            f"Please check the system or increase {nrounds}."
+        )
+        raise RuntimeError(error_msg)
+    
+    if md_logs:
+        md_logs[-1] = str(Path.cwd() / 'qdyn_md.log')
+    if images:
+        images[-1] = str(Path.cwd() / 'qdyn_nvt.png')
+
+    stru_dict = cur_stru.todict() # type: ignore
     if stru_dict.get('constraints') is not None:
         stru_dict['constraints'] = [i.todict() for i in stru_dict['constraints']]  # type: ignore
 
     return {
         'run_dir': str(Path.cwd()),
         'software': software,
-        'md_files': md_files,
+        'md_logs': md_logs,
         'images': images,
         'stru': stru_dict,
     }
@@ -202,6 +214,10 @@ def _prepare_nvt_input(
     parameters: NVTInputT,
     pp_path: str,
     orb_path: str,
+    thermostats: str,
+    md_step: int,
+    temp_beg: float,
+    temp_end: float,
 ):
     """Prepare input files for NVT molecular dynamics.
 
@@ -215,34 +231,41 @@ def _prepare_nvt_input(
             range, etc.
         pp_path: Path to pseudopotential directory.
         orb_path: Path to orbital files (for SIESTA/ABACUS/OpenMX).
+        thermostats: Thermostat algorithm to use ('bussi', 'rescale_v', 'nhc').
+        md_step: Number of MD steps to run.
+        temp_beg: Initial temperature for the NVT simulation.
+        temp_end: Final temperature for the NVT simulation.
     """
+    assert isinstance(parameters.calculator, DFTBaseInputT)
 
     input = deepcopy(params_default['nvt'][software])
     if software == 'vasp':
         # Handle predefined parameters in InputT
         # 检查这些参数！！！！！
-        if parameters.md_thermostat == 'nhc':
+        if thermostats == 'nhc':
             input['MDALGO'] = 2
             # input['ISIF'] = 0
             input['SMASS'] = 0
-        elif parameters.md_thermostat == 'rescale_v':
+        elif thermostats == 'rescale_v':
             input['MDALGO'] = 0
             # input['ISIF'] = 0
             input['SMASS'] = -1
-            input['NBLOCK'] = 4
+            input['NBLOCK'] = parameters.md_thermostats.rescale_v_nraise
+        else:
+            raise NotImplementedError()
         input['POTIM'] = parameters.md_dt
-        input['NSW'] = parameters.md_step
-        input['TEBEG'] = parameters.temp_begin
-        input['TEEND'] = parameters.temp_end
-        input['EDIFF'] = parameters.scf_thr
+        input['NSW'] = md_step
+        input['TEBEG'] = temp_beg
+        input['TEEND'] = temp_end
+        input['EDIFF'] = parameters.calculator.scf_thr
         dftinputs = DFTInputs(
             software='vasp',
             structure=structure,
             pp_path=pp_path,
             orb_path=orb_path,
-            kspacing=parameters.kspacing,
+            kspacing=parameters.calculator.kspacing,
             inputs_dict=input,
-            inputs_params=parameters.parameters,
+            inputs_params=parameters.calculator.parameters,
         )
         dftinputs.write()
     else:
@@ -251,114 +274,176 @@ def _prepare_nvt_input(
         )
 
 
-def _process_nvt_output(
-    software: str,
+def check_nvt_convergence(
+    structure: Atoms,
+    md_data: dict,
     target_temp: float,
-    md_dt: float,
-    plot: bool,
-    attempt: int = 1,
-    check_nsw: int | None = None,
-    max_unconverged_ratio: float = 0.01,
-) -> tuple[Atoms, MDOutpus]:
-    """Process NVT output files and check convergence (universal for all software).
+    last_nsteps: int | None = None,
+    thres_avg: float = 0.04,
+    thres_std: float = 1.5,
+) -> tuple[bool, float, float]:
+    """Check temperature convergence from MD data (universal for all software).
 
-    This function extracts MD data using software-specific functions,
-    checks SCF convergence and temperature convergence using universal
-    functions, and optionally generates plots.
+    This function checks if temperature converged to the target value.
 
     Args:
-        software: Software name ('vasp', 'cp2k', etc.).
+        md_data: MD data dictionary with 'temperatures' field.
         target_temp: Target temperature for NVT simulation.
-        plot: Whether to generate plots.
-        attempt: Current attempt number (for labeling).
-        check_nsw: Number of steps to check for SCF convergence. If None,
-            check last 5% of steps.
-        max_unconverged_ratio: Maximum ratio of unconverged steps allowed
-            (default: 0.1 = 10%).
+        thres_avg: Maximum allowed average deviation.
+        thres_std: Maximum allowed standard deviation.
 
     Returns:
-        (current_structure, scf_converged, temp_converged, max_deviation, image, md_file)
-        - current_structure: The updated atomic structure
-        - scf_converged: True if SCF converged properly
-        - temp_converged: True if temperature converged to target
-        - max_deviation: Maximum temperature deviation from target
-        - md_file: Path to saved MD data file
-        - image: Path to generated plot file
+        tuple:
+        - converged: True if temperature converged to target
+        - temp_avg: Average temperature of last n_last steps
+        - temp_std: Standard deviation of temperature of last n_last steps
     """
+    temps = np.array(md_data['temperatures'])
+    if last_nsteps is not None:
+        temps = temps[-last_nsteps:]
 
-    # Extract MD data using software-specific function
-    if software == 'vasp':
-        mdoutputs = MDOutpus.from_md_tracks(software='vasp')
-        # Read CONTCAR as new structure for next iteration
-        current_structure = ase.io.read('CONTCAR', format='vasp')  # type: ignore
+    if len(temps) == 0:
+        raise ValueError("No temperature data available to check convergence.")
+
+    temp_avg = temps.mean()
+    temp_std = temps.std()
+
+    target_avg = target_temp
+    dof = structure.get_number_of_degrees_of_freedom()
+    target_std = np.sqrt(2 / dof) * target_avg
+
+    converged = True
+    if abs(temp_avg - target_avg) > thres_avg * target_avg:
+        converged = False
+    if temp_std > thres_std * target_std:
+        converged = False
+
+    return converged, temp_avg, temp_std
+
+
+def _run_ase_nvt(
+    structure: Atoms, 
+    parameters: NVTInputT, 
+    model_path: str,
+    thermostats: str,
+    md_step: int,
+    temp_beg: float,
+    temp_end: float,
+):
+    """Run NVT MD using ASE's integrator.
+
+    Args:
+        structure: Initial atomic structure with positions and momenta (optional).
+        parameters: NVT simulation parameters.
+        model_path: Path to the machine learning model.
+        thermostats: Thermostat algorithm to use ('bussi', 'rescale_v', 'nhc').
+        md_step: Number of MD steps to run.
+        temp_beg: Initial temperature for the NVT simulation.
+        temp_end: Final temperature for the NVT simulation.
+
+    Returns:
+        tuple: (scf_converged, final_structure)
+    """
+    import ase.units
+    from ase.md import MDLogger
+    from ..input import NequipInputT, MACEInputT
+    from ..calc_common import TrajWriter
+    from .mlff_wrapper import get_mlff_calculator
+
+    md_dt = parameters.md_dt
+    log_every = parameters.log_every
+    accelerator = parameters.calculator
+    heatbath = parameters.md_thermostats
+
+    # check gpu availability
+    assert isinstance(accelerator, (NequipInputT, MACEInputT))
+    if accelerator and accelerator.use_gpu:
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("GPU acceleration requested but no CUDA device found.")
+        
+    # initial velocities
+    if np.allclose(structure.get_velocities(), 0.0):
+        from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+
+        MaxwellBoltzmannDistribution(structure, temperature_K=temp_beg)
+
+    # set up dyn and thermostat
+    if thermostats == 'bussi':
+        from ase.md.bussi import Bussi
+        dyn = Bussi(structure, 
+                    timestep=md_dt * ase.units.fs,
+                    temperature_K=temp_beg,
+                    taut=heatbath.bussi_taut * ase.units.fs)
+        
+        def bussi_ramp_temperature():
+            step = dyn.get_number_of_steps()
+            
+            fraction = step / md_step
+            temp_target = temp_beg + fraction * (temp_end - temp_beg)
+
+            # update target temperature
+            dyn.temp = temp_target * ase.units.kB
+            dyn.target_kinetic_energy = 0.5 * dyn.temp * dyn.ndof
+
+        if temp_beg != temp_end:
+            dyn.attach(bussi_ramp_temperature, interval=1)
+
+    elif thermostats == 'rescale_v':
+        from ase.md.verlet import VelocityVerlet
+        dyn = VelocityVerlet(structure,
+                             timestep=md_dt * ase.units.fs)
+        
+        def rescale_v_ramp_velocities():
+            step = dyn.get_number_of_steps()
+
+            fraction = step / md_step
+            temp_target = temp_beg + fraction * (temp_end - temp_beg)
+            temp_now = dyn.atoms.get_temperature()
+
+            alpha = np.sqrt(temp_target / temp_now)
+            cur_vel = dyn.atoms.get_velocities()
+            dyn.atoms.set_velocities(alpha * cur_vel)
+
+        dyn.attach(rescale_v_ramp_velocities, interval=heatbath.rescale_v_nraise)
+
+    elif thermostats == 'nhc':
+        from ase.md.nose_hoover_chain import NoseHooverChainNVT
+        if temp_beg != temp_end:
+            raise NotImplementedError(
+                "Temperature ramping is not implemented "
+                "for Nose-Hoover Chain thermostat yet."
+            )
+        dyn = NoseHooverChainNVT(structure,
+                                 timestep=md_dt * ase.units.fs,
+                                 temperature_K=temp_beg,
+                                 tdamp=heatbath.nhc_tdamp * ase.units.fs,
+                                 tchain=heatbath.nhc_tchain)
+        
     else:
         raise NotImplementedError(
-            f"MD data extraction for {software} is not implemented yet."
+            "Selected thermostat is not implemented yet.\n"
+            "Supported: 'bussi', 'rescale_v', 'nhc'."
         )
 
-    # Check SCF convergence (universal)
-    mdoutputs.check_scf_convergence(
-        check_nsw=check_nsw,
-        max_unconverged_ratio=max_unconverged_ratio,
-    )
+    # logging
+    logfile = open('qdyn_md.log', 'w')
+    logfile.write(f'Step: {(md_step // log_every) + 1}, Interval: {log_every}\n')
+    md_logger = MDLogger(dyn, structure, logfile, mode='w')
+    dyn.attach(md_logger, interval=log_every)
 
-    # Check temperature convergence (universal)
-    mdoutputs.check_temperature_convergence(
-        target_temp=target_temp,
-        n_last=1000,
-        threshold_ratio=0.10,
-    )
+    traj_writer = TrajWriter(dyn, structure)
+    dyn.attach(traj_writer, interval=log_every)
 
-    # Save MD data to file in unified format
-    md_filename = f'md_attempt_{attempt}.dat'
-    mdoutputs.save_md_data(md_dt, filename=md_filename)
+    calculator = get_mlff_calculator(accelerator, model_path, dispersion=False)
+    structure.set_calculator(calculator)
 
-    # Generate plots if requested
-    if plot:
-        plot_filename = f'nvt_results_attempt_{attempt}.png'
-        mdoutputs.plot_md_results(plot_filename, target_temp)
+    # md run
+    converged = dyn.run(md_step)
 
-    return current_structure, mdoutputs # type: ignore
+    # cleanup
+    logfile.close()
+    traj_writer.close()
 
+    return converged, structure
 
-# def check_temperature_convergence(
-#     md_data: Dict,
-#     target_temp: float,
-#     n_last: int = 1000,
-#     threshold_ratio: float = 0.10,
-# ) -> Tuple[bool, float]:
-#     """Check temperature convergence from MD data (universal for all software).
-
-#     This function checks if temperature converged to the target value.
-
-#     Args:
-#         md_data: MD data dictionary with 'temperatures' field.
-#         target_temp: Target temperature for NVT simulation.
-#         n_last: Number of last steps to use for averaging (default: 1000).
-#         threshold_ratio: Maximum allowed deviation as ratio of target temp
-#             (default: 0.10 = 10%).
-
-#     Returns:
-#         (converged, avg_temp, max_deviation)
-#         - converged: True if temperature converged to target
-#         - avg_temp: Average temperature of last n_last steps
-#         - max_deviation: Maximum temperature deviation from target
-#     """
-#     temps = np.array(md_data['temperatures'])
-#     n_steps = len(temps)
-
-#     if n_steps == 0:
-#         raise ValueError("No temperature data available to check convergence.")
-
-#     # Use last n_last steps (or all if fewer)
-#     n_check = min(n_steps, n_last)
-#     last_ntemps = temps[-n_check:]
-
-#     temp_deviation = np.abs(last_ntemps - target_temp)
-#     max_deviation = np.max(temp_deviation)
-
-#     # Check if max deviation is within threshold
-#     threshold = target_temp * threshold_ratio
-#     converged = max_deviation <= threshold
-
-#     return converged, max_deviation

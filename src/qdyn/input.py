@@ -41,11 +41,11 @@ class BasicInputT(BaseModel):
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
     plot: bool = False
 
-
 class SchedulerConfigT(BaseModel):
     """Scheduler configuration (reserved for future use)."""
 
     pass
+
 
 
 class DFTBaseInputT(BaseModel):
@@ -87,7 +87,6 @@ class DFTBaseInputT(BaseModel):
             "placeholder": "e.g. ENCUT = 520\nISYM = 0",
         },
     )
-
 
 class NequipInputT(BaseModel):
     version: str = 'v0'
@@ -225,7 +224,6 @@ class _PreNAMDInputAdvT(BaseModel):
             return value.tolist()
         return value
 
-
 class PreNAMDInputT(BaseModel):
     bmin: str = Field(
         'VBM-31',
@@ -262,6 +260,7 @@ class PreNAMDInputT(BaseModel):
         default_factory=_PreNAMDInputAdvT,
         json_schema_extra={"group": "advanced"},
     )
+
 
 
 class SelDynInputT(BaseModel):
@@ -314,30 +313,39 @@ class SelDynInputT(BaseModel):
 
         return sorted(set(result))
 
+class ThermostatsInputT(BaseModel):
+    rescale_v_nraise: int = Field(
+        default=5,
+        ge=1,
+    )
+    bussi_taut: float = Field(
+        default=100.0,
+        ge=1.0,
+        description="Time constant for Bussi temperature coupling in fs",
+    )
+    nhc_tdamp: float = 100.0
+    nhc_tchain: int = 3
 
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
-
-    nodes: PositiveInt | None = Field(
-        default=None,
-        description="Number of compute nodes. Leave empty to use qdyn config default.",
-        json_schema_extra={
-            "group": "advanced",
-            "step": 1,
-            "placeholder": "Auto (from config)",
-        },
+    _comment: str = (
+        "NVT simulations can be run for multiple rounds.\n"
+        "Different thermostats and step counts can be set per round.\n"
+        "- 1st round (Warmup): Recommend 'rescale_v' or 'bussi' thermostat\n"
+        "    with a larger step count to steadily reach equilibrium.\n"
+        "- Subsequent rounds (Production): Temperature fixed at 'temp_end'. \n"
+        "    Recommend 'bussi' or 'nhc' thermostats with fewer steps \n"
+        "    for correct ensemble sampling.\n"
+        "- Convergence check enabled in Production rounds.\n"
+        "    NVT completes once convergence is reached or round count is exhausted.\n"
     )
 
-    kspacing: float = Field(
-        0.04,
-        ge=1e-4,
-        le=10.0,
-        description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.001, "precision": 4},
+    thermostats_algo: list[Literal['rescale_v', 'bussi', 'nhc']] = Field(
+        default=['rescale_v']*4,
     )
-    md_thermostat: Literal['nhc', 'rescale_v'] = Field(
-        'rescale_v',
-        description="MD thermostat method",
+    md_thermostats: ThermostatsInputT = Field(
+        default_factory=ThermostatsInputT,
+        json_schema_extra={"group": "advanced"},
     )
     md_dt: float = Field(
         1.0,
@@ -346,10 +354,8 @@ class NVTInputT(BaseModel):
         description="MD time step in fs",
         json_schema_extra={"step": 0.01, "precision": 4},
     )
-    md_step: int = Field(
-        1000,
-        ge=1,
-        le=10000000,
+    md_step: list[PositiveInt] = Field(
+        [1000, 500, 500, 500],
         description="Number of MD steps",
         json_schema_extra={"step": 500},
     )
@@ -365,27 +371,17 @@ class NVTInputT(BaseModel):
         description="Final temperature in K",
         json_schema_extra={"step": 1.0, "precision": 3},
     )
-    scf_thr: float = Field(
-        1e-6,
-        ge=1e-12,
-        le=1.0,
-        description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "log-step"},
-    )
+    log_every: PositiveInt = 10
 
     sel: SelDynInputT = Field(
         default_factory=SelDynInputT,
         json_schema_extra={"group": "advanced"},
     )
 
-    parameters: str = Field(
-        '',
-        description="Additional INCAR parameters string",
-        json_schema_extra={
-            **ADVANCED_GROUP,
-            "widget": "textarea",
-            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
-        },
+    software: Literal['vasp', 'nequip', 'mace'] = 'vasp'
+
+    calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
+        default_factory=DFTBaseInputT,
     )
 
 
@@ -478,6 +474,7 @@ class SCFInputT(BaseModel):
             "placeholder": "e.g. ENCUT = 520\nISYM = 0",
         },
     )
+
 
 
 class InputT(BaseModel):

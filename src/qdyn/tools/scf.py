@@ -28,7 +28,7 @@ from jobflow import job, Job
 
 from ..calc_common import write_stru, read_strus
 from ..input import SCFInputT
-from ..params import params_default, chg_name, ipt_files, stru_files
+from ..params import params_default, chg_name, ipt_files, STRU_FNAME_MAPPING
 from ..input_prepare import DFTInputs
 from .run_software import run_software
 
@@ -205,7 +205,7 @@ def qdyn_scf_task(
     failed = []
     prev_chgcar = None
     chgcar = chg_name[software_lower]
-    stru_name = stru_files[software_lower]
+    stru_name = STRU_FNAME_MAPPING[software_lower]
     files_to_copy = ipt_files[software_lower]
 
     # Run SCF calculations sequentially with CHGCAR passing

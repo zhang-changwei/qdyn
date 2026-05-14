@@ -19,7 +19,7 @@ from jobflow import job, Job
 
 from ..calc_common import write_stru, read_strus, parse_band_index
 from ..input import SCFInputT, PreNAMDInputT
-from ..params import chg_name, ipt_files, stru_files
+from ..params import chg_name, ipt_files, STRU_FNAME_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import extract_band_edges
 from .scf import _prepare_scf_input, _validate_scf_output

@@ -2492,7 +2492,7 @@ def _try_preview_for_task(
     Returns None if neither source is available or parsing fails.
     """
     from .structure_preview import build_preview
-    from ..params import stru_files, TRAJ_FORMAT_MAPPING
+    from ..params import STRU_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
 
     # --- Strategy 1: Queued task payload ---
     payload_json = qdyndb.get_queued_payload(task_id)
@@ -2556,7 +2556,7 @@ def _try_preview_for_task(
 
     # For NVT/NVE first steps: read the structure file from run dir
     if access_ok and first_step in ("nvt", "nve"):
-        stru_filename = stru_files.get(software)
+        stru_filename = STRU_FNAME_MAPPING.get(software)
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
@@ -2590,7 +2590,7 @@ def _try_preview_for_task(
                 )
 
         # Fallback: try structure file in run dir
-        stru_filename = stru_files.get(software)
+        stru_filename = STRU_FNAME_MAPPING.get(software)
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
@@ -2601,7 +2601,7 @@ def _try_preview_for_task(
 
     # Generic fallback: try structure file regardless of step type
     if access_ok:
-        stru_filename = stru_files.get(software)
+        stru_filename = STRU_FNAME_MAPPING.get(software)
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
@@ -2613,7 +2613,7 @@ def _try_preview_for_task(
     # --- Strategy 3: Read traj_path from MongoDB job document ---
     # SCF jobs store their trajectory source path in function_kwargs.
     # This handles cases where the trajectory isn't in the run dir but
-    # in a separate data directory (e.g. data/trajs/{hash}).
+    # in a separate data directory (e.g. data/trajectory/{hash}).
     preview = _preview_from_job_kwargs(first_job_uuid, manager)
     if preview is not None:
         return preview
@@ -2705,7 +2705,7 @@ def _preview_from_traj_hash(
     data_dir = str(
         Path(manager.config["basic"].get("user_data", "data/user_data")).resolve()
     )
-    traj_path = Path(data_dir) / "trajs" / stru_hash
+    traj_path = Path(data_dir) / "trajectory" / stru_hash
     if not traj_path.is_file():
         return None
 

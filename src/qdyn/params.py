@@ -77,12 +77,29 @@ params_default = {
 import re
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
+
+BAK_FNAMES = {
+    'vasp': [
+        'POSCAR', 'CONTCAR', 'XDATCAR', 
+        'OSZICAR', 'OUTCAR', 'INCAR', 'KPOINTS', 'POTCAR',
+    ],
+}
+
+STRU_FNAME_MAPPING = {
+    'vasp': 'POSCAR',
+}
+STRU2_FNAME_MAPPING = {
+    'vasp': 'CONTCAR',
+}
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
     'nequip': 'qdyn.extxyz',
     'mace': 'qdyn.extxyz',
 }
 
+STRU_FORMAT_MAPPING = {
+    'vasp': 'vasp',
+}
 # ASE format strings for reading/writing trajectory files per software.
 # Used by read_strus(), write_strus(), and upload validation.
 TRAJ_FORMAT_MAPPING = {
@@ -94,6 +111,7 @@ TRAJ_FORMAT_MAPPING = {
     'mace': 'extxyz',
 }
 
+# MLFFs
 NEQUIP_PRETRAINED_MODELS = (
     'mir-group/NequIP-OAM-L',
     'mir-group/NequIP-OAM-M',
@@ -148,19 +166,6 @@ MACE_PRETRAINED_MODEL_URLS = {
 }
 
 
-backup_files = {
-    'vasp': [
-        'POSCAR',
-        'CONTCAR',
-        'XDATCAR',
-        'OSZICAR',
-        'OUTCAR',
-        'INCAR',
-        'KPOINTS',
-        'POTCAR',
-    ],
-}
-
 chg_name = {
     'vasp': 'CHGCAR',
 }
@@ -169,9 +174,6 @@ ipt_files = {
     'vasp': ['INCAR', 'KPOINTS', 'POTCAR'],
 }
 
-stru_files = {
-    'vasp': 'POSCAR',
-}
 
 # PBE
 potcar_default = {
