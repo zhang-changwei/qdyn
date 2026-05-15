@@ -62,6 +62,13 @@
             @change="commitCsvStrings(field.path, field.nullable)"
           />
 
+          <!-- nullable-object-toggle widget -->
+          <el-switch
+            v-else-if="field.widget === 'nullable-object-toggle'"
+            :model-value="getFieldValue(field.path) != null"
+            @update:model-value="toggleNullableObject(field, $event)"
+          />
+
           <!-- textarea widget -->
           <el-input
             v-else-if="field.widget === 'textarea'"
@@ -185,6 +192,13 @@
                 @change="commitCsvStrings(field.path, field.nullable)"
               />
 
+              <!-- nullable-object-toggle widget (advanced) -->
+              <el-switch
+                v-else-if="field.widget === 'nullable-object-toggle'"
+                :model-value="getFieldValue(field.path) != null"
+                @update:model-value="toggleNullableObject(field, $event)"
+              />
+
               <!-- Single-line text input (widget: "text") -->
               <el-input
                 v-else-if="field.widget === 'text'"
@@ -286,6 +300,7 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   resolveLocalRef,
   normalizeNullableSchema,
+  buildDefaultsFromSchema,
   parseCommaSeparatedIntegers,
   parseCommaSeparatedStrings,
   type JsonSchemaObject,
@@ -474,9 +489,44 @@ function buildFieldDescriptors(
     // Normalize nullable / union schemas
     const { schema: normalized, nullable } = normalizeNullableSchema(prop)
 
-    const widget = prop.widget ?? normalized.widget
-    const resolvedType = normalized.type ?? ''
     const group = prop.group ?? normalized.group
+
+    if (normalized.$ref && !normalized.type && !normalized.properties) {
+      const refSchema = resolveLocalRef(rootSchema, normalized.$ref)
+      if (refSchema?.properties) {
+        result.push({
+          key: fullPath,
+          path: fullPath,
+          schema: { ...prop, title: prop.title ?? refSchema.title, type: 'boolean' },
+          resolvedSchema: { type: 'boolean' },
+          resolvedType: 'boolean',
+          widget: 'nullable-object-toggle',
+          nullable: true,
+          colSpan: 8,
+          group,
+        })
+
+        const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath, modelValue)
+        if (group) {
+          for (const f of nested) {
+            if (!f.group) f.group = group
+          }
+        }
+        result.push(...nested)
+        continue
+      }
+    }
+
+    let widget = prop.widget ?? normalized.widget
+    const resolvedType = normalized.type ?? ''
+
+    if (resolvedType === 'array' && !widget && normalized.items) {
+      if (normalized.items.type === 'integer' || normalized.items.type === 'number') {
+        widget = 'comma-separated-integers'
+      } else if (normalized.items.enum || normalized.items.type === 'string') {
+        widget = 'comma-separated-strings'
+      }
+    }
 
     // Determine column span: textarea-like fields get wider
     let colSpan = 8
@@ -508,12 +558,30 @@ const allFields = computed(() => {
 })
 
 const regularFields = computed(() =>
-  allFields.value.filter((f) => f.group !== 'advanced'),
+  allFields.value.filter((f) => f.group !== 'advanced' && isFieldVisible(f)),
 )
 
 const advancedFields = computed(() =>
-  allFields.value.filter((f) => f.group === 'advanced'),
+  allFields.value.filter((f) => f.group === 'advanced' && isFieldVisible(f)),
 )
+
+const nullableTogglePaths = computed(() => new Set(
+  allFields.value
+    .filter((field) => field.widget === 'nullable-object-toggle')
+    .map((field) => field.path),
+))
+
+function isFieldVisible(field: FieldDescriptor): boolean {
+  if (field.widget === 'nullable-object-toggle') return true
+
+  for (const togglePath of nullableTogglePaths.value) {
+    if (field.path.startsWith(`${togglePath}.`) && getFieldValue(togglePath) == null) {
+      return false
+    }
+  }
+
+  return true
+}
 
 const csvDrafts = reactive<Record<string, string>>({})
 const numberDrafts = reactive<Record<string, string>>({})
@@ -596,6 +664,24 @@ function setFieldValue(path: string, value: unknown): void {
   }
   obj[parts[parts.length - 1]] = value
   emit('update:modelValue', updated)
+}
+
+function toggleNullableObject(field: FieldDescriptor, enabled: boolean): void {
+  if (enabled) {
+    const { schema: normalized } = normalizeNullableSchema(field.schema)
+    const ref = normalized.$ref
+    if (ref) {
+      const refSchema = resolveLocalRef(props.schema, ref)
+      if (refSchema) {
+        setFieldValue(field.path, buildDefaultsFromSchema(refSchema, props.schema))
+        return
+      }
+    }
+    setFieldValue(field.path, {})
+    return
+  }
+
+  setFieldValue(field.path, null)
 }
 
 // --- Smart number formatting (all el-input-number fields) ---
