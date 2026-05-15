@@ -3,7 +3,7 @@ from ase.calculators.calculator import Calculator
 from ase.calculators.mixing import SumCalculator
 import ase.units
 
-from ..input import NequipInputT, MACEInputT
+from ..input import NequipInputT, MACEInputT, DispersionInputT
 from ..params import MACE_PRETRAINED_MODEL_URLS
 from ..pool import WorkerPool
 
@@ -44,10 +44,7 @@ def get_mlff_calculator(
     calc: NequipInputT | MACEInputT, 
     model_path: str,
     *,
-    dispersion: bool = False,
-    damping: str = "bj",  # choices: ["zero", "bj", "zerom", "bjm"]
-    dispersion_xc: str = "pbe",
-    dispersion_cutoff: float = 40.0 * ase.units.Bohr,
+    dispersion: DispersionInputT | None = None,
 ) -> Calculator | SumCalculator:
     """Return the initialized MLFF calculator for the given input and model path."""
     import torch
@@ -82,7 +79,6 @@ def get_mlff_calculator(
             device=device,
             default_dtype=dtype,
         )
-        # TODO: dispersion correction for MACE
     else:
         raise NotImplementedError()
     
@@ -95,10 +91,20 @@ def get_mlff_calculator(
                 "Please install torch-dftd to use dispersion corrections "
                 "(see https://github.com/pfnet-research/torch-dftd)"
             ) from exc
+        
+        vdw_method = dispersion.algo
+        damping = dispersion.damping
+        dispersion_xc = dispersion.xc
+        dispersion_cutoff = dispersion.cutoff
+        old = (vdw_method == "dftd2")
+        if not dispersion_cutoff:
+            dispersion_cutoff = 56.6918 if old else 90.0
+        dispersion_cutoff *= ase.units.Bohr
 
         d3_calc = TorchDFTD3Calculator(
             device=device,
             damping=damping,
+            old=old,
             dtype=dtype,
             xc=dispersion_xc,
             cutoff=dispersion_cutoff,

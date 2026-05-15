@@ -83,13 +83,19 @@ BAK_FNAMES = {
         'POSCAR', 'CONTCAR', 'XDATCAR', 
         'OSZICAR', 'OUTCAR', 'INCAR', 'KPOINTS', 'POTCAR',
     ],
+    'nequip': ['nequip_in.vasp', 'nequip_out.vasp'],
+    'mace': ['mace_in.vasp', 'mace_out.vasp'],
 }
 
 STRU_FNAME_MAPPING = {
     'vasp': 'POSCAR',
+    'nequip': 'nequip_in.vasp',
+    'mace': 'mace_in.vasp',
 }
 STRU2_FNAME_MAPPING = {
     'vasp': 'CONTCAR',
+    'nequip': 'nequip_out.vasp',
+    'mace': 'mace_out.vasp',
 }
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
@@ -99,6 +105,8 @@ TRAJ_FNAME_MAPPING = {
 
 STRU_FORMAT_MAPPING = {
     'vasp': 'vasp',
+    'nequip': 'vasp',
+    'mace': 'vasp',
 }
 # ASE format strings for reading/writing trajectory files per software.
 # Used by read_strus(), write_strus(), and upload validation.

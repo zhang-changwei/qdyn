@@ -9,7 +9,10 @@ import numpy as np
 
 
 from ..input import NVEInputT, DFTBaseInputT
-from ..params import params_default, TRAJ_FNAME_MAPPING
+from ..params import (
+    params_default, TRAJ_FNAME_MAPPING, 
+    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+)
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .run_software import run_software, MDProgressMonitor
@@ -97,13 +100,18 @@ def qdyn_nve(
             run_software(software_lower, nprocs, monitor=m)
     
     else:
+        ase.io.write(STRU_FNAME_MAPPING[software_lower],
+                     cstru,
+                     format=STRU_FORMAT_MAPPING[software_lower],)
         if prepare_input_only:
             return {
                 'run_dir': str(Path.cwd()),
                 'software': software,
             }
-
         converged, _ = _run_ase_nve(cstru, parameters, model_path)
+        ase.io.write(STRU2_FNAME_MAPPING[software_lower],
+                     cstru,
+                     format=STRU_FORMAT_MAPPING[software_lower],)
         if not converged:
             raise RuntimeError(
                 "NVE calculation failed: ASE MD did not converge properly. "
@@ -206,7 +214,11 @@ def _run_ase_nve(structure: Atoms, parameters: NVEInputT, model_path: str):
     traj_writer = TrajWriter(dyn, structure)
     dyn.attach(traj_writer, interval=1)
 
-    calculator = get_mlff_calculator(accelerator, model_path, dispersion=False)
+    calculator = get_mlff_calculator(
+        accelerator, 
+        model_path, 
+        dispersion=accelerator.dispersion
+    )
     structure.set_calculator(calculator)
 
     converged = dyn.run(md_step)

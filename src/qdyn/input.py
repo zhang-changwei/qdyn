@@ -48,6 +48,17 @@ class SchedulerConfigT(BaseModel):
 
 
 
+class DispersionInputT(BaseModel):
+    algo: Literal['dftd2', 'dftd3'] = 'dftd3'
+    damping: Literal['zero', 'bj', 'zerom', 'bjm'] = 'bj'
+    xc: str = 'pbe'
+    cutoff: float = Field(
+        default=40.0,
+        ge=0.0,
+        description=("Cutoff distance for dispersion interactions in Bohr.\n"
+                     "Set to 0.0 to use default values in DFT codes."),
+    )
+
 class DFTBaseInputT(BaseModel):
     '''Base class for DFT input parameters, containing common fields.'''
 
@@ -96,6 +107,7 @@ class NequipInputT(BaseModel):
     model_hash: MD5HashStr = ''
     energy_unit: Literal['eV', 'Ry', 'Ha'] = 'eV'
     length_unit: Literal['Ang', 'Bohr'] = 'Ang'
+    dispersion: DispersionInputT | None = None
 
 class MACEInputT(BaseModel):
     version: str = 'v0'
@@ -104,6 +116,7 @@ class MACEInputT(BaseModel):
     model_name: MACE_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: MD5HashStr = ''
     default_dtype: Literal['float32', 'float64'] = 'float32'
+    dispersion: DispersionInputT | None = None
 
 
 

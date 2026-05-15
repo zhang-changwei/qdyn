@@ -128,6 +128,9 @@ def qdyn_nvt(
             cur_stru = ase.io.read(STRU2_FNAME_MAPPING[software_lower],
                                    format=STRU_FORMAT_MAPPING[software_lower])
         else:
+            ase.io.write(STRU_FORMAT_MAPPING[software_lower], 
+                         cur_stru,
+                         format=STRU_FORMAT_MAPPING[software_lower],)
             if prepare_input_only:
                 return {
                     'run_dir': str(Path.cwd()),
@@ -142,6 +145,9 @@ def qdyn_nvt(
                 temp_beg=temp_beg,
                 temp_end=temp_end,
             )
+            ase.io.write(STRU2_FNAME_MAPPING[software_lower],
+                         cur_stru,
+                         format=STRU_FORMAT_MAPPING[software_lower],)
             if check_convergence and not scf_converged:
                 raise RuntimeError("NVT calculation failed: "
                                    "SCF did not converge in ASE MD run.")
@@ -435,7 +441,11 @@ def _run_ase_nvt(
     traj_writer = TrajWriter(dyn, structure)
     dyn.attach(traj_writer, interval=log_every)
 
-    calculator = get_mlff_calculator(accelerator, model_path, dispersion=False)
+    calculator = get_mlff_calculator(
+        accelerator, 
+        model_path, 
+        dispersion=accelerator.dispersion
+    )
     structure.set_calculator(calculator)
 
     # md run
