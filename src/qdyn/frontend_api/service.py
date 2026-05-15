@@ -2702,10 +2702,7 @@ def _preview_from_traj_hash(
     from ..params import TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
-    data_dir = str(
-        Path(manager.config["basic"].get("user_data", "data/user_data")).resolve()
-    )
-    traj_path = Path(data_dir) / "trajectory" / stru_hash
+    traj_path = Path(manager.active_pool.get_user_file_path('trajectory', stru_hash))
     if not traj_path.is_file():
         return None
 

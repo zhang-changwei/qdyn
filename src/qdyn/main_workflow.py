@@ -278,9 +278,10 @@ class MainWorkflow:
         job_nvt = qdyn_nvt(
             software=software,
             parameters=input.nvt_input,
-            pp_path=active_worker_cfg["pp_path"][software],
-            orb_path=active_worker_cfg["orb_path"][software],
+            pp_path=pp_path,
+            orb_path=orb_path,
             structure=structure,
+            model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,

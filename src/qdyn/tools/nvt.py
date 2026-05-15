@@ -13,7 +13,7 @@ from ase import Atoms
 from jobflow.core.job import job
 
 from ..input import NVTInputT, DFTBaseInputT
-from ..params import params_default, BAK_FNAMES, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+from ..params import params_default, BAK_FNAMES, STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .run_software import run_software, MDProgressMonitor
@@ -128,7 +128,7 @@ def qdyn_nvt(
             cur_stru = ase.io.read(STRU2_FNAME_MAPPING[software_lower],
                                    format=STRU_FORMAT_MAPPING[software_lower])
         else:
-            ase.io.write(STRU_FORMAT_MAPPING[software_lower], 
+            ase.io.write(STRU_FNAME_MAPPING[software_lower],
                          cur_stru,
                          format=STRU_FORMAT_MAPPING[software_lower],)
             if prepare_input_only:
@@ -191,8 +191,8 @@ def qdyn_nvt(
 
     else:
         error_msg = (
-            f"NVT calculation failed: Not converge after {nrounds} attempts"
-            f"Please check the system or increase {nrounds}."
+            f"NVT calculation failed: Did not converge after {nrounds} attempts. "
+            f"Please check the system or increase the number of NVT rounds."
         )
         raise RuntimeError(error_msg)
     
@@ -457,4 +457,3 @@ def _run_ase_nvt(
     traj_writer.close()
 
     return converged, structure
-

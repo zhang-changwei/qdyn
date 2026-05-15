@@ -58,7 +58,7 @@ def qdyn_namd(
             bmax_stored = int(m.group(3))
 
             bot = bmin - bmin_stored
-            top = bmax - bmin + 1
+            top = bmax - bmin_stored + 1
             deph = deph[bot:top, bot:top]
             np.savetxt('DEPHTIME', deph)
         else:
