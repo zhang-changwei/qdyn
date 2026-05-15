@@ -249,11 +249,12 @@ def _prepare_nvt_input(
         # Handle predefined parameters in InputT
         # 检查这些参数！！！！！
         if thermostats == 'nhc':
-            input['MDALGO'] = 2
+            input['MDALGO'] = 4
+            input['NHC_NCHAINS'] = parameters.md_thermostats.nhc_tchain
+            input['NHC_PERIOD'] = parameters.md_thermostats.nhc_tdamp // parameters.md_dt
             # input['ISIF'] = 0
-            input['SMASS'] = 0
         elif thermostats == 'rescale_v':
-            input['MDALGO'] = 0
+            # input['MDALGO'] = 0
             # input['ISIF'] = 0
             input['SMASS'] = -1
             input['NBLOCK'] = parameters.md_thermostats.rescale_v_nraise
@@ -285,8 +286,8 @@ def check_nvt_convergence(
     md_data: dict,
     target_temp: float,
     last_nsteps: int | None = None,
-    thres_avg: float = 0.04,
-    thres_std: float = 1.5,
+    thres_avg: float = 0.004,
+    thres_std: float = 1.1,
 ) -> tuple[bool, float, float]:
     """Check temperature convergence from MD data (universal for all software).
 

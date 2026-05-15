@@ -351,8 +351,8 @@ class ThermostatsInputT(BaseModel):
         ge=1.0,
         description="Time constant for Bussi temperature coupling in fs",
     )
-    nhc_tdamp: float = 100.0
-    nhc_tchain: int = 3
+    nhc_tdamp: float = 40.0
+    nhc_tchain: int = 1
 
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
