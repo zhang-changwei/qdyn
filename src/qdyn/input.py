@@ -120,6 +120,20 @@ class MACEInputT(BaseModel):
 
 
 
+class ScissorInputT(BaseModel):
+    scissor_shift: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Scissor shift value in eV",
+    )
+    scissor_bmin: PositiveInt = Field(
+        description="Minimum band index for scissor operator (1 = bmin)",
+        json_schema_extra={
+            "step": 1,
+            "placeholder": "e.g. 2 (1=bmin, 2=bmin+1, ...)",
+        },
+    )
+
 class NAMDInputT(BaseModel):
     nodes: PositiveInt | None = Field(
         default=None,
@@ -188,6 +202,7 @@ class NAMDInputT(BaseModel):
             "placeholder": "e.g. 2,3,4 (1=bmin, 2=bmin+1, ...)",
         },
     )
+    scissor: ScissorInputT | None = None
 
 
 class _PreNAMDInputAdvT(BaseModel):

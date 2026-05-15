@@ -42,7 +42,7 @@ def qdyn_namd(
     bmax = parse_band_index(parameters.bmax, VBM, 2147483647)
 
     # EIGTXT and NATXT
-    save_hfnamd_inputs(nac_path, bmin, bmax)
+    save_hfnamd_inputs(nac_path, bmin, bmax, scissor=parameters.scissor)
     eigenvalues = np.loadtxt("EIGTXT")
     nsw, nbasis = eigenvalues.shape
 

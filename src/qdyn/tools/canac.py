@@ -9,6 +9,7 @@ import numpy.typing as npt
 
 from typing import Literal, List, Dict, Any, Sequence, cast
 
+from ..input import ScissorInputT
 from .libcanac import aeolap
 from .libcanac.utils import (load_wfc, close_wfc, 
                              reorder, reorder_apply, 
@@ -268,6 +269,7 @@ def save_hfnamd_inputs(
     bmin: int,
     bmax: int,
     out_dir: str | Path = '.',
+    scissor: ScissorInputT | None = None,
 ):
     pattern = re.compile(r"nac_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
     m = pattern.match(os.path.basename(nac_path))
@@ -287,6 +289,14 @@ def save_hfnamd_inputs(
     logging.info("Saving results in HFNAMD format...")
     bot = bmin - bmin_stored
     top = bmax - bmin + 1
+
+    # sccisor operation
+    if scissor:
+        bot_scissor = bot + scissor.scissor_bmin - 1
+        if bot_scissor >= top:
+            raise ValueError("Scissor bmin is out of the requested band range.")
+        eigenvalues[:, bot_scissor:top] += scissor.scissor_shift
+    
     np.savetxt(os.path.join(out_dir, 'EIGTXT'), 
                eigenvalues[:, bot:top])
     np.savetxt(os.path.join(out_dir, 'NATXT'), 
