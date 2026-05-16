@@ -244,7 +244,7 @@ class ZipDownloadRequest(BaseModel):
     """Request body for batch zip download."""
 
     files: List[ZipDownloadFileItem] = Field(
-        ..., min_length=1, max_length=200
+        ..., min_length=1, max_length=2000
     )
 
 
