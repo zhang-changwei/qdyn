@@ -397,7 +397,17 @@
                     v-for="group in groupFilesByCategory(jobFiles.get(row.uuid)!.files)"
                     :key="group.label"
                   >
-                    <el-divider content-position="left">{{ group.label }}</el-divider>
+                    <el-divider content-position="left">
+                      {{ group.label }}
+                      <el-checkbox
+                        v-if="group.category !== 'image'"
+                        size="small"
+                        class="group-select-checkbox"
+                        :model-value="isGroupAllSelected(row.uuid, group.files)"
+                        @update:model-value="toggleGroupSelection(row.uuid, group.files)"
+                        @click.stop
+                      />
+                    </el-divider>
 
                     <!-- Images: inline preview grid with download -->
                     <div v-if="group.category === 'image'" class="images-grid">
@@ -406,6 +416,12 @@
                         :key="file.name"
                         class="image-card"
                       >
+                        <el-checkbox
+                          class="image-select-checkbox"
+                          :model-value="isFileSelected(row.uuid, file.name)"
+                          @update:model-value="toggleFileSelection(row.uuid, file.name)"
+                          @click.stop
+                        />
                         <el-image
                           v-if="imageBlobUrls.get(`${row.uuid}/${file.name}`)"
                           :src="imageBlobUrls.get(`${row.uuid}/${file.name}`)!"
@@ -435,6 +451,14 @@
                       class="files-table"
                       :show-header="false"
                     >
+                      <el-table-column width="40" align="center">
+                        <template #default="{ row: file }">
+                          <el-checkbox
+                            :model-value="isFileSelected(row.uuid, file.name)"
+                            @update:model-value="toggleFileSelection(row.uuid, file.name)"
+                          />
+                        </template>
+                      </el-table-column>
                       <el-table-column prop="name" min-width="200">
                         <template #default="{ row: file }">
                           <div class="file-name-cell">
@@ -508,6 +532,13 @@
                               {{ sd.status }}
                             </el-tag>
                             <span class="subdir-file-count">{{ sd.file_count }} files</span>
+                            <el-checkbox
+                              size="small"
+                              class="subdir-select-checkbox"
+                              :model-value="isGroupAllSelected(row.uuid, subdirFiles.get(`${row.uuid}/${sd.name}`)?.files ?? [], sd.name)"
+                              @update:model-value="toggleGroupSelection(row.uuid, subdirFiles.get(`${row.uuid}/${sd.name}`)?.files ?? [], sd.name)"
+                              @click.stop
+                            />
                           </div>
                         </template>
 
@@ -522,6 +553,14 @@
                             class="files-table"
                             :show-header="false"
                           >
+                            <el-table-column width="40" align="center">
+                              <template #default="{ row: file }">
+                                <el-checkbox
+                                  :model-value="isFileSelected(row.uuid, file.name, sd.name)"
+                                  @update:model-value="toggleFileSelection(row.uuid, file.name, sd.name)"
+                                />
+                              </template>
+                            </el-table-column>
                             <el-table-column prop="name" min-width="200">
                               <template #default="{ row: file }">
                                 <div class="file-name-cell">
@@ -582,16 +621,35 @@
       <el-button type="primary" @click="goBack">Go Back</el-button>
     </el-empty>
 
+    <!-- Batch download floating bar -->
+    <transition name="slide-up">
+      <div v-if="totalSelectedCount > 0" class="batch-download-bar">
+        <span>{{ totalSelectedCount }} file{{ totalSelectedCount > 1 ? 's' : '' }} selected</span>
+        <div class="batch-download-actions">
+          <el-button size="small" @click="clearSelection">Clear</el-button>
+          <el-button
+            type="primary"
+            size="small"
+            :loading="batchDownloading"
+            @click="handleBatchDownload"
+          >
+            <el-icon><Download /></el-icon>
+            Download as ZIP
+          </el-button>
+        </div>
+      </div>
+    </transition>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document, Download, Edit, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams, downloadZip, type ZipDownloadFileItem } from '@/api/tasks'
 import { getTaskStructurePreview } from '@/api/structures'
 import { getTaskDisplayName } from '@/utils/task-display'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -643,6 +701,92 @@ const progressLoading = ref<Set<string>>(new Set())
 const stopping = ref(false)
 const continuing = ref(false)
 const deleting = ref(false)
+const batchDownloading = ref(false)
+
+// Key: "${jobUuid}" for root files, "${jobUuid}/${subdir}" for subdir files.
+// Value: set of selected filenames in that location.
+const selectedFiles = reactive(new Map<string, Set<string>>())
+
+function getSelectionKey(jobUuid: string, subdir?: string): string {
+  return subdir ? `${jobUuid}/${subdir}` : jobUuid
+}
+
+function isFileSelected(jobUuid: string, filename: string, subdir?: string): boolean {
+  const key = getSelectionKey(jobUuid, subdir)
+  return selectedFiles.get(key)?.has(filename) ?? false
+}
+
+function toggleFileSelection(jobUuid: string, filename: string, subdir?: string): void {
+  const key = getSelectionKey(jobUuid, subdir)
+  if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
+  const set = selectedFiles.get(key)!
+  if (set.has(filename)) {
+    set.delete(filename)
+  } else {
+    set.add(filename)
+  }
+}
+
+function toggleGroupSelection(jobUuid: string, files: { name: string }[], subdir?: string): void {
+  const key = getSelectionKey(jobUuid, subdir)
+  if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
+  const set = selectedFiles.get(key)!
+  const allSelected = files.every(file => set.has(file.name))
+  if (allSelected) {
+    for (const file of files) set.delete(file.name)
+  } else {
+    for (const file of files) set.add(file.name)
+  }
+}
+
+function isGroupAllSelected(jobUuid: string, files: { name: string }[], subdir?: string): boolean {
+  const key = getSelectionKey(jobUuid, subdir)
+  const set = selectedFiles.get(key)
+  if (!set || files.length === 0) return false
+  return files.every(file => set.has(file.name))
+}
+
+const totalSelectedCount = computed(() => {
+  let count = 0
+  for (const set of selectedFiles.values()) count += set.size
+  return count
+})
+
+function clearSelection(): void {
+  selectedFiles.clear()
+}
+
+async function handleBatchDownload(): Promise<void> {
+  const items: ZipDownloadFileItem[] = []
+  for (const [key, filenames] of selectedFiles.entries()) {
+    const parts = key.split('/')
+    const jobUuid = parts[0]
+    const subdir = parts.length > 1 ? parts.slice(1).join('/') : undefined
+    for (const filename of filenames) {
+      items.push({ job_uuid: jobUuid, filename, subdir })
+    }
+  }
+  if (items.length === 0) return
+
+  batchDownloading.value = true
+  try {
+    const blob = await downloadZip(taskId.value, items)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qdyn_files_${taskId.value.slice(0, 8)}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success(`Downloaded ${items.length} files`)
+    clearSelection()
+  } catch {
+    ElMessage.error('Failed to download files')
+  } finally {
+    batchDownloading.value = false
+  }
+}
 
 // Polling
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -781,6 +925,7 @@ async function loadTaskData(): Promise<void> {
   filesLoading.value.clear()
   inputParamsLoading.value.clear()
   progressLoading.value.clear()
+  clearSelection()
   expandedRowKeys.value = []
   for (const url of imageBlobUrls.value.values()) {
     URL.revokeObjectURL(url)
@@ -1588,9 +1733,20 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 }
 
 .image-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 300px;
+}
+
+.image-select-checkbox {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+  padding: 2px 4px;
+  background: var(--el-bg-color-overlay);
+  border-radius: var(--radius-sm);
 }
 
 .result-image {
@@ -1620,6 +1776,11 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
 /* Files section in expand row */
 .files-section {
   margin-top: var(--space-2);
+}
+
+.group-select-checkbox {
+  margin-left: var(--space-2);
+  vertical-align: middle;
 }
 
 .files-table {
@@ -1743,7 +1904,44 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   margin-right: var(--space-2);
 }
 
+.subdir-select-checkbox {
+  margin-right: var(--space-2);
+}
+
 .subdir-files-content {
   padding: 0 var(--space-2) var(--space-2);
+}
+
+.batch-download-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px 24px;
+  background: var(--el-bg-color);
+  border-top: 1px solid var(--el-border-color-lighter);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.batch-download-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
 }
 </style>
