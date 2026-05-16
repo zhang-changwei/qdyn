@@ -166,7 +166,7 @@
               <input
                 :ref="setModelFileInputRef(field.path)"
                 type="file"
-                accept=".model,.pt,.pt2,.pth"
+                accept=".model,.pt2"
                 hidden
                 @change="handleModelFileInput(field, $event)"
               />
@@ -176,7 +176,7 @@
                 <el-button type="primary" link>click to upload</el-button>
               </div>
               <div class="model-upload-hint">
-                Supports .model, .pt, .pt2, .pth
+                Supports .model (MACE), .pt2 (NequIP compiled)
               </div>
             </div>
             <!-- Hash display: shown when hash is set -->
@@ -185,7 +185,7 @@
               <el-tag type="success" effect="plain" class="model-hash-tag">
                 {{ (getFieldValue(field.path) as string).slice(0, 16) }}...
               </el-tag>
-              <el-button text type="danger" size="small" @click="setFieldValue(field.path, '')">
+              <el-button text type="danger" size="small" @click="setFieldValue(field.path, ''); delete modelUploadFileNames[field.path]">
                 Clear
               </el-button>
             </div>
@@ -384,7 +384,7 @@
                   <input
                     :ref="setModelFileInputRef(field.path)"
                     type="file"
-                    accept=".model,.pt,.pt2,.pth"
+                    accept=".model,.pt2"
                     hidden
                     @change="handleModelFileInput(field, $event)"
                   />
@@ -394,15 +394,15 @@
                     <el-button type="primary" link>click to upload</el-button>
                   </div>
                   <div class="model-upload-hint">
-                    Supports .model, .pt, .pt2, .pth
+                    Supports .model (MACE), .pt2 (NequIP compiled)
                   </div>
                 </div>
                 <div v-else class="model-hash-display">
                   <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
                   <el-tag type="success" effect="plain" class="model-hash-tag">
-                    {{ (getFieldValue(field.path) as string).slice(0, 16) }}...
+                    {{ modelUploadFileNames[field.path] || (getFieldValue(field.path) as string).slice(0, 16) + '...' }}
                   </el-tag>
-                  <el-button text type="danger" size="small" @click="setFieldValue(field.path, '')">
+                  <el-button text type="danger" size="small" @click="setFieldValue(field.path, ''); delete modelUploadFileNames[field.path]">
                     Clear
                   </el-button>
                 </div>
@@ -879,7 +879,7 @@ function buildFieldDescriptors(
     // model_hash upload area needs more width for the dropzone
     const leafKey = fullPath.split('.').pop() ?? ''
     if (leafKey === 'model_hash') {
-      colSpan = 16
+      colSpan = 24
     }
 
     // Friendly title override for model_hash
@@ -963,6 +963,7 @@ const logInputTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // --- Model upload state ---
 const modelUploadProgress = reactive<Record<string, number>>({})
 const modelUploadDragover = reactive<Record<string, boolean>>({})
+const modelUploadFileNames = reactive<Record<string, string>>({})
 const modelFileInputs = new Map<string, HTMLInputElement>()
 
 function setModelFileInputRef(path: string) {
@@ -991,6 +992,7 @@ async function handleModelUpload(field: FieldDescriptor, file: File): Promise<vo
       modelUploadProgress[field.path] = pct
     })
     setFieldValue(field.path, result.hash)
+    modelUploadFileNames[field.path] = file.name
     ElMessage.success('Model uploaded successfully')
   } catch {
     ElMessage.error('Model upload failed')
