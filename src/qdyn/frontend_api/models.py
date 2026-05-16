@@ -232,6 +232,22 @@ class JobFileItem(BaseModel):
     category: str  # One of: input, output, data, image
 
 
+class ZipDownloadFileItem(BaseModel):
+    """A single file to include in a zip download."""
+
+    job_uuid: str
+    filename: str
+    subdir: str | None = None
+
+
+class ZipDownloadRequest(BaseModel):
+    """Request body for batch zip download."""
+
+    files: List[ZipDownloadFileItem] = Field(
+        ..., min_length=1, max_length=200
+    )
+
+
 class SubdirInfo(BaseModel):
     """Metadata for a subdirectory in a job's run directory.
 

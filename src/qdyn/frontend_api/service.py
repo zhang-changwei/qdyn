@@ -7,8 +7,10 @@ All functions that need MainWorkflow access receive it via dependency
 injection (manager_getter) to avoid circular imports with app.py.
 """
 
+import io
 import json
 import logging
+import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ from .models import (
     JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusItem,
+    ZipDownloadFileItem,
     MDAttemptItem,
     MDReferenceLines,
     MDSeriesData,
@@ -858,16 +861,22 @@ _ALLOWED_SUBDIR_PREFIXES = ("scf_", "nvt_attempt_")
 
 # Large file warning threshold (exposed in file listing for frontend display)
 _LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
+_ZIP_MAX_TOTAL_SIZE = 200 * 1024 * 1024  # 200 MB
 
 # File category classification
-_INPUT_FILENAMES = {"INCAR", "KPOINTS", "POSCAR", "POTCAR"}
+_INPUT_FILENAMES = {
+    "INCAR", "KPOINTS", "POSCAR", "POTCAR",
+    "nequip_in.vasp", "mace_in.vasp",
+}
 _OUTPUT_FILENAMES = {
     "CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml",
     "EIGENVAL", "DOSCAR", "PROCAR", "XDATCAR",
     "CHG", "CHGCAR", "WAVECAR", "IBZKPT", "PCDAT",
     "REPORT", "ELFCAR", "LOCPOT", "AECCAR0", "AECCAR2",
+    "nequip_out.vasp", "mace_out.vasp", "qdyn.extxyz",
 }
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
+_LOG_SUFFIXES = {".log"}
 
 
 def _classify_file(name: str) -> str:
@@ -881,6 +890,8 @@ def _classify_file(name: str) -> str:
         return "output"
     if suffix in _IMAGE_EXTENSIONS:
         return "image"
+    if suffix in _LOG_SUFFIXES:
+        return "output"
     # Default: data (logs, .dat, .txt, and everything else)
     return "data"
 
@@ -1374,6 +1385,69 @@ def serve_subdir_file(
     # Remote access: download bytes
     data = access.download_subdir_file(subdir, filename)
     return data, content_type
+
+
+def build_download_zip(
+    task_id: str,
+    files: list[ZipDownloadFileItem],
+    manager: MainWorkflow,
+) -> bytes:
+    """Build a zip archive containing selected job files.
+
+    Each file is placed under ``{short_uuid}/{subdir/}{filename}``.
+
+    Raises:
+        ValueError: If a filename or subdirectory is invalid or blacklisted.
+        FileNotFoundError: If a run directory or file does not exist.
+        OverflowError: If total uncompressed size exceeds the limit.
+    """
+    buf = io.BytesIO()
+    total_size = 0
+    pool = manager.get_task_pool(task_id)
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in files:
+            filename = item.filename
+            if not filename or "/" in filename or "\\" in filename or ".." in filename:
+                raise ValueError(f"Invalid filename: {filename}")
+            if _is_blacklisted(filename):
+                raise ValueError(f"File type not allowed: {filename}")
+
+            access = pool.build_run_dir_access(item.job_uuid)
+            if access is None:
+                raise FileNotFoundError(
+                    f"Run directory not available for job {item.job_uuid}"
+                )
+
+            short_uuid = item.job_uuid[:8]
+            if item.subdir:
+                subdir = item.subdir
+                if "/" in subdir or "\\" in subdir or ".." in subdir:
+                    raise ValueError(f"Invalid subdir: {subdir}")
+                if not _is_allowed_subdir(subdir):
+                    raise ValueError(f"Subdirectory not allowed: {subdir}")
+                if not access.subdir_file_exists(subdir, filename):
+                    raise FileNotFoundError(
+                        f"File not found: {subdir}/{filename}"
+                    )
+                data = access.download_subdir_file(subdir, filename)
+                zip_path = f"{short_uuid}/{subdir}/{filename}"
+            else:
+                if not access.root_file_exists(filename):
+                    raise FileNotFoundError(f"File not found: {filename}")
+                data = access.download_root_file(filename)
+                zip_path = f"{short_uuid}/{filename}"
+
+            total_size += len(data)
+            if total_size > _ZIP_MAX_TOTAL_SIZE:
+                limit_mb = _ZIP_MAX_TOTAL_SIZE // (1024 * 1024)
+                raise OverflowError(
+                    f"Total download size exceeds {limit_mb} MB limit"
+                )
+
+            zf.writestr(zip_path, data)
+
+    return buf.getvalue()
 
 
 # -----------------------------------------------------------------------------
