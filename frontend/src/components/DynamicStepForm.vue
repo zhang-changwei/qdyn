@@ -150,6 +150,54 @@
             />
           </el-select>
 
+          <!-- model file upload (when model_hash field is visible & use_pretrained_model=false) -->
+          <div v-else-if="isModelHashField(field)" class="model-upload-field">
+            <!-- Upload area: shown when no hash is set -->
+            <div
+              v-if="!getFieldValue(field.path)"
+              class="model-upload-dropzone"
+              :class="{ 'is-dragover': modelUploadDragover[field.path] }"
+              @dragenter.prevent="modelUploadDragover[field.path] = true"
+              @dragover.prevent="modelUploadDragover[field.path] = true"
+              @dragleave.prevent="modelUploadDragover[field.path] = false"
+              @drop.prevent="handleModelDrop(field, $event)"
+              @click="triggerModelFileInput(field.path)"
+            >
+              <input
+                :ref="setModelFileInputRef(field.path)"
+                type="file"
+                accept=".model,.pt,.pt2,.pth"
+                hidden
+                @change="handleModelFileInput(field, $event)"
+              />
+              <el-icon class="model-upload-icon"><Upload /></el-icon>
+              <div class="model-upload-text">
+                <span>Drop model file here or </span>
+                <el-button type="primary" link>click to upload</el-button>
+              </div>
+              <div class="model-upload-hint">
+                Supports .model, .pt, .pt2, .pth
+              </div>
+            </div>
+            <!-- Hash display: shown when hash is set -->
+            <div v-else class="model-hash-display">
+              <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
+              <el-tag type="success" effect="plain" class="model-hash-tag">
+                {{ (getFieldValue(field.path) as string).slice(0, 16) }}...
+              </el-tag>
+              <el-button text type="danger" size="small" @click="setFieldValue(field.path, '')">
+                Clear
+              </el-button>
+            </div>
+            <!-- Upload progress bar -->
+            <el-progress
+              v-if="modelUploadProgress[field.path] != null && modelUploadProgress[field.path] < 100"
+              :percentage="modelUploadProgress[field.path]"
+              :stroke-width="4"
+              style="margin-top: 4px;"
+            />
+          </div>
+
           <!-- boolean switch -->
           <el-switch
             v-else-if="field.resolvedType === 'boolean'"
@@ -321,6 +369,51 @@
                 @update:model-value="setFieldValue(field.path, $event || undefined)"
               />
 
+              <!-- model file upload (advanced section) — must precede textarea to avoid string match -->
+              <div v-else-if="isModelHashField(field)" class="model-upload-field">
+                <div
+                  v-if="!getFieldValue(field.path)"
+                  class="model-upload-dropzone"
+                  :class="{ 'is-dragover': modelUploadDragover[field.path] }"
+                  @dragenter.prevent="modelUploadDragover[field.path] = true"
+                  @dragover.prevent="modelUploadDragover[field.path] = true"
+                  @dragleave.prevent="modelUploadDragover[field.path] = false"
+                  @drop.prevent="handleModelDrop(field, $event)"
+                  @click="triggerModelFileInput(field.path)"
+                >
+                  <input
+                    :ref="setModelFileInputRef(field.path)"
+                    type="file"
+                    accept=".model,.pt,.pt2,.pth"
+                    hidden
+                    @change="handleModelFileInput(field, $event)"
+                  />
+                  <el-icon class="model-upload-icon"><Upload /></el-icon>
+                  <div class="model-upload-text">
+                    <span>Drop model file here or </span>
+                    <el-button type="primary" link>click to upload</el-button>
+                  </div>
+                  <div class="model-upload-hint">
+                    Supports .model, .pt, .pt2, .pth
+                  </div>
+                </div>
+                <div v-else class="model-hash-display">
+                  <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
+                  <el-tag type="success" effect="plain" class="model-hash-tag">
+                    {{ (getFieldValue(field.path) as string).slice(0, 16) }}...
+                  </el-tag>
+                  <el-button text type="danger" size="small" @click="setFieldValue(field.path, '')">
+                    Clear
+                  </el-button>
+                </div>
+                <el-progress
+                  v-if="modelUploadProgress[field.path] != null && modelUploadProgress[field.path] < 100"
+                  :percentage="modelUploadProgress[field.path]"
+                  :stroke-width="4"
+                  style="margin-top: 4px;"
+                />
+              </div>
+
               <!-- Advanced textarea for string fields -->
               <el-input
                 v-else-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"
@@ -410,7 +503,9 @@
 
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
+import { QuestionFilled, Upload, SuccessFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { uploadModel } from '@/api/tasks'
 import {
   resolveLocalRef,
   normalizeNullableSchema,
@@ -825,6 +920,17 @@ function isFieldVisible(field: FieldDescriptor): boolean {
     }
   }
 
+  // model_name vs model_hash mutual exclusion based on use_pretrained_model
+  const fieldKey = field.path.split('.').pop() ?? ''
+  if (fieldKey === 'model_name' || fieldKey === 'model_hash') {
+    const parentPath = field.path.split('.').slice(0, -1).join('.')
+    const usePretrained = parentPath
+      ? getFieldValue(`${parentPath}.use_pretrained_model`)
+      : getFieldValue('use_pretrained_model')
+    if (fieldKey === 'model_name' && usePretrained === false) return false
+    if (fieldKey === 'model_hash' && usePretrained !== false) return false
+  }
+
   return true
 }
 
@@ -833,6 +939,60 @@ const numberDrafts = reactive<Record<string, string>>({})
 const numberEditing = reactive<Record<string, boolean>>({})
 const invalidLogInputs = reactive<Record<string, boolean>>({})
 const logInputTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+// --- Model upload state ---
+const modelUploadProgress = reactive<Record<string, number>>({})
+const modelUploadDragover = reactive<Record<string, boolean>>({})
+const modelFileInputs = new Map<string, HTMLInputElement>()
+
+function setModelFileInputRef(path: string) {
+  return (el: unknown) => {
+    if (el instanceof HTMLInputElement) {
+      modelFileInputs.set(path, el)
+    } else {
+      modelFileInputs.delete(path)
+    }
+  }
+}
+
+function triggerModelFileInput(path: string): void {
+  modelFileInputs.get(path)?.click()
+}
+
+function isModelHashField(field: FieldDescriptor): boolean {
+  return field.path.split('.').pop() === 'model_hash'
+}
+
+async function handleModelUpload(field: FieldDescriptor, file: File): Promise<void> {
+  if (modelUploadProgress[field.path] != null) return
+  modelUploadProgress[field.path] = 0
+  try {
+    const result = await uploadModel(file, (pct) => {
+      modelUploadProgress[field.path] = pct
+    })
+    setFieldValue(field.path, result.hash)
+    ElMessage.success('Model uploaded successfully')
+  } catch {
+    ElMessage.error('Model upload failed')
+  } finally {
+    delete modelUploadProgress[field.path]
+  }
+}
+
+function handleModelDrop(field: FieldDescriptor, event: DragEvent): void {
+  modelUploadDragover[field.path] = false
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) return
+  handleModelUpload(field, files[0])
+}
+
+function handleModelFileInput(field: FieldDescriptor, event: Event): void {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  if (!files || files.length === 0) return
+  handleModelUpload(field, files[0])
+  target.value = '' // reset so same file can be re-selected
+}
 
 watch(
   [() => props.modelValue, allFields],
@@ -1297,5 +1457,69 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 .log-step-input--invalid {
   border-color: var(--danger-fg);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger-fg) 30%, transparent);
+}
+
+/* Model upload dropzone */
+.model-upload-field {
+  width: 100%;
+}
+
+.model-upload-dropzone {
+  border: 2px dashed var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 20px 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--dur-base) var(--ease-standard),
+              background-color var(--dur-base) var(--ease-standard);
+  background-color: var(--bg-surface);
+}
+
+.model-upload-dropzone:hover {
+  border-color: var(--brand-primary);
+  background-color: var(--bg-surface-alt);
+}
+
+.model-upload-dropzone.is-dragover {
+  border-color: var(--brand-primary);
+  background-color: var(--brand-primary-soft);
+}
+
+.model-upload-icon {
+  font-size: 32px;
+  color: var(--fg-placeholder);
+  margin-bottom: 4px;
+}
+
+.model-upload-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  color: var(--fg-tertiary);
+  font-size: var(--fs-13);
+}
+
+.model-upload-hint {
+  font-size: var(--fs-12);
+  color: var(--fg-placeholder);
+  margin-top: 2px;
+}
+
+.model-hash-display {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-hash-icon {
+  font-size: 18px;
+  color: var(--success-fg);
+  flex-shrink: 0;
+}
+
+.model-hash-tag {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
 }
 </style>
