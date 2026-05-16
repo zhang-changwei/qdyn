@@ -861,7 +861,7 @@ _ALLOWED_SUBDIR_PREFIXES = ("scf_", "nvt_attempt_")
 
 # Large file warning threshold (exposed in file listing for frontend display)
 _LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
-_ZIP_MAX_TOTAL_SIZE = 200 * 1024 * 1024  # 200 MB
+_ZIP_MAX_TOTAL_SIZE = 1024 * 1024 * 1024  # 1 GB
 
 # File category classification
 _INPUT_FILENAMES = {

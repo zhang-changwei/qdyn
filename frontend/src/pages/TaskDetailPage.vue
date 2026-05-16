@@ -623,14 +623,23 @@
 
     <!-- Batch download floating bar -->
     <transition name="slide-up">
-      <div v-if="totalSelectedCount > 0" class="batch-download-bar">
-        <span>{{ totalSelectedCount }} file{{ totalSelectedCount > 1 ? 's' : '' }} selected</span>
+      <div v-if="totalSelectedCount > 0 || batchDownloading" class="batch-download-bar">
+        <span v-if="batchDownloading && downloadProgress < 0">
+          Preparing archive...
+        </span>
+        <span v-else-if="batchDownloading && downloadProgress >= 0">
+          Downloading... {{ downloadProgress }}%
+        </span>
+        <span v-else>
+          {{ totalSelectedCount }} file{{ totalSelectedCount > 1 ? 's' : '' }} selected
+        </span>
         <div class="batch-download-actions">
-          <el-button size="small" @click="clearSelection">Clear</el-button>
+          <el-button size="small" :disabled="batchDownloading" @click="clearSelection">Clear</el-button>
           <el-button
             type="primary"
             size="small"
             :loading="batchDownloading"
+            :disabled="batchDownloading"
             @click="handleBatchDownload"
           >
             <el-icon><Download /></el-icon>
@@ -702,6 +711,7 @@ const stopping = ref(false)
 const continuing = ref(false)
 const deleting = ref(false)
 const batchDownloading = ref(false)
+const downloadProgress = ref(-1) // -1 = preparing, 0..100 = transfer progress
 
 // Key: "${jobUuid}" for root files, "${jobUuid}/${subdir}" for subdir files.
 // Value: set of selected filenames in that location.
@@ -769,8 +779,15 @@ async function handleBatchDownload(): Promise<void> {
   if (items.length === 0) return
 
   batchDownloading.value = true
+  downloadProgress.value = -1
   try {
-    const blob = await downloadZip(taskId.value, items)
+    const blob = await downloadZip(taskId.value, items, (event) => {
+      if (event.total && event.total > 0) {
+        downloadProgress.value = Math.round((event.loaded / event.total) * 100)
+      } else {
+        downloadProgress.value = 0
+      }
+    })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -785,6 +802,7 @@ async function handleBatchDownload(): Promise<void> {
     ElMessage.error('Failed to download files')
   } finally {
     batchDownloading.value = false
+    downloadProgress.value = -1
   }
 }
 

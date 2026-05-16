@@ -231,11 +231,12 @@ export interface ZipDownloadFileItem {
 export async function downloadZip(
   taskId: string,
   files: ZipDownloadFileItem[],
+  onDownloadProgress?: (event: { loaded: number; total?: number }) => void,
 ): Promise<Blob> {
   const response = await http.post(
     `/frontend/tasks/${taskId}/download-zip`,
     { files },
-    { responseType: 'blob' },
+    { responseType: 'blob', onDownloadProgress },
   )
   return response.data
 }
