@@ -11,6 +11,7 @@
           <template #label>
             <span>
               {{ field.schema.title }}
+              <span v-if="field.schema._required" class="required-field-mark"> *</span>
               <el-tooltip
                 v-if="field.schema.description"
                 :content="field.schema.description"
@@ -61,6 +62,62 @@
             @update:model-value="updateCsvDraft(field.path, $event)"
             @change="commitCsvStrings(field.path, field.nullable)"
           />
+
+          <!-- paired-array-table widget -->
+          <div v-else-if="field.widget === 'paired-array-table'" class="paired-array-table">
+            <div class="paired-array-header">
+              <span class="paired-col-idx">#</span>
+              <span class="paired-col-enum">Algorithm</span>
+              <span class="paired-col-int">Steps</span>
+              <span class="paired-col-action"></span>
+            </div>
+            <div
+              v-for="(_, rowIdx) in (getFieldValue(field.path) as unknown[] ?? [])"
+              :key="rowIdx"
+              class="paired-array-row"
+            >
+              <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+              <el-select
+                class="paired-col-enum"
+                :model-value="getPairedEnumValue(field, rowIdx)"
+                @update:model-value="setPairedEnumValue(field, rowIdx, $event)"
+              >
+                <el-option
+                  v-for="opt in (field.schema._enumOptions as string[])"
+                  :key="opt"
+                  :label="opt"
+                  :value="opt"
+                />
+              </el-select>
+              <el-input-number
+                class="paired-col-int"
+                :model-value="getPairedIntValue(field, rowIdx)"
+                :min="(field.schema._intMin as number) ?? 1"
+                :step="(field.schema._intStep as number) ?? 100"
+                controls-position="right"
+                @update:model-value="setPairedIntValue(field, rowIdx, $event)"
+              />
+              <el-button
+                class="paired-col-action"
+                text
+                type="danger"
+                size="small"
+                :disabled="((getFieldValue(field.path) as unknown[] | undefined)?.length ?? 0) <= 1"
+                @click="removePairedRow(field, rowIdx)"
+              >
+                ×
+              </el-button>
+            </div>
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              style="margin-top: 4px;"
+              @click="addPairedRow(field)"
+            >
+              + Add round
+            </el-button>
+          </div>
 
           <!-- nullable-object-toggle widget -->
           <el-switch
@@ -163,6 +220,7 @@
               <template #label>
                 <span>
                   {{ field.schema.title }}
+                  <span v-if="field.schema._required" class="required-field-mark"> *</span>
                   <el-tooltip
                     v-if="field.schema.description"
                     :content="field.schema.description"
@@ -191,6 +249,62 @@
                 @update:model-value="updateCsvDraft(field.path, $event)"
                 @change="commitCsvStrings(field.path, field.nullable)"
               />
+
+              <!-- paired-array-table widget (advanced) -->
+              <div v-else-if="field.widget === 'paired-array-table'" class="paired-array-table">
+                <div class="paired-array-header">
+                  <span class="paired-col-idx">#</span>
+                  <span class="paired-col-enum">Algorithm</span>
+                  <span class="paired-col-int">Steps</span>
+                  <span class="paired-col-action"></span>
+                </div>
+                <div
+                  v-for="(_, rowIdx) in (getFieldValue(field.path) as unknown[] ?? [])"
+                  :key="rowIdx"
+                  class="paired-array-row"
+                >
+                  <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+                  <el-select
+                    class="paired-col-enum"
+                    :model-value="getPairedEnumValue(field, rowIdx)"
+                    @update:model-value="setPairedEnumValue(field, rowIdx, $event)"
+                  >
+                    <el-option
+                      v-for="opt in (field.schema._enumOptions as string[])"
+                      :key="opt"
+                      :label="opt"
+                      :value="opt"
+                    />
+                  </el-select>
+                  <el-input-number
+                    class="paired-col-int"
+                    :model-value="getPairedIntValue(field, rowIdx)"
+                    :min="(field.schema._intMin as number) ?? 1"
+                    :step="(field.schema._intStep as number) ?? 100"
+                    controls-position="right"
+                    @update:model-value="setPairedIntValue(field, rowIdx, $event)"
+                  />
+                  <el-button
+                    class="paired-col-action"
+                    text
+                    type="danger"
+                    size="small"
+                    :disabled="((getFieldValue(field.path) as unknown[] | undefined)?.length ?? 0) <= 1"
+                    @click="removePairedRow(field, rowIdx)"
+                  >
+                    ×
+                  </el-button>
+                </div>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  style="margin-top: 4px;"
+                  @click="addPairedRow(field)"
+                >
+                  + Add round
+                </el-button>
+              </div>
 
               <!-- nullable-object-toggle widget (advanced) -->
               <el-switch
@@ -320,7 +434,7 @@ interface FieldDescriptor {
   key: string
   /** Dot-separated path for nested fields, e.g. "adv.ikpt" */
   path: string
-  /** Original property schema (may contain anyOf, $ref, etc.) */
+  /** Original property schema (may contain anyOf, $ref, _paired* UI metadata, etc.) */
   schema: JsonSchemaObject
   /** Resolved schema after normalizing anyOf and resolving $ref */
   resolvedSchema: JsonSchemaObject
@@ -430,14 +544,111 @@ function buildFieldDescriptors(
   modelValue: Record<string, unknown> = {},
 ): FieldDescriptor[] {
   const result: FieldDescriptor[] = []
+  const pairedArrays = new Map<string, {
+    enumKey: string
+    intKey: string
+    enumProp: JsonSchemaObject
+    intProp: JsonSchemaObject
+  }>()
+  const pairedSkip = new Set<string>()
+  const arrayFields: { key: string; prop: JsonSchemaObject }[] = []
+
+  for (const [key, prop] of Object.entries(properties)) {
+    if (prop.hidden || 'const' in prop) continue
+    const resolved = normalizeNullableSchema(prop).schema
+    if (resolved.type === 'array' && resolved.items && Array.isArray(resolved.default)) {
+      arrayFields.push({ key, prop: resolved })
+    }
+  }
+
+  for (let i = 0; i < arrayFields.length; i++) {
+    for (let j = i + 1; j < arrayFields.length; j++) {
+      const a = arrayFields[i]
+      const b = arrayFields[j]
+      const aDefault = a.prop.default as unknown[]
+      const bDefault = b.prop.default as unknown[]
+
+      if (aDefault.length !== bDefault.length) continue
+      if (pairedArrays.has(a.key) || pairedArrays.has(b.key)) continue
+      if (pairedSkip.has(a.key) || pairedSkip.has(b.key)) continue
+
+      let enumField: typeof a | undefined
+      let intField: typeof a | undefined
+      if (
+        a.prop.items?.enum &&
+        (b.prop.items?.type === 'integer' || b.prop.items?.type === 'number')
+      ) {
+        enumField = a
+        intField = b
+      } else if (
+        b.prop.items?.enum &&
+        (a.prop.items?.type === 'integer' || a.prop.items?.type === 'number')
+      ) {
+        enumField = b
+        intField = a
+      }
+
+      if (enumField && intField) {
+        pairedArrays.set(enumField.key, {
+          enumKey: enumField.key,
+          intKey: intField.key,
+          enumProp: enumField.prop,
+          intProp: intField.prop,
+        })
+        pairedSkip.add(intField.key)
+      }
+    }
+  }
 
   for (const [key, prop] of Object.entries(properties)) {
     // Skip hidden fields
     if (prop.hidden) continue
     // Skip const fields (e.g. log_every with const: 1)
     if ('const' in prop) continue
+    // Skip the numeric partner of a paired array; it is rendered with the enum partner.
+    if (pairedSkip.has(key)) continue
 
     const fullPath = pathPrefix ? `${pathPrefix}.${key}` : key
+
+    if (pairedArrays.has(key)) {
+      const pair = pairedArrays.get(key)!
+      const enumProp = properties[pair.enumKey]
+      const intProp = properties[pair.intKey]
+      const enumPath = pathPrefix ? `${pathPrefix}.${pair.enumKey}` : pair.enumKey
+      const intPath = pathPrefix ? `${pathPrefix}.${pair.intKey}` : pair.intKey
+      const enumOptions = (pair.enumProp.items?.enum ?? []).map(String)
+      const exclusiveMinimum = pair.intProp.items?.exclusiveMinimum
+      const minimum = pair.intProp.items?.minimum
+      const intMin = typeof exclusiveMinimum === 'number'
+        ? exclusiveMinimum + 1
+        : typeof minimum === 'number'
+          ? minimum
+          : 1
+      const enumDefaults = pair.enumProp.default
+      const intDefaults = pair.intProp.default
+
+      result.push({
+        key: `${enumPath}__${intPath}`,
+        path: enumPath,
+        schema: {
+          title: intProp.title ?? enumProp.title ?? 'Rounds',
+          description: intProp.description ?? enumProp.description,
+          _pairedIntPath: intPath,
+          _enumOptions: enumOptions,
+          _intStep: intProp.step ?? 100,
+          _intMin: intMin,
+          _enumDefault: Array.isArray(enumDefaults) ? enumDefaults[0] : enumOptions[0],
+          _intDefault: Array.isArray(intDefaults) ? intDefaults[0] : 500,
+        },
+        resolvedSchema: { type: 'array' },
+        resolvedType: 'array',
+        widget: 'paired-array-table',
+        nullable: false,
+        colSpan: 24,
+        group: enumProp.group ?? intProp.group,
+      })
+      continue
+    }
 
     // Check if this is a $ref to an object — expand its children
     if (prop.$ref) {
@@ -494,10 +705,16 @@ function buildFieldDescriptors(
     if (normalized.$ref && !normalized.type && !normalized.properties) {
       const refSchema = resolveLocalRef(rootSchema, normalized.$ref)
       if (refSchema?.properties) {
+        const toggleTitle = `Enable ${(prop.title ?? refSchema.title ?? key).replace(/InputT?$/i, '')}`
         result.push({
           key: fullPath,
           path: fullPath,
-          schema: { ...prop, title: prop.title ?? refSchema.title, type: 'boolean' },
+          schema: {
+            ...prop,
+            title: toggleTitle,
+            description: prop.description ?? refSchema.description,
+            type: 'boolean',
+          },
           resolvedSchema: { type: 'boolean' },
           resolvedType: 'boolean',
           widget: 'nullable-object-toggle',
@@ -507,9 +724,12 @@ function buildFieldDescriptors(
         })
 
         const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath, modelValue)
-        if (group) {
-          for (const f of nested) {
-            if (!f.group) f.group = group
+        const requiredKeys = new Set(refSchema.required ?? [])
+        for (const f of nested) {
+          if (group && !f.group) f.group = group
+          const fieldKey = f.path.split('.').pop() ?? ''
+          if (requiredKeys.has(fieldKey)) {
+            f.schema = { ...f.schema, _required: true }
           }
         }
         result.push(...nested)
@@ -532,6 +752,8 @@ function buildFieldDescriptors(
     let colSpan = 8
     if (widget === 'comma-separated-integers' || widget === 'comma-separated-strings') {
       colSpan = 16
+    } else if (widget === 'paired-array-table') {
+      colSpan = 24
     } else if (widget === 'textarea') {
       colSpan = 24
     }
@@ -652,18 +874,95 @@ function getFieldValue(path: string): unknown {
 }
 
 function setFieldValue(path: string, value: unknown): void {
-  // Deep-clone modelValue to avoid direct mutation
+  emitFieldValues([{ path, value }])
+}
+
+function emitFieldValues(updates: { path: string; value: unknown }[]): void {
   const updated = JSON.parse(JSON.stringify(props.modelValue))
+  for (const { path, value } of updates) {
+    setNestedFieldValue(updated, path, value)
+  }
+  emit('update:modelValue', updated)
+}
+
+function setNestedFieldValue(
+  model: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): void {
   const parts = path.split('.')
-  let obj = updated
+  let obj = model
   for (let i = 0; i < parts.length - 1; i++) {
     if (obj[parts[i]] == null || typeof obj[parts[i]] !== 'object') {
       obj[parts[i]] = {}
     }
-    obj = obj[parts[i]]
+    obj = obj[parts[i]] as Record<string, unknown>
   }
   obj[parts[parts.length - 1]] = value
-  emit('update:modelValue', updated)
+}
+
+// --- Paired array helpers ---
+
+function getArrayFieldValue(path: string): unknown[] {
+  const value = getFieldValue(path)
+  return Array.isArray(value) ? value : []
+}
+
+function getPairedIntPath(field: FieldDescriptor): string {
+  return String(field.schema._pairedIntPath ?? '')
+}
+
+function getPairedEnumValue(field: FieldDescriptor, rowIdx: number): string {
+  return String(getArrayFieldValue(field.path)[rowIdx] ?? '')
+}
+
+function getPairedIntValue(field: FieldDescriptor, rowIdx: number): number {
+  const value = getArrayFieldValue(getPairedIntPath(field))[rowIdx]
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function setPairedEnumValue(field: FieldDescriptor, rowIdx: number, value: unknown): void {
+  const enumArr = [...getArrayFieldValue(field.path)]
+  enumArr[rowIdx] = String(value)
+  setFieldValue(field.path, enumArr)
+}
+
+function setPairedIntValue(field: FieldDescriptor, rowIdx: number, value: unknown): void {
+  const intArr = [...getArrayFieldValue(getPairedIntPath(field))]
+  const parsed = Number(value ?? 0)
+  intArr[rowIdx] = Number.isFinite(parsed) ? parsed : 0
+  setFieldValue(getPairedIntPath(field), intArr)
+}
+
+function addPairedRow(field: FieldDescriptor): void {
+  const intPath = getPairedIntPath(field)
+  const enumArr = [...getArrayFieldValue(field.path)]
+  const intArr = [...getArrayFieldValue(intPath)]
+
+  enumArr.push(field.schema._enumDefault ?? '')
+  intArr.push(field.schema._intDefault ?? 500)
+
+  emitFieldValues([
+    { path: field.path, value: enumArr },
+    { path: intPath, value: intArr },
+  ])
+}
+
+function removePairedRow(field: FieldDescriptor, rowIdx: number): void {
+  const intPath = getPairedIntPath(field)
+  const enumArr = [...getArrayFieldValue(field.path)]
+  const intArr = [...getArrayFieldValue(intPath)]
+
+  if (enumArr.length <= 1) return
+
+  enumArr.splice(rowIdx, 1)
+  intArr.splice(rowIdx, 1)
+
+  emitFieldValues([
+    { path: field.path, value: enumArr },
+    { path: intPath, value: intArr },
+  ])
 }
 
 function toggleNullableObject(field: FieldDescriptor, enabled: boolean): void {
@@ -892,6 +1191,10 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   cursor: help;
 }
 
+.required-field-mark {
+  color: var(--el-color-danger);
+}
+
 /* Textarea for Extra INCAR and similar free-text fields */
 :deep(.el-textarea__inner) {
   font-family: var(--font-mono);
@@ -907,6 +1210,45 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 
 .smart-number-input__btn {
   flex: 0 0 auto;
+}
+
+.paired-array-table {
+  width: 100%;
+}
+
+.paired-array-header,
+.paired-array-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.paired-array-header {
+  font-size: 12px;
+  color: var(--fg-secondary, #909399);
+  font-weight: 500;
+}
+
+.paired-col-idx {
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.paired-col-enum {
+  flex: 1;
+  min-width: 120px;
+}
+
+.paired-col-int {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.paired-col-action {
+  width: 28px;
+  flex-shrink: 0;
 }
 
 .log-step-input {
