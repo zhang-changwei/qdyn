@@ -876,10 +876,21 @@ function buildFieldDescriptors(
       colSpan = 24
     }
 
+    // model_hash upload area needs more width for the dropzone
+    const leafKey = fullPath.split('.').pop() ?? ''
+    if (leafKey === 'model_hash') {
+      colSpan = 16
+    }
+
+    // Friendly title override for model_hash
+    const fieldSchema = leafKey === 'model_hash'
+      ? { ...prop, ...normalized, widget, group, title: 'Custom Model' }
+      : { ...prop, ...normalized, widget, group }
+
     result.push({
       key: fullPath,
       path: fullPath,
-      schema: { ...prop, ...normalized, widget, group },
+      schema: fieldSchema,
       resolvedSchema: normalized,
       resolvedType,
       widget,
@@ -924,11 +935,20 @@ function isFieldVisible(field: FieldDescriptor): boolean {
   const fieldKey = field.path.split('.').pop() ?? ''
   if (fieldKey === 'model_name' || fieldKey === 'model_hash') {
     const parentPath = field.path.split('.').slice(0, -1).join('.')
-    const usePretrained = parentPath
+    const raw = parentPath
       ? getFieldValue(`${parentPath}.use_pretrained_model`)
       : getFieldValue('use_pretrained_model')
-    if (fieldKey === 'model_name' && usePretrained === false) return false
-    if (fieldKey === 'model_hash' && usePretrained !== false) return false
+    // If value not yet in modelValue, check the schema default as fallback
+    let usePretrained = raw
+    if (usePretrained === undefined) {
+      const togglePath = parentPath
+        ? `${parentPath}.use_pretrained_model`
+        : 'use_pretrained_model'
+      const toggleField = allFields.value.find(f => f.path === togglePath)
+      usePretrained = toggleField?.schema?.default ?? false
+    }
+    if (fieldKey === 'model_name' && !usePretrained) return false
+    if (fieldKey === 'model_hash' && usePretrained) return false
   }
 
   return true
