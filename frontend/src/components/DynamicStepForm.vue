@@ -686,8 +686,31 @@ function buildFieldDescriptors(
         result.push(...nested)
         continue
       }
-      // If resolveAnyOfDiscriminator returned undefined, fall through to
-      // normalizeNullableSchema which handles simple Optional[T] anyOf
+      // If resolveAnyOfDiscriminator returned undefined, fall through.
+
+      // Handle anyOf with a single $ref that resolves to an enum (e.g. model_name)
+      // Pattern: anyOf: [{$ref: enum_type}, {const: "", type: "string"}]
+      if (!resolvedBranch) {
+        const refBranch = prop.anyOf.find((b: JsonSchemaObject) => b.$ref)
+        if (refBranch) {
+          const resolved = resolveLocalRef(rootSchema, refBranch.$ref!)
+          if (resolved?.enum) {
+            const group = prop.group ?? resolved.group
+            result.push({
+              key: fullPath,
+              path: fullPath,
+              schema: { ...prop, ...resolved, title: prop.title ?? resolved.title, group },
+              resolvedSchema: resolved,
+              resolvedType: resolved.type ?? 'string',
+              widget: undefined,
+              nullable: false,
+              colSpan: 8,
+              group,
+            })
+            continue
+          }
+        }
+      }
     }
 
     // Check if this is an inline object type — expand it
@@ -734,9 +757,6 @@ function buildFieldDescriptors(
         }
         result.push(...nested)
         continue
-      } else if (refSchema?.enum) {
-        normalized = { ...normalized, ...refSchema, title: prop.title ?? refSchema.title }
-        delete (normalized as any).$ref
       }
     }
 
