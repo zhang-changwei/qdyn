@@ -510,6 +510,13 @@
                     <el-divider content-position="left">
                       <el-icon><FolderOpened /></el-icon>
                       {{ sdGroup.label }} ({{ sdGroup.subdirs.length }})
+                      <el-checkbox
+                        size="small"
+                        class="group-select-checkbox"
+                        :model-value="isSdGroupAllSelected(row.uuid, sdGroup.subdirs)"
+                        @update:model-value="toggleSdGroupSelectAll(row.uuid, sdGroup.subdirs)"
+                        @click.stop
+                      />
                     </el-divider>
 
                     <el-collapse class="subdir-collapse" accordion>
@@ -786,6 +793,38 @@ const totalSelectedSize = computed(() => {
 
 function clearSelection(): void {
   selectedFiles.clear()
+}
+
+function isSdGroupAllSelected(jobUuid: string, subdirs: { name: string }[]): boolean {
+  if (subdirs.length === 0) return false
+  return subdirs.every(sd => {
+    const files = subdirFiles.value.get(`${jobUuid}/${sd.name}`)?.files ?? []
+    return files.length > 0 && isGroupAllSelected(jobUuid, files, sd.name)
+  })
+}
+
+async function toggleSdGroupSelectAll(jobUuid: string, subdirs: { name: string }[]): Promise<void> {
+  const allLoaded = subdirs.every(sd => subdirFiles.value.has(`${jobUuid}/${sd.name}`))
+  if (!allLoaded) {
+    await Promise.all(
+      subdirs
+        .filter(sd => !subdirFiles.value.has(`${jobUuid}/${sd.name}`))
+        .map(sd => loadSubdirFiles(jobUuid, sd.name))
+    )
+  }
+  const allSelected = isSdGroupAllSelected(jobUuid, subdirs)
+  for (const sd of subdirs) {
+    const files = subdirFiles.value.get(`${jobUuid}/${sd.name}`)?.files ?? []
+    if (files.length === 0) continue
+    const key = getSelectionKey(jobUuid, sd.name)
+    if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
+    const set = selectedFiles.get(key)!
+    if (allSelected) {
+      for (const f of files) set.delete(f.name)
+    } else {
+      for (const f of files) set.add(f.name)
+    }
+  }
 }
 
 async function toggleSubdirSelectAll(jobUuid: string, subdirName: string): Promise<void> {
