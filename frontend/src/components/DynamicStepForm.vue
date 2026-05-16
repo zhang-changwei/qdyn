@@ -698,7 +698,7 @@ function buildFieldDescriptors(
     }
 
     // Normalize nullable / union schemas
-    const { schema: normalized, nullable } = normalizeNullableSchema(prop)
+    let { schema: normalized, nullable } = normalizeNullableSchema(prop)
 
     const group = prop.group ?? normalized.group
 
@@ -734,6 +734,9 @@ function buildFieldDescriptors(
         }
         result.push(...nested)
         continue
+      } else if (refSchema?.enum) {
+        normalized = { ...normalized, ...refSchema, title: prop.title ?? refSchema.title }
+        delete (normalized as any).$ref
       }
     }
 
