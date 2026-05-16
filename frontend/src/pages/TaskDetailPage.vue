@@ -536,7 +536,7 @@
                               size="small"
                               class="subdir-select-checkbox"
                               :model-value="isGroupAllSelected(row.uuid, subdirFiles.get(`${row.uuid}/${sd.name}`)?.files ?? [], sd.name)"
-                              @update:model-value="toggleGroupSelection(row.uuid, subdirFiles.get(`${row.uuid}/${sd.name}`)?.files ?? [], sd.name)"
+                              @update:model-value="toggleSubdirSelectAll(row.uuid, sd.name)"
                               @click.stop
                             />
                           </div>
@@ -632,6 +632,7 @@
         </span>
         <span v-else>
           {{ totalSelectedCount }} file{{ totalSelectedCount > 1 ? 's' : '' }} selected
+          ({{ formatFileSize(totalSelectedSize) }})
         </span>
         <div class="batch-download-actions">
           <el-button size="small" :disabled="batchDownloading" @click="clearSelection">Clear</el-button>
@@ -762,8 +763,40 @@ const totalSelectedCount = computed(() => {
   return count
 })
 
+const totalSelectedSize = computed(() => {
+  let total = 0
+  for (const [key, filenames] of selectedFiles.entries()) {
+    const parts = key.split('/')
+    const jobUuid = parts[0]
+    const subdir = parts.length > 1 ? parts.slice(1).join('/') : undefined
+    if (subdir) {
+      const files = subdirFiles.value.get(key)?.files ?? []
+      for (const f of files) {
+        if (filenames.has(f.name)) total += f.size
+      }
+    } else {
+      const files = jobFiles.value.get(jobUuid)?.files ?? []
+      for (const f of files) {
+        if (filenames.has(f.name)) total += f.size
+      }
+    }
+  }
+  return total
+})
+
 function clearSelection(): void {
   selectedFiles.clear()
+}
+
+async function toggleSubdirSelectAll(jobUuid: string, subdirName: string): Promise<void> {
+  const key = `${jobUuid}/${subdirName}`
+  if (!subdirFiles.value.has(key)) {
+    await loadSubdirFiles(jobUuid, subdirName)
+  }
+  const files = subdirFiles.value.get(key)?.files ?? []
+  if (files.length > 0) {
+    toggleGroupSelection(jobUuid, files, subdirName)
+  }
 }
 
 async function handleBatchDownload(): Promise<void> {
