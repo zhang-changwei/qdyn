@@ -145,8 +145,9 @@
             <el-option
               v-for="opt in field.resolvedSchema.enum"
               :key="String(opt)"
-              :label="String(opt)"
+              :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)"
               :value="opt"
+              :disabled="isDisabledEnumOption(opt)"
             />
           </el-select>
 
@@ -183,7 +184,7 @@
             <div v-else class="model-hash-display">
               <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
               <el-tag type="success" effect="plain" class="model-hash-tag">
-                {{ (getFieldValue(field.path) as string).slice(0, 16) }}...
+                {{ modelUploadFileNames[field.path] || (getFieldValue(field.path) as string).slice(0, 16) + '...' }}
               </el-tag>
               <el-button text type="danger" size="small" @click="setFieldValue(field.path, ''); delete modelUploadFileNames[field.path]">
                 Clear
@@ -446,8 +447,9 @@
                 <el-option
                   v-for="opt in field.resolvedSchema.enum"
                   :key="String(opt)"
-                  :label="String(opt)"
+                  :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)"
                   :value="opt"
+                  :disabled="isDisabledEnumOption(opt)"
                 />
               </el-select>
 
@@ -982,6 +984,12 @@ function triggerModelFileInput(path: string): void {
 
 function isModelHashField(field: FieldDescriptor): boolean {
   return field.path.split('.').pop() === 'model_hash'
+}
+
+const DISABLED_ENUM_OPTIONS = new Set(['mace'])
+
+function isDisabledEnumOption(opt: unknown): boolean {
+  return DISABLED_ENUM_OPTIONS.has(String(opt))
 }
 
 async function handleModelUpload(field: FieldDescriptor, file: File): Promise<void> {
