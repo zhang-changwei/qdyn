@@ -1,513 +1,331 @@
 <template>
   <div class="dynamic-step-form">
-    <!-- Regular fields (3-col grid) -->
-    <el-row :gutter="16">
-      <template v-for="field in regularFieldsWithDividers" :key="field.key">
-      <el-col v-if="'divider' in field" :span="24" class="field-group-header">
-        <div class="field-group-label">{{ field.divider }}</div>
-      </el-col>
-      <el-col
-        v-else
-        :span="field.colSpan"
-        :class="{ 'field-group-child': field.schema?._parentTitle }"
-      >
-        <el-form-item>
-          <template #label>
-            <span>
-              {{ field.schema.title }}
-              <span v-if="field.schema._required" class="required-field-mark"> *</span>
-              <el-tooltip
-                v-if="field.schema.description"
-                :content="field.schema.description"
-                placement="top"
-                :show-after="300"
-              >
-                <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
+    <!-- Regular fields (grouped layout) -->
+    <template v-for="item in regularFieldsGrouped" :key="item.key">
+      <!-- Row of ungrouped fields (multi-column grid) -->
+      <el-row v-if="item.type === 'field-row'" :gutter="16">
+        <el-col v-for="rf in item.fields" :key="rf.key" :span="rf.colSpan">
+          <el-form-item>
+            <template #label>
+              <span>
+                {{ rf.schema.title }}
+                <span v-if="rf.schema._required" class="required-field-mark"> *</span>
+                <el-tooltip v-if="rf.schema.description" :content="rf.schema.description" placement="top" :show-after="300">
+                  <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
 
-          <!-- log-step widget: ÷10 / ×10 buttons + free-type scientific notation -->
-          <div v-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
-            <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
-            <input
-              type="text"
-              class="log-step-input"
-              :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
-              :value="formatExp(getFieldValue(field.path))"
-              placeholder="e.g. 1e-6"
-              @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
-            />
-            <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
-          </div>
-
-          <!-- band-input widget (int | str, rendered as text) -->
-          <el-input
-            v-else-if="field.widget === 'band-input'"
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- comma-separated-integers widget -->
-          <el-input
-            v-else-if="field.widget === 'comma-separated-integers'"
-            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="updateCsvDraft(field.path, $event)"
-            @change="commitCsvIntegers(field.path, field.nullable)"
-          />
-
-          <!-- comma-separated-strings widget -->
-          <el-input
-            v-else-if="field.widget === 'comma-separated-strings'"
-            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="updateCsvDraft(field.path, $event)"
-            @change="commitCsvStrings(field.path, field.nullable)"
-          />
-
-          <!-- paired-array-table widget -->
-          <div v-else-if="field.widget === 'paired-array-table'" class="paired-array-table">
-            <div class="paired-array-header">
-              <span class="paired-col-idx">#</span>
-              <span class="paired-col-enum">Algorithm</span>
-              <span class="paired-col-int">Steps</span>
-              <span class="paired-col-action"></span>
+            <!-- log-step -->
+            <div v-if="rf.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+              <el-button size="small" @click="logStep(rf.path, 0.1)">÷10</el-button>
+              <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': invalidLogInputs[rf.path] }" :value="formatExp(getFieldValue(rf.path))" placeholder="e.g. 1e-6" @change="($event: Event) => parseExp(rf.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
+              <el-button size="small" @click="logStep(rf.path, 10)">×10</el-button>
             </div>
-            <div
-              v-for="(_, rowIdx) in (getFieldValue(field.path) as unknown[] ?? [])"
-              :key="rowIdx"
-              class="paired-array-row"
-            >
-              <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
-              <el-select
-                class="paired-col-enum"
-                :model-value="getPairedEnumValue(field, rowIdx)"
-                @update:model-value="setPairedEnumValue(field, rowIdx, $event)"
-              >
-                <el-option
-                  v-for="opt in (field.schema._enumOptions as string[])"
-                  :key="opt"
-                  :label="opt"
-                  :value="opt"
-                />
-              </el-select>
-              <el-input-number
-                class="paired-col-int"
-                :model-value="getPairedIntValue(field, rowIdx)"
-                :min="(field.schema._intMin as number) ?? 1"
-                :step="(field.schema._intStep as number) ?? 100"
-                controls-position="right"
-                @update:model-value="setPairedIntValue(field, rowIdx, $event)"
-              />
-              <el-button
-                class="paired-col-action"
-                text
-                type="danger"
-                size="small"
-                :disabled="((getFieldValue(field.path) as unknown[] | undefined)?.length ?? 0) <= 1"
-                @click="removePairedRow(field, rowIdx)"
-              >
-                ×
-              </el-button>
+            <!-- band-input -->
+            <el-input v-else-if="rf.widget === 'band-input'" :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event)" />
+            <!-- comma-separated-integers -->
+            <el-input v-else-if="rf.widget === 'comma-separated-integers'" :model-value="getCsvDraftValue(rf.path, getFieldValue(rf.path), formatCsvIntegers)" :placeholder="rf.schema.placeholder" @update:model-value="updateCsvDraft(rf.path, $event)" @change="commitCsvIntegers(rf.path, rf.nullable)" />
+            <!-- comma-separated-strings -->
+            <el-input v-else-if="rf.widget === 'comma-separated-strings'" :model-value="getCsvDraftValue(rf.path, getFieldValue(rf.path), formatCsvStrings)" :placeholder="rf.schema.placeholder" @update:model-value="updateCsvDraft(rf.path, $event)" @change="commitCsvStrings(rf.path, rf.nullable)" />
+            <!-- paired-array-table -->
+            <div v-else-if="rf.widget === 'paired-array-table'" class="paired-array-table paired-array-table--bordered">
+              <div class="paired-array-header"><span class="paired-col-idx">#</span><span class="paired-col-enum">Algorithm</span><span class="paired-col-int">Steps</span><span class="paired-col-action"></span></div>
+              <div v-for="(_, rowIdx) in (getFieldValue(rf.path) as unknown[] ?? [])" :key="rowIdx" class="paired-array-row">
+                <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+                <el-select class="paired-col-enum" :model-value="getPairedEnumValue(rf, rowIdx)" @update:model-value="setPairedEnumValue(rf, rowIdx, $event)"><el-option v-for="opt in (rf.schema._enumOptions as string[])" :key="opt" :label="opt" :value="opt" /></el-select>
+                <el-input-number class="paired-col-int" :model-value="getPairedIntValue(rf, rowIdx)" :min="(rf.schema._intMin as number) ?? 1" :step="(rf.schema._intStep as number) ?? 100" controls-position="right" @update:model-value="setPairedIntValue(rf, rowIdx, $event)" />
+                <el-button class="paired-col-action" text type="danger" size="small" :disabled="((getFieldValue(rf.path) as unknown[] | undefined)?.length ?? 0) <= 1" @click="removePairedRow(rf, rowIdx)">×</el-button>
+              </div>
+              <el-button size="small" type="primary" plain style="margin-top: 4px;" @click="addPairedRow(rf)">+ Add round</el-button>
             </div>
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              style="margin-top: 4px;"
-              @click="addPairedRow(field)"
-            >
-              + Add round
-            </el-button>
-          </div>
+            <!-- nullable-object-toggle -->
+            <el-switch v-else-if="rf.widget === 'nullable-object-toggle'" :model-value="getFieldValue(rf.path) != null" @update:model-value="toggleNullableObject(rf, $event)" />
+            <!-- text widget -->
+            <el-input v-else-if="rf.widget === 'text'" :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event || undefined)" />
+            <!-- textarea -->
+            <el-input v-else-if="rf.widget === 'textarea'" type="textarea" :rows="4" :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event)" />
+            <!-- enum select -->
+            <el-select v-else-if="rf.resolvedSchema.enum" :model-value="getFieldValue(rf.path)" @update:model-value="setFieldValue(rf.path, $event)">
+              <el-option v-for="opt in rf.resolvedSchema.enum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+            </el-select>
+            <!-- model file upload -->
+            <div v-else-if="isModelHashField(rf)" class="model-upload-field">
+              <div v-if="!getFieldValue(rf.path)" class="model-upload-dropzone" :class="{ 'is-dragover': modelUploadDragover[rf.path] }" @dragenter.prevent="modelUploadDragover[rf.path] = true" @dragover.prevent="modelUploadDragover[rf.path] = true" @dragleave.prevent="modelUploadDragover[rf.path] = false" @drop.prevent="handleModelDrop(rf, $event)" @click="triggerModelFileInput(rf.path)">
+                <input :ref="setModelFileInputRef(rf.path)" type="file" accept=".model,.pt2" hidden @change="handleModelFileInput(rf, $event)" />
+                <el-icon class="model-upload-icon"><Upload /></el-icon>
+                <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
+                <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+              </div>
+              <div v-else class="model-hash-display">
+                <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
+                <el-tag type="success" effect="plain" class="model-hash-tag">{{ modelUploadFileNames[rf.path] || (getFieldValue(rf.path) as string).slice(0, 16) + '...' }}</el-tag>
+                <el-button text type="danger" size="small" @click="setFieldValue(rf.path, ''); delete modelUploadFileNames[rf.path]">Clear</el-button>
+              </div>
+              <el-progress v-if="modelUploadProgress[rf.path] != null && modelUploadProgress[rf.path] < 100" :percentage="modelUploadProgress[rf.path]" :stroke-width="4" style="margin-top: 4px;" />
+            </div>
+            <!-- boolean switch -->
+            <el-switch v-else-if="rf.resolvedType === 'boolean'" :model-value="getFieldValue(rf.path)" @update:model-value="setFieldValue(rf.path, $event)" />
+            <!-- number / integer -->
+            <div v-else-if="rf.resolvedType === 'number' || rf.resolvedType === 'integer'" class="smart-number-input">
+              <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(rf, -1)">-</el-button>
+              <el-input :model-value="getNumberDraftValue(rf.path, getFieldValue(rf.path))" inputmode="decimal" @focus="startNumberEditing(rf.path, getFieldValue(rf.path))" @update:model-value="updateNumberDraft(rf.path, $event)" @blur="commitNumberDraft(rf)" @keyup.enter="commitNumberDraft(rf)" @keyup.down.prevent="stepFieldValue(rf, -1)" @keyup.up.prevent="stepFieldValue(rf, 1)" />
+              <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(rf, 1)">+</el-button>
+            </div>
+            <!-- fallback: text input -->
+            <el-input v-else :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event)" />
+          </el-form-item>
+        </el-col>
+      </el-row>
 
-          <!-- nullable-object-toggle widget -->
-          <el-switch
-            v-else-if="field.widget === 'nullable-object-toggle'"
-            :model-value="getFieldValue(field.path) != null"
-            @update:model-value="toggleNullableObject(field, $event)"
-          />
-
-          <!-- textarea widget -->
-          <el-input
-            v-else-if="field.widget === 'textarea'"
-            type="textarea"
-            :rows="4"
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- enum select -->
-          <el-select
-            v-else-if="field.resolvedSchema.enum"
-            :model-value="getFieldValue(field.path)"
-            @update:model-value="setFieldValue(field.path, $event)"
-          >
-            <el-option
-              v-for="opt in field.resolvedSchema.enum"
-              :key="String(opt)"
-              :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)"
-              :value="opt"
-              :disabled="isDisabledEnumOption(opt)"
-            />
+      <!-- Group container with border -->
+      <div v-else class="field-group-section">
+        <div class="field-group-label">
+          {{ item.titleBase }}
+          <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+            <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
           </el-select>
-
-          <!-- model file upload (when model_hash field is visible & use_pretrained_model=false) -->
-          <div v-else-if="isModelHashField(field)" class="model-upload-field">
-            <!-- Upload area: shown when no hash is set -->
-            <div
-              v-if="!getFieldValue(field.path)"
-              class="model-upload-dropzone"
-              :class="{ 'is-dragover': modelUploadDragover[field.path] }"
-              @dragenter.prevent="modelUploadDragover[field.path] = true"
-              @dragover.prevent="modelUploadDragover[field.path] = true"
-              @dragleave.prevent="modelUploadDragover[field.path] = false"
-              @drop.prevent="handleModelDrop(field, $event)"
-              @click="triggerModelFileInput(field.path)"
-            >
-              <input
-                :ref="setModelFileInputRef(field.path)"
-                type="file"
-                accept=".model,.pt2"
-                hidden
-                @change="handleModelFileInput(field, $event)"
-              />
-              <el-icon class="model-upload-icon"><Upload /></el-icon>
-              <div class="model-upload-text">
-                <span>Drop model file here or </span>
-                <el-button type="primary" link>click to upload</el-button>
-              </div>
-              <div class="model-upload-hint">
-                Supports .model (MACE), .pt2 (NequIP compiled)
-              </div>
-            </div>
-            <!-- Hash display: shown when hash is set -->
-            <div v-else class="model-hash-display">
-              <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
-              <el-tag type="success" effect="plain" class="model-hash-tag">
-                {{ modelUploadFileNames[field.path] || (getFieldValue(field.path) as string).slice(0, 16) + '...' }}
-              </el-tag>
-              <el-button text type="danger" size="small" @click="setFieldValue(field.path, ''); delete modelUploadFileNames[field.path]">
-                Clear
-              </el-button>
-            </div>
-            <!-- Upload progress bar -->
-            <el-progress
-              v-if="modelUploadProgress[field.path] != null && modelUploadProgress[field.path] < 100"
-              :percentage="modelUploadProgress[field.path]"
-              :stroke-width="4"
-              style="margin-top: 4px;"
-            />
-          </div>
-
-          <!-- boolean switch -->
-          <el-switch
-            v-else-if="field.resolvedType === 'boolean'"
-            :model-value="getFieldValue(field.path)"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- number / integer -->
-          <div
-            v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-            class="smart-number-input"
-          >
-            <el-button
-              class="smart-number-input__btn"
-              size="small"
-              @click="stepFieldValue(field, -1)"
-            >
-              -
-            </el-button>
-            <el-input
-              :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
-              inputmode="decimal"
-              @focus="startNumberEditing(field.path, getFieldValue(field.path))"
-              @update:model-value="updateNumberDraft(field.path, $event)"
-              @blur="commitNumberDraft(field)"
-              @keyup.enter="commitNumberDraft(field)"
-              @keyup.down.prevent="stepFieldValue(field, -1)"
-              @keyup.up.prevent="stepFieldValue(field, 1)"
-            />
-            <el-button
-              class="smart-number-input__btn"
-              size="small"
-              @click="stepFieldValue(field, 1)"
-            >
-              +
-            </el-button>
-          </div>
-
-          <!-- fallback: text input -->
-          <el-input
-            v-else
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-        </el-form-item>
-      </el-col>
-      </template>
-    </el-row>
-
-    <!-- Advanced fields in collapsible section -->
-    <el-collapse v-if="advancedFields.length > 0" class="advanced-collapse">
-      <el-collapse-item title="Advanced Parameters" name="advanced">
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px;"
-        >
-          These parameters are for advanced users. Do not modify unless you understand their effects.
-        </el-alert>
+        </div>
         <el-row :gutter="16">
-          <template v-for="field in advancedFieldsWithDividers" :key="field.key">
-          <el-col v-if="'divider' in field" :span="24" class="field-group-header">
-            <div class="field-group-label">{{ field.divider }}</div>
-          </el-col>
-          <el-col
-            v-else
-            :span="field.colSpan"
-            :class="{ 'field-group-child': field.schema?._parentTitle }"
-          >
+          <el-col v-for="gf in item.fields" :key="gf.key" :span="gf.colSpan">
             <el-form-item>
               <template #label>
                 <span>
-                  {{ field.schema.title }}
-                  <span v-if="field.schema._required" class="required-field-mark"> *</span>
-                  <el-tooltip
-                    v-if="field.schema.description"
-                    :content="field.schema.description"
-                    placement="top"
-                    :show-after="300"
-                  >
+                  {{ gf.schema.title }}
+                  <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                  <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
                     <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
               </template>
 
-              <!-- comma-separated-integers widget (advanced) -->
-              <el-input
-                v-if="field.widget === 'comma-separated-integers'"
-                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="updateCsvDraft(field.path, $event)"
-                @change="commitCsvIntegers(field.path, field.nullable)"
-              />
-
-              <!-- comma-separated-strings widget (advanced) -->
-              <el-input
-                v-else-if="field.widget === 'comma-separated-strings'"
-                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="updateCsvDraft(field.path, $event)"
-                @change="commitCsvStrings(field.path, field.nullable)"
-              />
-
-              <!-- paired-array-table widget (advanced) -->
-              <div v-else-if="field.widget === 'paired-array-table'" class="paired-array-table">
-                <div class="paired-array-header">
-                  <span class="paired-col-idx">#</span>
-                  <span class="paired-col-enum">Algorithm</span>
-                  <span class="paired-col-int">Steps</span>
-                  <span class="paired-col-action"></span>
-                </div>
-                <div
-                  v-for="(_, rowIdx) in (getFieldValue(field.path) as unknown[] ?? [])"
-                  :key="rowIdx"
-                  class="paired-array-row"
-                >
-                  <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
-                  <el-select
-                    class="paired-col-enum"
-                    :model-value="getPairedEnumValue(field, rowIdx)"
-                    @update:model-value="setPairedEnumValue(field, rowIdx, $event)"
-                  >
-                    <el-option
-                      v-for="opt in (field.schema._enumOptions as string[])"
-                      :key="opt"
-                      :label="opt"
-                      :value="opt"
-                    />
-                  </el-select>
-                  <el-input-number
-                    class="paired-col-int"
-                    :model-value="getPairedIntValue(field, rowIdx)"
-                    :min="(field.schema._intMin as number) ?? 1"
-                    :step="(field.schema._intStep as number) ?? 100"
-                    controls-position="right"
-                    @update:model-value="setPairedIntValue(field, rowIdx, $event)"
-                  />
-                  <el-button
-                    class="paired-col-action"
-                    text
-                    type="danger"
-                    size="small"
-                    :disabled="((getFieldValue(field.path) as unknown[] | undefined)?.length ?? 0) <= 1"
-                    @click="removePairedRow(field, rowIdx)"
-                  >
-                    ×
-                  </el-button>
-                </div>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  style="margin-top: 4px;"
-                  @click="addPairedRow(field)"
-                >
-                  + Add round
-                </el-button>
+              <!-- log-step -->
+              <div v-if="gf.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+                <el-button size="small" @click="logStep(gf.path, 0.1)">÷10</el-button>
+                <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': invalidLogInputs[gf.path] }" :value="formatExp(getFieldValue(gf.path))" placeholder="e.g. 1e-6" @change="($event: Event) => parseExp(gf.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
+                <el-button size="small" @click="logStep(gf.path, 10)">×10</el-button>
               </div>
-
-              <!-- nullable-object-toggle widget (advanced) -->
-              <el-switch
-                v-else-if="field.widget === 'nullable-object-toggle'"
-                :model-value="getFieldValue(field.path) != null"
-                @update:model-value="toggleNullableObject(field, $event)"
-              />
-
-              <!-- Single-line text input (widget: "text") -->
-              <el-input
-                v-else-if="field.widget === 'text'"
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event || undefined)"
-              />
-
-              <!-- model file upload (advanced section) — must precede textarea to avoid string match -->
-              <div v-else-if="isModelHashField(field)" class="model-upload-field">
-                <div
-                  v-if="!getFieldValue(field.path)"
-                  class="model-upload-dropzone"
-                  :class="{ 'is-dragover': modelUploadDragover[field.path] }"
-                  @dragenter.prevent="modelUploadDragover[field.path] = true"
-                  @dragover.prevent="modelUploadDragover[field.path] = true"
-                  @dragleave.prevent="modelUploadDragover[field.path] = false"
-                  @drop.prevent="handleModelDrop(field, $event)"
-                  @click="triggerModelFileInput(field.path)"
-                >
-                  <input
-                    :ref="setModelFileInputRef(field.path)"
-                    type="file"
-                    accept=".model,.pt2"
-                    hidden
-                    @change="handleModelFileInput(field, $event)"
-                  />
+              <!-- band-input -->
+              <el-input v-else-if="gf.widget === 'band-input'" :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event)" />
+              <!-- comma-separated-integers -->
+              <el-input v-else-if="gf.widget === 'comma-separated-integers'" :model-value="getCsvDraftValue(gf.path, getFieldValue(gf.path), formatCsvIntegers)" :placeholder="gf.schema.placeholder" @update:model-value="updateCsvDraft(gf.path, $event)" @change="commitCsvIntegers(gf.path, gf.nullable)" />
+              <!-- comma-separated-strings -->
+              <el-input v-else-if="gf.widget === 'comma-separated-strings'" :model-value="getCsvDraftValue(gf.path, getFieldValue(gf.path), formatCsvStrings)" :placeholder="gf.schema.placeholder" @update:model-value="updateCsvDraft(gf.path, $event)" @change="commitCsvStrings(gf.path, gf.nullable)" />
+              <!-- paired-array-table -->
+              <div v-else-if="gf.widget === 'paired-array-table'" class="paired-array-table paired-array-table--bordered">
+                <div class="paired-array-header"><span class="paired-col-idx">#</span><span class="paired-col-enum">Algorithm</span><span class="paired-col-int">Steps</span><span class="paired-col-action"></span></div>
+                <div v-for="(_, rowIdx) in (getFieldValue(gf.path) as unknown[] ?? [])" :key="rowIdx" class="paired-array-row">
+                  <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+                  <el-select class="paired-col-enum" :model-value="getPairedEnumValue(gf, rowIdx)" @update:model-value="setPairedEnumValue(gf, rowIdx, $event)"><el-option v-for="opt in (gf.schema._enumOptions as string[])" :key="opt" :label="opt" :value="opt" /></el-select>
+                  <el-input-number class="paired-col-int" :model-value="getPairedIntValue(gf, rowIdx)" :min="(gf.schema._intMin as number) ?? 1" :step="(gf.schema._intStep as number) ?? 100" controls-position="right" @update:model-value="setPairedIntValue(gf, rowIdx, $event)" />
+                  <el-button class="paired-col-action" text type="danger" size="small" :disabled="((getFieldValue(gf.path) as unknown[] | undefined)?.length ?? 0) <= 1" @click="removePairedRow(gf, rowIdx)">×</el-button>
+                </div>
+                <el-button size="small" type="primary" plain style="margin-top: 4px;" @click="addPairedRow(gf)">+ Add round</el-button>
+              </div>
+              <!-- nullable-object-toggle -->
+              <el-switch v-else-if="gf.widget === 'nullable-object-toggle'" :model-value="getFieldValue(gf.path) != null" @update:model-value="toggleNullableObject(gf, $event)" />
+              <!-- text widget -->
+              <el-input v-else-if="gf.widget === 'text'" :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event || undefined)" />
+              <!-- textarea -->
+              <el-input v-else-if="gf.widget === 'textarea'" type="textarea" :rows="4" :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event)" />
+              <!-- enum select -->
+              <el-select v-else-if="gf.resolvedSchema.enum" :model-value="getFieldValue(gf.path)" @update:model-value="setFieldValue(gf.path, $event)">
+                <el-option v-for="opt in gf.resolvedSchema.enum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+              </el-select>
+              <!-- model file upload -->
+              <div v-else-if="isModelHashField(gf)" class="model-upload-field">
+                <div v-if="!getFieldValue(gf.path)" class="model-upload-dropzone" :class="{ 'is-dragover': modelUploadDragover[gf.path] }" @dragenter.prevent="modelUploadDragover[gf.path] = true" @dragover.prevent="modelUploadDragover[gf.path] = true" @dragleave.prevent="modelUploadDragover[gf.path] = false" @drop.prevent="handleModelDrop(gf, $event)" @click="triggerModelFileInput(gf.path)">
+                  <input :ref="setModelFileInputRef(gf.path)" type="file" accept=".model,.pt2" hidden @change="handleModelFileInput(gf, $event)" />
                   <el-icon class="model-upload-icon"><Upload /></el-icon>
-                  <div class="model-upload-text">
-                    <span>Drop model file here or </span>
-                    <el-button type="primary" link>click to upload</el-button>
-                  </div>
-                  <div class="model-upload-hint">
-                    Supports .model (MACE), .pt2 (NequIP compiled)
-                  </div>
+                  <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
+                  <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
                 </div>
                 <div v-else class="model-hash-display">
                   <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
-                  <el-tag type="success" effect="plain" class="model-hash-tag">
-                    {{ modelUploadFileNames[field.path] || (getFieldValue(field.path) as string).slice(0, 16) + '...' }}
-                  </el-tag>
-                  <el-button text type="danger" size="small" @click="setFieldValue(field.path, ''); delete modelUploadFileNames[field.path]">
-                    Clear
-                  </el-button>
+                  <el-tag type="success" effect="plain" class="model-hash-tag">{{ modelUploadFileNames[gf.path] || (getFieldValue(gf.path) as string).slice(0, 16) + '...' }}</el-tag>
+                  <el-button text type="danger" size="small" @click="setFieldValue(gf.path, ''); delete modelUploadFileNames[gf.path]">Clear</el-button>
                 </div>
-                <el-progress
-                  v-if="modelUploadProgress[field.path] != null && modelUploadProgress[field.path] < 100"
-                  :percentage="modelUploadProgress[field.path]"
-                  :stroke-width="4"
-                  style="margin-top: 4px;"
-                />
+                <el-progress v-if="modelUploadProgress[gf.path] != null && modelUploadProgress[gf.path] < 100" :percentage="modelUploadProgress[gf.path]" :stroke-width="4" style="margin-top: 4px;" />
               </div>
-
-              <!-- Advanced textarea for string fields -->
-              <el-input
-                v-else-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"
-                type="textarea"
-                :rows="4"
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
-
-              <!-- Reuse the same widget logic for non-string advanced fields -->
-              <!-- log-step widget (advanced section) -->
-              <div v-else-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
-                <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
-                <input
-                  type="text"
-                  class="log-step-input"
-                  :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
-                  :value="formatExp(getFieldValue(field.path))"
-                  @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
-                />
-                <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
+              <!-- boolean switch -->
+              <el-switch v-else-if="gf.resolvedType === 'boolean'" :model-value="getFieldValue(gf.path)" @update:model-value="setFieldValue(gf.path, $event)" />
+              <!-- number / integer -->
+              <div v-else-if="gf.resolvedType === 'number' || gf.resolvedType === 'integer'" class="smart-number-input">
+                <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(gf, -1)">-</el-button>
+                <el-input :model-value="getNumberDraftValue(gf.path, getFieldValue(gf.path))" inputmode="decimal" @focus="startNumberEditing(gf.path, getFieldValue(gf.path))" @update:model-value="updateNumberDraft(gf.path, $event)" @blur="commitNumberDraft(gf)" @keyup.enter="commitNumberDraft(gf)" @keyup.down.prevent="stepFieldValue(gf, -1)" @keyup.up.prevent="stepFieldValue(gf, 1)" />
+                <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(gf, 1)">+</el-button>
               </div>
-
-              <el-select
-                v-else-if="field.resolvedSchema.enum"
-                :model-value="getFieldValue(field.path)"
-                @update:model-value="setFieldValue(field.path, $event)"
-              >
-                <el-option
-                  v-for="opt in field.resolvedSchema.enum"
-                  :key="String(opt)"
-                  :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)"
-                  :value="opt"
-                  :disabled="isDisabledEnumOption(opt)"
-                />
-              </el-select>
-
-              <el-switch
-                v-else-if="field.resolvedType === 'boolean'"
-                :model-value="getFieldValue(field.path)"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
-
-              <div
-                v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-                class="smart-number-input"
-              >
-                <el-button
-                  class="smart-number-input__btn"
-                  size="small"
-                  @click="stepFieldValue(field, -1)"
-                >
-                  -
-                </el-button>
-                <el-input
-                  :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
-                  inputmode="decimal"
-                  @focus="startNumberEditing(field.path, getFieldValue(field.path))"
-                  @update:model-value="updateNumberDraft(field.path, $event)"
-                  @blur="commitNumberDraft(field)"
-                  @keyup.enter="commitNumberDraft(field)"
-                  @keyup.down.prevent="stepFieldValue(field, -1)"
-                  @keyup.up.prevent="stepFieldValue(field, 1)"
-                />
-                <el-button
-                  class="smart-number-input__btn"
-                  size="small"
-                  @click="stepFieldValue(field, 1)"
-                >
-                  +
-                </el-button>
-              </div>
-
-              <el-input
-                v-else
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
+              <!-- fallback: text input -->
+              <el-input v-else :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event)" />
             </el-form-item>
           </el-col>
-          </template>
         </el-row>
+      </div>
+    </template>
+
+    <!-- Advanced fields in collapsible section -->
+    <el-collapse v-if="advancedFields.length > 0" class="advanced-collapse">
+      <el-collapse-item title="Advanced Parameters" name="advanced">
+        <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
+          These parameters are for advanced users. Do not modify unless you understand their effects.
+        </el-alert>
+        <template v-for="item in advancedFieldsGrouped" :key="item.key">
+          <!-- Row of ungrouped advanced fields -->
+          <el-row v-if="item.type === 'field-row'" :gutter="16">
+            <el-col v-for="rf in item.fields" :key="rf.key" :span="rf.colSpan">
+              <el-form-item>
+                <template #label>
+                  <span>
+                    {{ rf.schema.title }}
+                    <span v-if="rf.schema._required" class="required-field-mark"> *</span>
+                    <el-tooltip v-if="rf.schema.description" :content="rf.schema.description" placement="top" :show-after="300">
+                      <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+
+                <!-- log-step -->
+                <div v-if="rf.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+                  <el-button size="small" @click="logStep(rf.path, 0.1)">÷10</el-button>
+                  <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': invalidLogInputs[rf.path] }" :value="formatExp(getFieldValue(rf.path))" placeholder="e.g. 1e-6" @change="($event: Event) => parseExp(rf.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
+                  <el-button size="small" @click="logStep(rf.path, 10)">×10</el-button>
+                </div>
+                <!-- comma-separated-integers -->
+                <el-input v-else-if="rf.widget === 'comma-separated-integers'" :model-value="getCsvDraftValue(rf.path, getFieldValue(rf.path), formatCsvIntegers)" :placeholder="rf.schema.placeholder" @update:model-value="updateCsvDraft(rf.path, $event)" @change="commitCsvIntegers(rf.path, rf.nullable)" />
+                <!-- comma-separated-strings -->
+                <el-input v-else-if="rf.widget === 'comma-separated-strings'" :model-value="getCsvDraftValue(rf.path, getFieldValue(rf.path), formatCsvStrings)" :placeholder="rf.schema.placeholder" @update:model-value="updateCsvDraft(rf.path, $event)" @change="commitCsvStrings(rf.path, rf.nullable)" />
+                <!-- paired-array-table -->
+                <div v-else-if="rf.widget === 'paired-array-table'" class="paired-array-table paired-array-table--bordered">
+                  <div class="paired-array-header"><span class="paired-col-idx">#</span><span class="paired-col-enum">Algorithm</span><span class="paired-col-int">Steps</span><span class="paired-col-action"></span></div>
+                  <div v-for="(_, rowIdx) in (getFieldValue(rf.path) as unknown[] ?? [])" :key="rowIdx" class="paired-array-row">
+                    <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+                    <el-select class="paired-col-enum" :model-value="getPairedEnumValue(rf, rowIdx)" @update:model-value="setPairedEnumValue(rf, rowIdx, $event)"><el-option v-for="opt in (rf.schema._enumOptions as string[])" :key="opt" :label="opt" :value="opt" /></el-select>
+                    <el-input-number class="paired-col-int" :model-value="getPairedIntValue(rf, rowIdx)" :min="(rf.schema._intMin as number) ?? 1" :step="(rf.schema._intStep as number) ?? 100" controls-position="right" @update:model-value="setPairedIntValue(rf, rowIdx, $event)" />
+                    <el-button class="paired-col-action" text type="danger" size="small" :disabled="((getFieldValue(rf.path) as unknown[] | undefined)?.length ?? 0) <= 1" @click="removePairedRow(rf, rowIdx)">×</el-button>
+                  </div>
+                  <el-button size="small" type="primary" plain style="margin-top: 4px;" @click="addPairedRow(rf)">+ Add round</el-button>
+                </div>
+                <!-- nullable-object-toggle -->
+                <el-switch v-else-if="rf.widget === 'nullable-object-toggle'" :model-value="getFieldValue(rf.path) != null" @update:model-value="toggleNullableObject(rf, $event)" />
+                <!-- text widget -->
+                <el-input v-else-if="rf.widget === 'text'" :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event || undefined)" />
+                <!-- model file upload (must precede textarea) -->
+                <div v-else-if="isModelHashField(rf)" class="model-upload-field">
+                  <div v-if="!getFieldValue(rf.path)" class="model-upload-dropzone" :class="{ 'is-dragover': modelUploadDragover[rf.path] }" @dragenter.prevent="modelUploadDragover[rf.path] = true" @dragover.prevent="modelUploadDragover[rf.path] = true" @dragleave.prevent="modelUploadDragover[rf.path] = false" @drop.prevent="handleModelDrop(rf, $event)" @click="triggerModelFileInput(rf.path)">
+                    <input :ref="setModelFileInputRef(rf.path)" type="file" accept=".model,.pt2" hidden @change="handleModelFileInput(rf, $event)" />
+                    <el-icon class="model-upload-icon"><Upload /></el-icon>
+                    <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
+                    <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+                  </div>
+                  <div v-else class="model-hash-display">
+                    <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
+                    <el-tag type="success" effect="plain" class="model-hash-tag">{{ modelUploadFileNames[rf.path] || (getFieldValue(rf.path) as string).slice(0, 16) + '...' }}</el-tag>
+                    <el-button text type="danger" size="small" @click="setFieldValue(rf.path, ''); delete modelUploadFileNames[rf.path]">Clear</el-button>
+                  </div>
+                  <el-progress v-if="modelUploadProgress[rf.path] != null && modelUploadProgress[rf.path] < 100" :percentage="modelUploadProgress[rf.path]" :stroke-width="4" style="margin-top: 4px;" />
+                </div>
+                <!-- Advanced textarea for string fields -->
+                <el-input v-else-if="rf.resolvedType === 'string' && !rf.resolvedSchema.enum" type="textarea" :rows="4" :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event)" />
+                <!-- enum select -->
+                <el-select v-else-if="rf.resolvedSchema.enum" :model-value="getFieldValue(rf.path)" @update:model-value="setFieldValue(rf.path, $event)">
+                  <el-option v-for="opt in rf.resolvedSchema.enum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+                </el-select>
+                <!-- boolean switch -->
+                <el-switch v-else-if="rf.resolvedType === 'boolean'" :model-value="getFieldValue(rf.path)" @update:model-value="setFieldValue(rf.path, $event)" />
+                <!-- number / integer -->
+                <div v-else-if="rf.resolvedType === 'number' || rf.resolvedType === 'integer'" class="smart-number-input">
+                  <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(rf, -1)">-</el-button>
+                  <el-input :model-value="getNumberDraftValue(rf.path, getFieldValue(rf.path))" inputmode="decimal" @focus="startNumberEditing(rf.path, getFieldValue(rf.path))" @update:model-value="updateNumberDraft(rf.path, $event)" @blur="commitNumberDraft(rf)" @keyup.enter="commitNumberDraft(rf)" @keyup.down.prevent="stepFieldValue(rf, -1)" @keyup.up.prevent="stepFieldValue(rf, 1)" />
+                  <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(rf, 1)">+</el-button>
+                </div>
+                <!-- fallback -->
+                <el-input v-else :model-value="String(getFieldValue(rf.path) ?? '')" :placeholder="rf.schema.placeholder" @update:model-value="setFieldValue(rf.path, $event)" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <!-- Group container with border (advanced) -->
+          <div v-else class="field-group-section">
+            <div class="field-group-label">
+              {{ item.titleBase }}
+              <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+                <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+              </el-select>
+            </div>
+            <el-row :gutter="16">
+              <el-col v-for="gf in item.fields" :key="gf.key" :span="gf.colSpan">
+                <el-form-item>
+                  <template #label>
+                    <span>
+                      {{ gf.schema.title }}
+                      <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                      <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
+                        <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                    </span>
+                  </template>
+
+                  <!-- log-step -->
+                  <div v-if="gf.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+                    <el-button size="small" @click="logStep(gf.path, 0.1)">÷10</el-button>
+                    <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': invalidLogInputs[gf.path] }" :value="formatExp(getFieldValue(gf.path))" placeholder="e.g. 1e-6" @change="($event: Event) => parseExp(gf.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
+                    <el-button size="small" @click="logStep(gf.path, 10)">×10</el-button>
+                  </div>
+                  <!-- comma-separated-integers -->
+                  <el-input v-else-if="gf.widget === 'comma-separated-integers'" :model-value="getCsvDraftValue(gf.path, getFieldValue(gf.path), formatCsvIntegers)" :placeholder="gf.schema.placeholder" @update:model-value="updateCsvDraft(gf.path, $event)" @change="commitCsvIntegers(gf.path, gf.nullable)" />
+                  <!-- comma-separated-strings -->
+                  <el-input v-else-if="gf.widget === 'comma-separated-strings'" :model-value="getCsvDraftValue(gf.path, getFieldValue(gf.path), formatCsvStrings)" :placeholder="gf.schema.placeholder" @update:model-value="updateCsvDraft(gf.path, $event)" @change="commitCsvStrings(gf.path, gf.nullable)" />
+                  <!-- paired-array-table -->
+                  <div v-else-if="gf.widget === 'paired-array-table'" class="paired-array-table paired-array-table--bordered">
+                    <div class="paired-array-header"><span class="paired-col-idx">#</span><span class="paired-col-enum">Algorithm</span><span class="paired-col-int">Steps</span><span class="paired-col-action"></span></div>
+                    <div v-for="(_, rowIdx) in (getFieldValue(gf.path) as unknown[] ?? [])" :key="rowIdx" class="paired-array-row">
+                      <span class="paired-col-idx">{{ rowIdx + 1 }}</span>
+                      <el-select class="paired-col-enum" :model-value="getPairedEnumValue(gf, rowIdx)" @update:model-value="setPairedEnumValue(gf, rowIdx, $event)"><el-option v-for="opt in (gf.schema._enumOptions as string[])" :key="opt" :label="opt" :value="opt" /></el-select>
+                      <el-input-number class="paired-col-int" :model-value="getPairedIntValue(gf, rowIdx)" :min="(gf.schema._intMin as number) ?? 1" :step="(gf.schema._intStep as number) ?? 100" controls-position="right" @update:model-value="setPairedIntValue(gf, rowIdx, $event)" />
+                      <el-button class="paired-col-action" text type="danger" size="small" :disabled="((getFieldValue(gf.path) as unknown[] | undefined)?.length ?? 0) <= 1" @click="removePairedRow(gf, rowIdx)">×</el-button>
+                    </div>
+                    <el-button size="small" type="primary" plain style="margin-top: 4px;" @click="addPairedRow(gf)">+ Add round</el-button>
+                  </div>
+                  <!-- nullable-object-toggle -->
+                  <el-switch v-else-if="gf.widget === 'nullable-object-toggle'" :model-value="getFieldValue(gf.path) != null" @update:model-value="toggleNullableObject(gf, $event)" />
+                  <!-- text widget -->
+                  <el-input v-else-if="gf.widget === 'text'" :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event || undefined)" />
+                  <!-- model file upload (must precede textarea) -->
+                  <div v-else-if="isModelHashField(gf)" class="model-upload-field">
+                    <div v-if="!getFieldValue(gf.path)" class="model-upload-dropzone" :class="{ 'is-dragover': modelUploadDragover[gf.path] }" @dragenter.prevent="modelUploadDragover[gf.path] = true" @dragover.prevent="modelUploadDragover[gf.path] = true" @dragleave.prevent="modelUploadDragover[gf.path] = false" @drop.prevent="handleModelDrop(gf, $event)" @click="triggerModelFileInput(gf.path)">
+                      <input :ref="setModelFileInputRef(gf.path)" type="file" accept=".model,.pt2" hidden @change="handleModelFileInput(gf, $event)" />
+                      <el-icon class="model-upload-icon"><Upload /></el-icon>
+                      <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
+                      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+                    </div>
+                    <div v-else class="model-hash-display">
+                      <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
+                      <el-tag type="success" effect="plain" class="model-hash-tag">{{ modelUploadFileNames[gf.path] || (getFieldValue(gf.path) as string).slice(0, 16) + '...' }}</el-tag>
+                      <el-button text type="danger" size="small" @click="setFieldValue(gf.path, ''); delete modelUploadFileNames[gf.path]">Clear</el-button>
+                    </div>
+                    <el-progress v-if="modelUploadProgress[gf.path] != null && modelUploadProgress[gf.path] < 100" :percentage="modelUploadProgress[gf.path]" :stroke-width="4" style="margin-top: 4px;" />
+                  </div>
+                  <!-- Advanced textarea for string fields -->
+                  <el-input v-else-if="gf.resolvedType === 'string' && !gf.resolvedSchema.enum" type="textarea" :rows="4" :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event)" />
+                  <!-- enum select -->
+                  <el-select v-else-if="gf.resolvedSchema.enum" :model-value="getFieldValue(gf.path)" @update:model-value="setFieldValue(gf.path, $event)">
+                    <el-option v-for="opt in gf.resolvedSchema.enum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+                  </el-select>
+                  <!-- boolean switch -->
+                  <el-switch v-else-if="gf.resolvedType === 'boolean'" :model-value="getFieldValue(gf.path)" @update:model-value="setFieldValue(gf.path, $event)" />
+                  <!-- number / integer -->
+                  <div v-else-if="gf.resolvedType === 'number' || gf.resolvedType === 'integer'" class="smart-number-input">
+                    <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(gf, -1)">-</el-button>
+                    <el-input :model-value="getNumberDraftValue(gf.path, getFieldValue(gf.path))" inputmode="decimal" @focus="startNumberEditing(gf.path, getFieldValue(gf.path))" @update:model-value="updateNumberDraft(gf.path, $event)" @blur="commitNumberDraft(gf)" @keyup.enter="commitNumberDraft(gf)" @keyup.down.prevent="stepFieldValue(gf, -1)" @keyup.up.prevent="stepFieldValue(gf, 1)" />
+                    <el-button class="smart-number-input__btn" size="small" @click="stepFieldValue(gf, 1)">+</el-button>
+                  </div>
+                  <!-- fallback -->
+                  <el-input v-else :model-value="String(getFieldValue(gf.path) ?? '')" :placeholder="gf.schema.placeholder" @update:model-value="setFieldValue(gf.path, $event)" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+          </div>
+        </template>
       </el-collapse-item>
     </el-collapse>
   </div>
@@ -785,11 +603,33 @@ function buildFieldDescriptors(
         const baseTitle = prop.title ?? key.charAt(0).toUpperCase() + key.slice(1)
         const branchTitle = resolvedBranch.title?.replace(/InputT?$/i, '') ?? ''
         const parentTitle = branchTitle ? `${baseTitle} — ${branchTitle}` : baseTitle
+
+        // Find the discriminator sibling enum for embedding in group header
+        let discriminatorKey: string | undefined
+        let discriminatorEnum: unknown[] | undefined
+        for (const [sibKey, sibProp] of Object.entries(properties)) {
+          if (sibProp.enum && sibProp.enum.length >= 2) {
+            discriminatorKey = sibKey
+            discriminatorEnum = sibProp.enum
+            break
+          }
+        }
+        const discriminatorPath = discriminatorKey
+          ? (pathPrefix ? `${pathPrefix}.${discriminatorKey}` : discriminatorKey)
+          : undefined
+
         const nested = buildFieldDescriptors(
           resolvedBranch.properties, rootSchema, fullPath, modelValue,
         )
         for (const f of nested) {
-          f.schema = { ...f.schema, _parentTitle: parentTitle }
+          f.schema = {
+            ...f.schema,
+            _parentTitle: parentTitle,
+            _parentTitleBase: baseTitle,
+            _parentDiscriminatorKey: discriminatorKey,
+            _parentDiscriminatorPath: discriminatorPath,
+            _parentDiscriminatorEnum: discriminatorEnum,
+          }
           if (parentGroup && !f.group) f.group = parentGroup
         }
         result.push(...nested)
@@ -930,36 +770,99 @@ const advancedFields = computed(() =>
   allFields.value.filter((f) => f.group === 'advanced' && isFieldVisible(f)),
 )
 
-/** A divider placeholder inserted between field groups */
-interface DividerItem {
-  divider: string
+/** A row of consecutive standalone fields (no group border, share one el-row) */
+interface FieldRowItem {
+  type: 'field-row'
+  fields: FieldDescriptor[]
   key: string
 }
 
-type FieldOrDivider = FieldDescriptor | DividerItem
+/** A group of fields sharing a parent title, rendered inside a border container */
+interface GroupItem {
+  type: 'group'
+  title: string
+  /** Base title without the branch name suffix (e.g. "Calculator" not "Calculator — NequIP") */
+  titleBase: string
+  key: string
+  fields: FieldDescriptor[]
+  /** Path for the discriminator select (e.g. "calc.software") */
+  discriminatorPath?: string
+  /** Enum options for the discriminator */
+  discriminatorEnum?: unknown[]
+}
+
+type FieldOrGroup = FieldRowItem | GroupItem
 
 /**
- * Insert section dividers before groups of fields that share the same
- * `_parentTitle` (e.g. calculator sub-fields).
+ * Group fields into structured sections. Fields with `_parentTitle` are
+ * collected into GroupItems; consecutive ungrouped fields are batched into
+ * FieldRowItems so they share one el-row (multi-column grid).
  */
-function insertDividers(fields: FieldDescriptor[]): FieldOrDivider[] {
-  const result: FieldOrDivider[] = []
+function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
+  const result: FieldOrGroup[] = []
   let currentParent: string | undefined
+  let currentGroup: GroupItem | null = null
+  let currentRow: FieldRowItem | null = null
+
+  function flushRow(): void {
+    if (currentRow) {
+      result.push(currentRow)
+      currentRow = null
+    }
+  }
+
+  function flushGroup(): void {
+    if (currentGroup) {
+      result.push(currentGroup)
+      currentGroup = null
+    }
+  }
+
   for (const f of fields) {
     const parent = f.schema._parentTitle as string | undefined
     if (parent !== currentParent) {
+      // Flush whatever was accumulating
+      flushGroup()
+      flushRow()
+
       if (parent) {
-        result.push({ divider: parent, key: `__divider_${parent}` })
+        // Extract discriminator info from the first field in this group
+        const discPath = f.schema._parentDiscriminatorPath as string | undefined
+        const discEnum = f.schema._parentDiscriminatorEnum as unknown[] | undefined
+        const titleBase = f.schema._parentTitleBase as string | undefined
+        currentGroup = {
+          type: 'group',
+          title: parent,
+          titleBase: titleBase ?? parent,
+          key: `__group_${parent}`,
+          fields: [f],
+          discriminatorPath: discPath,
+          discriminatorEnum: discEnum,
+        }
+      } else {
+        // Start a new row batch
+        currentRow = { type: 'field-row', fields: [f], key: `__row_${f.key}` }
       }
       currentParent = parent
+    } else if (currentGroup) {
+      currentGroup.fields.push(f)
+    } else {
+      // Accumulate into current row
+      if (!currentRow) {
+        currentRow = { type: 'field-row', fields: [f], key: `__row_${f.key}` }
+      } else {
+        currentRow.fields.push(f)
+      }
     }
-    result.push(f)
   }
+  // Flush remaining
+  flushGroup()
+  flushRow()
   return result
 }
 
-const regularFieldsWithDividers = computed(() => insertDividers(regularFields.value))
-const advancedFieldsWithDividers = computed(() => insertDividers(advancedFields.value))
+const regularFieldsGrouped = computed(() => groupFields(regularFields.value))
+const advancedFieldsGrouped = computed(() => groupFields(advancedFields.value))
 
 const nullableTogglePaths = computed(() => new Set(
   allFields.value
@@ -976,8 +879,15 @@ function isFieldVisible(field: FieldDescriptor): boolean {
     }
   }
 
-  // model_name vs model_hash mutual exclusion based on use_pretrained_model
+  // Hide standalone discriminator field when it's embedded in a group header
   const fieldKey = field.path.split('.').pop() ?? ''
+  const isDiscriminator = allFields.value.some(
+    (f) => f.schema._parentDiscriminatorKey === fieldKey &&
+      f.schema._parentDiscriminatorPath === field.path
+  )
+  if (isDiscriminator) return false
+
+  // model_name vs model_hash mutual exclusion based on use_pretrained_model
   if (fieldKey === 'model_name' || fieldKey === 'model_hash') {
     const parentPath = field.path.split('.').slice(0, -1).join('.')
     const raw = parentPath
@@ -1468,25 +1378,41 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   flex: 0 0 auto;
 }
 
-.field-group-header {
-  margin-top: var(--space-2);
+/* --- Group section (border container for Calculator, Thermostats, etc.) --- */
+.field-group-section {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
 }
 
 .field-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg-secondary, #606266);
-  padding: 4px 0 8px 8px;
-  border-left: 3px solid var(--el-color-primary);
+  margin-bottom: var(--space-2);
 }
 
-.field-group-child {
-  padding-left: 12px;
-  border-left: 1px solid var(--el-border-color-lighter);
+.inline-discriminator-select {
+  width: 140px;
 }
 
+.inline-discriminator-select :deep(.el-input__wrapper) {
+  padding: 1px 8px;
+}
+
+/* --- Paired-array-table --- */
 .paired-array-table {
   width: 100%;
+}
+
+.paired-array-table--bordered {
+  padding: var(--space-2);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
 }
 
 .paired-array-header,
