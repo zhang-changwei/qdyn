@@ -2,10 +2,14 @@
   <div class="dynamic-step-form">
     <!-- Regular fields (3-col grid) -->
     <el-row :gutter="16">
+      <template v-for="field in regularFieldsWithDividers" :key="field.key">
+      <el-col v-if="'divider' in field" :span="24" class="field-group-header">
+        <div class="field-group-label">{{ field.divider }}</div>
+      </el-col>
       <el-col
-        v-for="field in regularFields"
-        :key="field.key"
+        v-else
         :span="field.colSpan"
+        :class="{ 'field-group-child': field.schema?._parentTitle }"
       >
         <el-form-item>
           <template #label>
@@ -246,6 +250,7 @@
           />
         </el-form-item>
       </el-col>
+      </template>
     </el-row>
 
     <!-- Advanced fields in collapsible section -->
@@ -260,10 +265,14 @@
           These parameters are for advanced users. Do not modify unless you understand their effects.
         </el-alert>
         <el-row :gutter="16">
+          <template v-for="field in advancedFieldsWithDividers" :key="field.key">
+          <el-col v-if="'divider' in field" :span="24" class="field-group-header">
+            <div class="field-group-label">{{ field.divider }}</div>
+          </el-col>
           <el-col
-            v-for="field in advancedFields"
-            :key="field.key"
+            v-else
             :span="field.colSpan"
+            :class="{ 'field-group-child': field.schema?._parentTitle }"
           >
             <el-form-item>
               <template #label>
@@ -497,6 +506,7 @@
               />
             </el-form-item>
           </el-col>
+          </template>
         </el-row>
       </el-collapse-item>
     </el-collapse>
@@ -772,13 +782,15 @@ function buildFieldDescriptors(
       )
       if (resolvedBranch?.properties) {
         const parentGroup = prop.group
+        const baseTitle = prop.title ?? key.charAt(0).toUpperCase() + key.slice(1)
+        const branchTitle = resolvedBranch.title?.replace(/InputT?$/i, '') ?? ''
+        const parentTitle = branchTitle ? `${baseTitle} — ${branchTitle}` : baseTitle
         const nested = buildFieldDescriptors(
           resolvedBranch.properties, rootSchema, fullPath, modelValue,
         )
-        if (parentGroup) {
-          for (const f of nested) {
-            if (!f.group) f.group = parentGroup
-          }
+        for (const f of nested) {
+          f.schema = { ...f.schema, _parentTitle: parentTitle }
+          if (parentGroup && !f.group) f.group = parentGroup
         }
         result.push(...nested)
         continue
@@ -917,6 +929,37 @@ const regularFields = computed(() =>
 const advancedFields = computed(() =>
   allFields.value.filter((f) => f.group === 'advanced' && isFieldVisible(f)),
 )
+
+/** A divider placeholder inserted between field groups */
+interface DividerItem {
+  divider: string
+  key: string
+}
+
+type FieldOrDivider = FieldDescriptor | DividerItem
+
+/**
+ * Insert section dividers before groups of fields that share the same
+ * `_parentTitle` (e.g. calculator sub-fields).
+ */
+function insertDividers(fields: FieldDescriptor[]): FieldOrDivider[] {
+  const result: FieldOrDivider[] = []
+  let currentParent: string | undefined
+  for (const f of fields) {
+    const parent = f.schema._parentTitle as string | undefined
+    if (parent !== currentParent) {
+      if (parent) {
+        result.push({ divider: parent, key: `__divider_${parent}` })
+      }
+      currentParent = parent
+    }
+    result.push(f)
+  }
+  return result
+}
+
+const regularFieldsWithDividers = computed(() => insertDividers(regularFields.value))
+const advancedFieldsWithDividers = computed(() => insertDividers(advancedFields.value))
 
 const nullableTogglePaths = computed(() => new Set(
   allFields.value
@@ -1423,6 +1466,23 @@ function commitCsvStrings(path: string, nullable: boolean): void {
 
 .smart-number-input__btn {
   flex: 0 0 auto;
+}
+
+.field-group-header {
+  margin-top: var(--space-2);
+}
+
+.field-group-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-secondary, #606266);
+  padding: 4px 0 8px 8px;
+  border-left: 3px solid var(--el-color-primary);
+}
+
+.field-group-child {
+  padding-left: 12px;
+  border-left: 1px solid var(--el-border-color-lighter);
 }
 
 .paired-array-table {
