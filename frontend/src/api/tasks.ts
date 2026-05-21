@@ -7,6 +7,7 @@
  * - GET /frontend/tasks/{taskId}/jobs/status - Get all jobs status for a task
  * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/status - Get single job detail
  * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/error - Get job error details
+ * - POST /frontend/tasks/{taskId}/download-zip - Download selected files as zip
  * - POST /frontend/tasks/{taskId}/stop - Stop all running jobs
  * - DELETE /frontend/tasks/{taskId} - Delete a task
  */
@@ -214,6 +215,28 @@ export async function getJobFile(taskId: string, jobUuid: string, filename: stri
   const response = await http.get(
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/files/${encodeURIComponent(filename)}`,
     { responseType: 'blob' }
+  )
+  return response.data
+}
+
+export interface ZipDownloadFileItem {
+  job_uuid: string
+  filename: string
+  subdir?: string
+}
+
+/**
+ * Download selected files from one task as a zip archive.
+ */
+export async function downloadZip(
+  taskId: string,
+  files: ZipDownloadFileItem[],
+  onDownloadProgress?: (event: { loaded: number; total?: number }) => void,
+): Promise<Blob> {
+  const response = await http.post(
+    `/frontend/tasks/${taskId}/download-zip`,
+    { files },
+    { responseType: 'blob', onDownloadProgress },
   )
   return response.data
 }

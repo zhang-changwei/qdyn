@@ -41,6 +41,7 @@ from .models import (
     SubdirFilesResponse,
     TaskJobsStatusResponse,
     TaskSummaryListResponse,
+    ZipDownloadRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -763,6 +764,49 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         files, subdirs = service.list_job_files(access, task_id, job_uuid)
         return JobFilesResponse(available=True, files=files, subdirs=subdirs)
+
+    # -------------------------------------------------------------------------
+    # POST /frontend/tasks/{task_id}/download-zip - Batch zip download
+    # -------------------------------------------------------------------------
+
+    @router.post(
+        "/tasks/{task_id}/download-zip",
+        summary="Download selected files as a zip archive",
+        response_class=Response,
+    )
+    def download_zip_endpoint(
+        task_id: str,
+        request: ZipDownloadRequest,
+        username: str = Depends(get_current_user),
+    ) -> Response:
+        """Download selected files from one task as a zip archive."""
+        verify_task_ownership_local(task_id, username)
+
+        for item in request.files:
+            verify_job_belongs_to_task(task_id, item.job_uuid)
+
+        manager = manager_getter()
+
+        try:
+            zip_bytes = service.build_download_zip(
+                task_id, request.files, manager
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc))
+
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="qdyn_files_{task_id[:8]}.zip"'
+                )
+            },
+        )
 
     # -------------------------------------------------------------------------
     # GET /frontend/tasks/{task_id}/jobs/{job_uuid}/files/{filename} - Serve file
