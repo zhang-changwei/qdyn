@@ -41,6 +41,7 @@ ml = [
     "torchvision==0.22.1",
     "mace-torch>=0.3.15",
     "torch-dftd>=0.5.3",
+    "hamgnn>=2.1.0",
 ]
 openmx = [
     "qdyn-openmx-postprocess",
@@ -76,6 +77,7 @@ torch = { index = "pytorch" }
 torchaudio = { index = "pytorch" }
 torchvision = { index = "pytorch" }
 pyvaspwfc = { git = "https://github.com/QijingZheng/VaspBandUnfolding" }
+hamgnn = { path = "libs/hamgnn", editable = true }
 
 [tool.uv.extra-build-dependencies]
 torch-cluster = ["torch"]

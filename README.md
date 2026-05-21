@@ -102,3 +102,8 @@ cd frontend && npm run build
 ```
 
 The built assets will be in `frontend/dist/`, served by FastAPI at static file hosting in production mode.
+
+## Fetch the submodule
+```bash
+git submodule update --init --recursive
+```
