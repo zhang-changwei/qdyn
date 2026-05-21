@@ -42,6 +42,9 @@ ml = [
     "mace-torch>=0.3.15",
     "torch-dftd>=0.5.3",
 ]
+openmx = [
+    "qdyn-openmx-postprocess",
+]
 
 [dependency-groups]
 dev = [
@@ -60,9 +63,6 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv]
-environments = [
-    "sys_platform == 'linux'",
-]
 find-links = [
     "https://data.pyg.org/whl/torch-2.7.1+cu126.html"
 ]
@@ -71,6 +71,7 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
+qdyn-openmx-postprocess = { path = "packages/qdyn-openmx-postprocess" }
 torch = { index = "pytorch" }
 torchaudio = { index = "pytorch" }
 torchvision = { index = "pytorch" }

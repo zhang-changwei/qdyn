@@ -1,6 +1,21 @@
 # qdyn
 A toolkit for non-adiabatic quasiparticle dynamics
 
+## Optional OpenMX postprocess extension
+
+The OpenMX postprocess reader is shipped as an optional subpackage built with
+CMake. It is not installed by default.
+
+To install QDYN with the optional ML/OpenMX extras:
+
+```bash
+uv sync --extra ml
+```
+
+This installs `qdyn-openmx-postprocess` and builds the native extension during
+package installation. A working C compiler and CMake-compatible build toolchain
+must be available on the target machine.
+
 # Install
 
 ```bash
