@@ -66,7 +66,7 @@ environments = [
 find-links = [
     "https://data.pyg.org/whl/torch-2.7.1+cu126.html"
 ]
-override_dependencies = [
+override-dependencies = [
     "e3nn>=0.6.0",
 ]
 

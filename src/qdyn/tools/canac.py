@@ -288,9 +288,9 @@ def save_hfnamd_inputs(
     # save in HFNAMD format
     logging.info("Saving results in HFNAMD format...")
     bot = bmin - bmin_stored
-    top = bmax - bmin + 1
+    top = bmax - bmin_stored + 1
 
-    # sccisor operation
+    # scissor operation
     if scissor:
         bot_scissor = bot + scissor.scissor_bmin - 1
         if bot_scissor >= top:

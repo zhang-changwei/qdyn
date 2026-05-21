@@ -2492,7 +2492,7 @@ def _try_preview_for_task(
     Returns None if neither source is available or parsing fails.
     """
     from .structure_preview import build_preview
-    from ..params import STRU_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
+    from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING, TRAJ_FORMAT_MAPPING
 
     # --- Strategy 1: Queued task payload ---
     payload_json = qdyndb.get_queued_payload(task_id)
@@ -2510,7 +2510,7 @@ def _try_preview_for_task(
             stru_hash = input_data.get("stru_hash", "")
             if stru_hash:
                 preview = _preview_from_traj_hash(
-                    stru_hash, stru_format, manager
+                    stru_hash, stru_format, task_id, manager
                 )
                 if preview is not None:
                     return preview
@@ -2519,6 +2519,18 @@ def _try_preview_for_task(
                 "Failed to build preview from queued payload for task %s",
                 task_id,
             )
+
+    # --- Strategy 1b: Persisted stru_hash in task_owners ---
+    # After dispatch, queued_submissions is purged but stru_hash survives
+    # in task_owners (persisted at submit time).
+    meta = qdyndb.get_task_metadata(task_id)
+    if meta and meta.get("stru_hash"):
+        fmt = meta.get("stru_format") or "vasp"
+        preview = _preview_from_traj_hash(
+            meta["stru_hash"], fmt, task_id, manager
+        )
+        if preview is not None:
+            return preview
 
     # --- Strategy 2: First job's run directory ---
     job_ids = qdyndb.get_task_job_ids(task_id)
@@ -2561,7 +2573,7 @@ def _try_preview_for_task(
             try:
                 content = access.read_root_text(stru_filename)
                 # Determine ASE format from software
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 logger.warning(
@@ -2594,7 +2606,7 @@ def _try_preview_for_task(
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 pass
@@ -2605,7 +2617,7 @@ def _try_preview_for_task(
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 pass
@@ -2641,7 +2653,7 @@ def _preview_from_job_kwargs(
     import ase.io
     from ase import Atoms
 
-    from ..params import TRAJ_FORMAT_MAPPING
+    from ..params import STRU_FORMAT_MAPPING, TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
     try:
@@ -2660,11 +2672,15 @@ def _preview_from_job_kwargs(
         # --- Case 1: Serialized ASE Atoms dict (NVT/NVE jobs) ---
         stru_dict = kwargs.get("structure")
         if isinstance(stru_dict, dict) and "positions" in stru_dict:
-            # Use fromdict() to restore constraints (FixAtoms etc.)
+            import numpy as np
+            for key in stru_dict:
+                if isinstance(stru_dict[key], list):
+                    stru_dict[key] = np.array(stru_dict[key])
             atoms = Atoms.fromdict(stru_dict)
             buf = io.StringIO()
-            ase.io.write(buf, atoms, format=software)
-            return build_preview(buf.getvalue(), fmt=software)
+            ase_fmt = STRU_FORMAT_MAPPING.get(software, software)
+            ase.io.write(buf, atoms, format=ase_fmt)
+            return build_preview(buf.getvalue(), fmt=ase_fmt)
 
         # --- Case 2: Trajectory file path (SCF jobs) ---
         traj_path = kwargs.get("traj_path")
@@ -2676,7 +2692,7 @@ def _preview_from_job_kwargs(
                 ase_fmt = TRAJ_FORMAT_MAPPING.get(traj_format, traj_format)
                 atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
                 buf = io.StringIO()
-                stru_fmt = software
+                stru_fmt = STRU_FORMAT_MAPPING.get(software, software)
                 ase.io.write(buf, atoms, format=stru_fmt)
                 return build_preview(buf.getvalue(), fmt=stru_fmt)
     except Exception:
@@ -2689,6 +2705,7 @@ def _preview_from_job_kwargs(
 def _preview_from_traj_hash(
     stru_hash: str,
     stru_format: str,
+    task_id: str,
     manager: MainWorkflow,
 ):
     """Read the first frame of a trajectory file identified by hash.
@@ -2702,10 +2719,8 @@ def _preview_from_traj_hash(
     from ..params import TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
-    data_dir = str(
-        Path(manager.config["basic"].get("user_data", "data/user_data")).resolve()
-    )
-    traj_path = Path(data_dir) / "trajectory" / stru_hash
+    pool = manager.get_task_pool(task_id)
+    traj_path = Path(pool.get_user_file_path('trajectory', stru_hash))
     if not traj_path.is_file():
         return None
 
@@ -2726,18 +2741,20 @@ def _preview_from_traj_hash(
 def _resolve_software_for_task(task_id: str, manager: MainWorkflow) -> str:
     """Determine the software used by a task.
 
-    Checks the queued payload first (input.basic_input.software),
-    then defaults to 'vasp'.
+    Checks step-specific software first (nvt_input/nve_input may differ
+    from basic_input when using MLFF), then basic_input, then 'vasp'.
     """
     payload_json = qdyndb.get_queued_payload(task_id)
     if payload_json:
         try:
             payload = json.loads(payload_json)
             input_data = payload.get("input", {})
-            basic = input_data.get("basic_input", {})
-            sw = basic.get("software")
-            if sw:
-                return sw
+            for section in ("nvt_input", "nve_input", "basic_input"):
+                data = input_data.get(section)
+                if isinstance(data, dict):
+                    sw = data.get("software")
+                    if sw:
+                        return sw
         except Exception:
             pass
     return "vasp"
