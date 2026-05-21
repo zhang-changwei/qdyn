@@ -65,6 +65,41 @@ export async function checkTrajectoryHash(hash: string): Promise<{ exists: boole
   return resp.data
 }
 
+// ============================================
+// Model Upload API (direct endpoints, not /frontend)
+// ============================================
+
+/**
+ * Upload a model file to the server.
+ * Uses multipart/form-data with streaming progress.
+ */
+export async function uploadModel(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<{ hash: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('file_type', 'model')
+  const resp = await http.post('/upload', formData, {
+    timeout: 0,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) {
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+    },
+  })
+  return resp.data
+}
+
+/**
+ * Check if a model file with the given hash already exists on the server.
+ */
+export async function checkModelHash(hash: string): Promise<{ exists: boolean }> {
+  const resp = await http.get('/upload/hash', { params: { hash, file_type: 'model' } })
+  return resp.data
+}
+
 /**
  * Unwrap API response (extract data from { success, data } wrapper)
  * Throws error if success is false
