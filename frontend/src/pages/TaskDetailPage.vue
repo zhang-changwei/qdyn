@@ -152,469 +152,38 @@
             </template>
           </el-table-column>
 
-          <!-- Expand row: progress, error detail, images -->
+          <!-- Expand row: delegated to JobExpandedRow -->
           <el-table-column type="expand">
             <template #default="{ row }">
-              <div class="expand-content">
-                <!-- UUID display -->
-                <div class="uuid-section">
-                  <el-text size="small" type="info">UUID:</el-text>
-                  <el-text size="small" class="uuid-text">{{ row.uuid }}</el-text>
-                </div>
-
-                <!-- Time information -->
-                <div v-if="row.created_on || row.start_time || row.end_time" class="time-section">
-                  <el-descriptions :column="2" size="small" border>
-                    <el-descriptions-item label="Created">
-                      {{ formatDateTime(row.created_on) }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="Started">
-                      {{ formatDateTime(row.start_time) }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="Ended">
-                      {{ formatDateTime(row.end_time) }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="Duration">
-                      {{ computeDuration(row.start_time, row.end_time) }}
-                    </el-descriptions-item>
-                  </el-descriptions>
-                </div>
-
-                <!-- Error detail (FAILED/ERROR jobs) -->
-                <div v-if="expandedErrors.has(row.uuid)">
-                  <div v-if="errorLoading.has(row.uuid)" class="error-loading">
-                    <el-skeleton :rows="3" animated />
-                  </div>
-                  <div v-else-if="jobErrors.get(row.uuid)?.available" class="error-content">
-                    <div class="error-message">
-                      <el-text type="danger" tag="div" size="small">
-                        {{ jobErrors.get(row.uuid)?.message }}
-                      </el-text>
-                    </div>
-                    <el-collapse class="traceback-collapse" :model-value="['traceback']">
-                      <el-collapse-item title="Traceback" name="traceback">
-                        <pre class="traceback-pre">{{ jobErrors.get(row.uuid)?.traceback }}</pre>
-                      </el-collapse-item>
-                    </el-collapse>
-                  </div>
-                  <div v-else class="error-unavailable">
-                    <el-text type="info">No error information available.</el-text>
-                    <el-button type="text" size="small" @click.stop="retryJobError(row)" style="margin-left: 8px;">
-                      Retry
-                    </el-button>
-                  </div>
-                </div>
-
-                <!-- Progress loading skeleton -->
-                <div v-if="progressLoading.has(row.uuid)" class="section-skeleton">
-                  <el-skeleton :rows="2" animated />
-                </div>
-
-                <!-- Progress -->
-                <div v-if="!progressLoading.has(row.uuid) && jobProgress.get(row.uuid)?.available" class="progress-section">
-                  <el-progress
-                    v-if="jobProgress.get(row.uuid)?.percent != null"
-                    :percentage="Math.min(jobProgress.get(row.uuid)!.percent!, 100)"
-                    :stroke-width="18"
-                    :text-inside="true"
-                  />
-                  <el-progress
-                    v-else-if="row.derived_state === 'RUNNING'"
-                    :percentage="100"
-                    :indeterminate="true"
-                    :stroke-width="18"
-                    status="warning"
-                  >
-                    <span>In progress...</span>
-                  </el-progress>
-                  <div class="progress-details">
-                    <template v-if="jobProgress.get(row.uuid)?.step_type === 'scf' && jobProgress.get(row.uuid)?.batch">
-                      <el-text size="small">
-                        Completed {{ jobProgress.get(row.uuid)?.current_step || 0 }} / {{ jobProgress.get(row.uuid)?.total_steps }} frames
-                      </el-text>
-                      <el-text
-                        v-if="jobProgress.get(row.uuid)!.batch!.failed > 0"
-                        size="small"
-                        type="danger"
-                        style="margin-left: 12px;"
-                      >
-                        {{ jobProgress.get(row.uuid)!.batch!.failed }} failed
-                      </el-text>
-                    </template>
-                    <template v-else-if="jobProgress.get(row.uuid)?.step_type === 'fused_cat'">
-                      <el-text size="small">CA-NAC aggregation</el-text>
-                    </template>
-                    <template v-else>
-                      <el-text size="small">
-                        Step {{ jobProgress.get(row.uuid)?.current_step || 0 }}
-                        <template v-if="jobProgress.get(row.uuid)?.total_steps">
-                          / {{ jobProgress.get(row.uuid)?.total_steps }}
-                        </template>
-                      </el-text>
-                    </template>
-                    <el-text
-                      v-if="jobProgress.get(row.uuid)?.last_temp != null && (jobProgress.get(row.uuid)?.step_type === 'nvt' || jobProgress.get(row.uuid)?.step_type === 'nve')"
-                      size="small"
-                      style="margin-left: 16px;"
-                    >
-                      Temp: {{ jobProgress.get(row.uuid)?.last_temp?.toFixed(1) }} K
-                    </el-text>
-                    <el-text
-                      v-if="jobProgress.get(row.uuid)?.last_energy != null"
-                      size="small"
-                      style="margin-left: 16px;"
-                    >
-                      E: {{ jobProgress.get(row.uuid)?.last_energy?.toFixed(4) }} eV
-                    </el-text>
-                  </div>
-                  <!-- SCF electronic step (RUNNING only) -->
-                  <div v-if="row.derived_state === 'RUNNING' && jobProgress.get(row.uuid)?.current_frame" class="scf-estep-detail">
-                    <el-text size="small" type="warning">
-                      {{ jobProgress.get(row.uuid)!.current_frame!.name }}:
-                      electronic step
-                      {{ jobProgress.get(row.uuid)!.current_frame!.electronic_step_current ?? '?' }}
-                      <template v-if="jobProgress.get(row.uuid)!.current_frame!.electronic_step_limit != null">
-                        / {{ jobProgress.get(row.uuid)!.current_frame!.electronic_step_limit }}
-                      </template>
-                      <template v-if="jobProgress.get(row.uuid)!.current_frame!.scf_algorithm">
-                        ({{ jobProgress.get(row.uuid)!.current_frame!.scf_algorithm }})
-                      </template>
-                    </el-text>
-                  </div>
-                  <!-- Failed frames panel (SCF only) -->
-                  <div v-if="jobProgress.get(row.uuid)?.failed_frames?.length" class="failed-frames-section">
-                    <el-collapse>
-                      <el-collapse-item :title="`Failed Frames in ${row.name} (${jobProgress.get(row.uuid)!.failed_frames.length})`">
-                        <div class="failed-frames-list">
-                          <el-tag
-                            v-for="frame in jobProgress.get(row.uuid)!.failed_frames"
-                            :key="frame"
-                            type="danger"
-                            size="small"
-                            effect="plain"
-                          >
-                            {{ frame }}
-                          </el-tag>
-                        </div>
-                      </el-collapse-item>
-                    </el-collapse>
-                  </div>
-                </div>
-
-                <!-- Input Parameters loading skeleton -->
-                <div v-if="inputParamsLoading.has(row.uuid)" class="section-skeleton">
-                  <el-skeleton :rows="3" animated />
-                </div>
-
-                <!-- Input Parameters (lazy loaded) -->
-                <div
-                  v-if="!inputParamsLoading.has(row.uuid) && jobInputParams.get(row.uuid)?.available"
-                  class="input-params-section"
-                >
-                  <el-collapse>
-                    <el-collapse-item title="Input Parameters">
-                      <!-- Generic parameters table (PRE_NAMD / NAMD) -->
-                      <template v-if="jobInputParams.get(row.uuid)?.parameters">
-                        <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">
-                          {{ jobInputParams.get(row.uuid)?.parameters_title || 'Parameters' }}
-                        </el-text>
-                        <el-descriptions :column="2" border size="small" class="incar-table">
-                          <el-descriptions-item
-                            v-for="(val, key) in jobInputParams.get(row.uuid)!.parameters!"
-                            :key="key"
-                          >
-                            <template #label>
-                              <span>{{ key }}</span>
-                            </template>
-                            {{ val }}
-                          </el-descriptions-item>
-                        </el-descriptions>
-                      </template>
-
-                      <!-- INCAR table -->
-                      <template v-if="jobInputParams.get(row.uuid)?.incar">
-                        <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">INCAR</el-text>
-                        <el-descriptions :column="2" border size="small" class="incar-table">
-                          <el-descriptions-item
-                            v-for="(val, key) in jobInputParams.get(row.uuid)!.incar!"
-                            :key="key"
-                          >
-                            <template #label>
-                              <el-tooltip
-                                v-if="INCAR_DESCRIPTIONS[String(key)]"
-                                :content="INCAR_DESCRIPTIONS[String(key)]"
-                                placement="top"
-                                :show-after="300"
-                              >
-                                <span class="incar-key-with-desc">{{ key }}</span>
-                              </el-tooltip>
-                              <span v-else>{{ key }}</span>
-                            </template>
-                            {{ val }}
-                          </el-descriptions-item>
-                        </el-descriptions>
-                      </template>
-
-                      <!-- KPOINTS block -->
-                      <template v-if="jobInputParams.get(row.uuid)?.kpoints_text">
-                        <el-text size="small" type="info" tag="div" style="margin-top: 12px; margin-bottom: 6px; font-weight: 600;">KPOINTS</el-text>
-                        <pre class="kpoints-pre">{{ jobInputParams.get(row.uuid)!.kpoints_text }}</pre>
-                      </template>
-
-                      <!-- Warning -->
-                      <el-text
-                        v-if="jobInputParams.get(row.uuid)?.warning"
-                        size="small"
-                        type="warning"
-                        tag="div"
-                        style="margin-top: 8px;"
-                      >
-                        {{ jobInputParams.get(row.uuid)!.warning }}
-                      </el-text>
-                    </el-collapse-item>
-                  </el-collapse>
-                </div>
-
-                <!-- MD Timeseries chart (NVT/NVE jobs) — visible once progress data is available -->
-                <JobMdTimeseriesPanel
-                  v-if="!progressLoading.has(row.uuid) && isMdJob(row)"
-                  :task-id="taskId"
-                  :job-uuid="row.uuid"
-                  :step-type="jobProgress.get(row.uuid)?.step_type"
-                />
-
-                <!-- Output files loading skeleton -->
-                <div v-if="filesLoading.has(row.uuid)" class="section-skeleton">
-                  <el-skeleton :rows="3" animated />
-                </div>
-
-                <!-- Output files section (categorized, images first with preview) -->
-                <div
-                  v-if="!filesLoading.has(row.uuid) && jobFiles.get(row.uuid)?.files?.length"
-                  class="files-section"
-                >
-                  <template
-                    v-for="group in groupFilesByCategory(jobFiles.get(row.uuid)!.files)"
-                    :key="group.label"
-                  >
-                    <el-divider content-position="left">
-                      {{ group.label }}
-                      <el-checkbox
-                        v-if="group.category !== 'image'"
-                        size="small"
-                        class="group-select-checkbox"
-                        :model-value="isGroupAllSelected(row.uuid, group.files)"
-                        @update:model-value="toggleGroupSelection(row.uuid, group.files)"
-                        @click.stop
-                      />
-                    </el-divider>
-
-                    <!-- Images: inline preview grid with download -->
-                    <div v-if="group.category === 'image'" class="images-grid">
-                      <div
-                        v-for="file in group.files"
-                        :key="file.name"
-                        class="image-card"
-                      >
-                        <el-checkbox
-                          class="image-select-checkbox"
-                          :model-value="isFileSelected(row.uuid, file.name)"
-                          @update:model-value="toggleFileSelection(row.uuid, file.name)"
-                          @click.stop
-                        />
-                        <el-image
-                          v-if="imageBlobUrls.get(`${row.uuid}/${file.name}`)"
-                          :src="imageBlobUrls.get(`${row.uuid}/${file.name}`)!"
-                          :preview-src-list="group.files
-                            .map(f => imageBlobUrls.get(`${row.uuid}/${f.name}`) || '')
-                            .filter(u => u)"
-                          fit="contain"
-                          class="result-image"
-                          :alt="file.name"
-                        />
-                        <el-skeleton v-else :rows="0" animated class="result-image" />
-                        <div class="image-caption">
-                          <span class="image-name" :title="file.name">{{ file.name }}</span>
-                          <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
-                          <el-button size="small" text type="primary" @click="downloadFile(row, file.name)">
-                            <el-icon><Download /></el-icon>
-                          </el-button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- Non-image files: table list -->
-                    <el-table
-                      v-else
-                      :data="group.files"
-                      size="small"
-                      class="files-table"
-                      :show-header="false"
-                    >
-                      <el-table-column width="40" align="center">
-                        <template #default="{ row: file }">
-                          <el-checkbox
-                            :model-value="isFileSelected(row.uuid, file.name)"
-                            @update:model-value="toggleFileSelection(row.uuid, file.name)"
-                          />
-                        </template>
-                      </el-table-column>
-                      <el-table-column prop="name" min-width="200">
-                        <template #default="{ row: file }">
-                          <div class="file-name-cell">
-                            <el-icon><Document /></el-icon>
-                            <span class="file-name-text">{{ file.name }}</span>
-                          </div>
-                        </template>
-                      </el-table-column>
-                      <el-table-column width="100" align="right">
-                        <template #default="{ row: file }">
-                          <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
-                        </template>
-                      </el-table-column>
-                      <el-table-column width="120" align="center">
-                        <template #default="{ row: file }">
-                          <div class="file-action-cell">
-                            <el-tooltip
-                              v-if="file.size > LARGE_FILE_THRESHOLD"
-                              :content="`Large file (${formatFileSize(file.size)})`"
-                              placement="top"
-                            >
-                              <el-icon class="large-file-warning"><WarningFilled /></el-icon>
-                            </el-tooltip>
-                            <el-button
-                              size="small"
-                              text
-                              type="primary"
-                              @click="downloadFile(row, file.name)"
-                            >
-                              <el-icon><Download /></el-icon>
-                              Download
-                            </el-button>
-                          </div>
-                        </template>
-                      </el-table-column>
-                    </el-table>
-                  </template>
-                </div>
-
-                <!-- Subdirectory groups (SCF frames, NVT attempts, etc.) -->
-                <div
-                  v-if="!filesLoading.has(row.uuid) && jobFiles.get(row.uuid)?.subdirs?.length"
-                  class="subdirs-section"
-                >
-                  <template
-                    v-for="sdGroup in groupSubdirsByPrefix(jobFiles.get(row.uuid)!.subdirs)"
-                    :key="sdGroup.prefix"
-                  >
-                    <el-divider content-position="left">
-                      <el-icon><FolderOpened /></el-icon>
-                      {{ sdGroup.label }} ({{ sdGroup.subdirs.length }})
-                      <el-checkbox
-                        size="small"
-                        class="group-select-checkbox"
-                        :model-value="isSdGroupAllSelected(row.uuid, sdGroup.subdirs)"
-                        @update:model-value="toggleSdGroupSelectAll(row.uuid, sdGroup.subdirs)"
-                        @click.stop
-                      />
-                    </el-divider>
-
-                    <el-collapse class="subdir-collapse" accordion>
-                      <el-collapse-item
-                        v-for="sd in sdGroup.subdirs"
-                        :key="sd.name"
-                        :name="sd.name"
-                        @click="loadSubdirFiles(row.uuid, sd.name)"
-                      >
-                        <template #title>
-                          <div class="subdir-title">
-                            <el-icon><Folder /></el-icon>
-                            <span class="subdir-name">{{ sd.name }}</span>
-                            <el-tag
-                              :type="subdirStatusType(sd.status)"
-                              size="small"
-                              effect="plain"
-                              class="subdir-status-tag"
-                            >
-                              {{ sd.status }}
-                            </el-tag>
-                            <span class="subdir-file-count">{{ sd.file_count }} files</span>
-                            <el-checkbox
-                              size="small"
-                              class="subdir-select-checkbox"
-                              :model-value="isGroupAllSelected(row.uuid, subdirFiles.get(`${row.uuid}/${sd.name}`)?.files ?? [], sd.name)"
-                              @update:model-value="toggleSubdirSelectAll(row.uuid, sd.name)"
-                              @click.stop
-                            />
-                          </div>
-                        </template>
-
-                        <!-- Lazy-loaded subdirectory contents -->
-                        <div v-if="subdirFilesLoading.has(`${row.uuid}/${sd.name}`)" class="section-skeleton">
-                          <el-skeleton :rows="2" animated />
-                        </div>
-                        <div v-else-if="subdirFiles.get(`${row.uuid}/${sd.name}`)?.files?.length" class="subdir-files-content">
-                          <el-table
-                            :data="subdirFiles.get(`${row.uuid}/${sd.name}`)!.files"
-                            size="small"
-                            class="files-table"
-                            :show-header="false"
-                          >
-                            <el-table-column width="40" align="center">
-                              <template #default="{ row: file }">
-                                <el-checkbox
-                                  :model-value="isFileSelected(row.uuid, file.name, sd.name)"
-                                  @update:model-value="toggleFileSelection(row.uuid, file.name, sd.name)"
-                                />
-                              </template>
-                            </el-table-column>
-                            <el-table-column prop="name" min-width="200">
-                              <template #default="{ row: file }">
-                                <div class="file-name-cell">
-                                  <el-icon><Document /></el-icon>
-                                  <span class="file-name-text">{{ file.name }}</span>
-                                </div>
-                              </template>
-                            </el-table-column>
-                            <el-table-column width="100" align="right">
-                              <template #default="{ row: file }">
-                                <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
-                              </template>
-                            </el-table-column>
-                            <el-table-column width="120" align="center">
-                              <template #default="{ row: file }">
-                                <div class="file-action-cell">
-                                  <el-tooltip
-                                    v-if="file.size > LARGE_FILE_THRESHOLD"
-                                    :content="`Large file (${formatFileSize(file.size)})`"
-                                    placement="top"
-                                  >
-                                    <el-icon class="large-file-warning"><WarningFilled /></el-icon>
-                                  </el-tooltip>
-                                  <el-button
-                                    size="small"
-                                    text
-                                    type="primary"
-                                    @click="downloadSubdirFile(row, sd.name, file.name)"
-                                  >
-                                    <el-icon><Download /></el-icon>
-                                    Download
-                                  </el-button>
-                                </div>
-                              </template>
-                            </el-table-column>
-                          </el-table>
-                        </div>
-                        <el-empty
-                          v-else-if="subdirFiles.has(`${row.uuid}/${sd.name}`) && !subdirFiles.get(`${row.uuid}/${sd.name}`)?.files?.length"
-                          description="No files"
-                          :image-size="40"
-                        />
-                      </el-collapse-item>
-                    </el-collapse>
-                  </template>
-                </div>
-              </div>
+              <JobExpandedRow
+                :row="row"
+                :task-id="taskId"
+                :row-state="{
+                  expandedError: expandedErrors.has(row.uuid),
+                  errorLoading: errorLoading.has(row.uuid),
+                  error: jobErrors.get(row.uuid),
+                  progressLoading: progressLoading.has(row.uuid),
+                  progress: jobProgress.get(row.uuid),
+                  inputParamsLoading: inputParamsLoading.has(row.uuid),
+                  inputParams: jobInputParams.get(row.uuid),
+                  filesLoading: filesLoading.has(row.uuid),
+                  files: jobFiles.get(row.uuid),
+                }"
+                :image-blob-urls="imageBlobUrls"
+                :subdir-files="subdirFiles"
+                :subdir-files-loading="subdirFilesLoading"
+                :is-file-selected="isFileSelected"
+                :is-group-all-selected="isGroupAllSelected"
+                :is-sd-group-all-selected="isSdGroupAllSelected"
+                @retry-error="retryJobError"
+                @download-file="downloadFile"
+                @load-subdir-files="loadSubdirFiles"
+                @download-subdir-file="downloadSubdirFile"
+                @toggle-file-selection="toggleFileSelection"
+                @toggle-group-selection="toggleGroupSelection"
+                @toggle-subdir-select-all="toggleSubdirSelectAll"
+                @toggle-sd-group-select-all="toggleSdGroupSelectAll"
+              />
             </template>
           </el-table-column>
         </el-table>
@@ -630,24 +199,24 @@
 
     <!-- Batch download floating bar -->
     <transition name="slide-up">
-      <div v-if="totalSelectedCount > 0 || batchDownloading" class="batch-download-bar">
-        <span v-if="batchDownloading && downloadProgress < 0">
+      <div v-if="totalSelectedCount > 0 || downloadState.downloading" class="batch-download-bar">
+        <span v-if="downloadState.downloading && downloadState.progress < 0">
           Preparing archive...
         </span>
-        <span v-else-if="batchDownloading && downloadProgress >= 0">
-          Downloading... {{ downloadProgress }}%
+        <span v-else-if="downloadState.downloading && downloadState.progress >= 0">
+          Downloading... {{ downloadState.progress }}%
         </span>
         <span v-else>
           {{ totalSelectedCount }} file{{ totalSelectedCount > 1 ? 's' : '' }} selected
           ({{ formatFileSize(totalSelectedSize) }})
         </span>
         <div class="batch-download-actions">
-          <el-button size="small" :disabled="batchDownloading" @click="clearSelection">Clear</el-button>
+          <el-button size="small" :disabled="downloadState.downloading" @click="clearSelection">Clear</el-button>
           <el-button
             type="primary"
             size="small"
-            :loading="batchDownloading"
-            :disabled="batchDownloading"
+            :loading="downloadState.downloading"
+            :disabled="downloadState.downloading"
             @click="handleBatchDownload"
           >
             <el-icon><Download /></el-icon>
@@ -661,23 +230,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Document, Download, Edit, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
+import { ArrowLeft, Download, Edit } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
-import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams, downloadZip, type ZipDownloadFileItem } from '@/api/tasks'
+import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
 import { getTaskStructurePreview } from '@/api/structures'
 import { getTaskDisplayName } from '@/utils/task-display'
+import { formatFileSize } from '@/utils/format'
+import { PHASE_ORDER } from '@/constants/steps'
+import { useFileSelection } from '@/composables/useFileSelection'
+import { usePolling } from '@/composables/usePolling'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobStepTimeline from '@/components/JobStepTimeline.vue'
-import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
+import JobExpandedRow from '@/components/JobExpandedRow.vue'
 import StructureViewer from '@/components/StructureViewer.vue'
-import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
-import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse, StructurePreviewPayload } from '@/api/types'
-
-const POLL_INTERVAL_MS = 30_000
-const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB
+import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirFilesResponse, StructurePreviewPayload } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -718,173 +287,61 @@ const progressLoading = ref<Set<string>>(new Set())
 const stopping = ref(false)
 const continuing = ref(false)
 const deleting = ref(false)
-const batchDownloading = ref(false)
-const downloadProgress = ref(-1) // -1 = preparing, 0..100 = transfer progress
-
-// Key: "${jobUuid}" for root files, "${jobUuid}/${subdir}" for subdir files.
-// Value: set of selected filenames in that location.
-const selectedFiles = reactive(new Map<string, Set<string>>())
-
-function getSelectionKey(jobUuid: string, subdir?: string): string {
-  return subdir ? `${jobUuid}/${subdir}` : jobUuid
-}
-
-function isFileSelected(jobUuid: string, filename: string, subdir?: string): boolean {
-  const key = getSelectionKey(jobUuid, subdir)
-  return selectedFiles.get(key)?.has(filename) ?? false
-}
-
-function toggleFileSelection(jobUuid: string, filename: string, subdir?: string): void {
-  const key = getSelectionKey(jobUuid, subdir)
-  if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
-  const set = selectedFiles.get(key)!
-  if (set.has(filename)) {
-    set.delete(filename)
-  } else {
-    set.add(filename)
-  }
-}
-
-function toggleGroupSelection(jobUuid: string, files: { name: string }[], subdir?: string): void {
-  const key = getSelectionKey(jobUuid, subdir)
-  if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
-  const set = selectedFiles.get(key)!
-  const allSelected = files.every(file => set.has(file.name))
-  if (allSelected) {
-    for (const file of files) set.delete(file.name)
-  } else {
-    for (const file of files) set.add(file.name)
-  }
-}
-
-function isGroupAllSelected(jobUuid: string, files: { name: string }[], subdir?: string): boolean {
-  const key = getSelectionKey(jobUuid, subdir)
-  const set = selectedFiles.get(key)
-  if (!set || files.length === 0) return false
-  return files.every(file => set.has(file.name))
-}
-
-const totalSelectedCount = computed(() => {
-  let count = 0
-  for (const set of selectedFiles.values()) count += set.size
-  return count
-})
-
-const totalSelectedSize = computed(() => {
-  let total = 0
-  for (const [key, filenames] of selectedFiles.entries()) {
-    const parts = key.split('/')
-    const jobUuid = parts[0]
-    const subdir = parts.length > 1 ? parts.slice(1).join('/') : undefined
-    if (subdir) {
-      const files = subdirFiles.value.get(key)?.files ?? []
-      for (const f of files) {
-        if (filenames.has(f.name)) total += f.size
-      }
-    } else {
-      const files = jobFiles.value.get(jobUuid)?.files ?? []
-      for (const f of files) {
-        if (filenames.has(f.name)) total += f.size
-      }
-    }
-  }
-  return total
-})
-
-function clearSelection(): void {
-  selectedFiles.clear()
-}
-
-function isSdGroupAllSelected(jobUuid: string, subdirs: { name: string }[]): boolean {
-  if (subdirs.length === 0) return false
-  return subdirs.every(sd => {
-    const files = subdirFiles.value.get(`${jobUuid}/${sd.name}`)?.files ?? []
-    return files.length > 0 && isGroupAllSelected(jobUuid, files, sd.name)
-  })
-}
-
-async function toggleSdGroupSelectAll(jobUuid: string, subdirs: { name: string }[]): Promise<void> {
-  const allLoaded = subdirs.every(sd => subdirFiles.value.has(`${jobUuid}/${sd.name}`))
-  if (!allLoaded) {
-    await Promise.all(
-      subdirs
-        .filter(sd => !subdirFiles.value.has(`${jobUuid}/${sd.name}`))
-        .map(sd => loadSubdirFiles(jobUuid, sd.name))
-    )
-  }
-  const allSelected = isSdGroupAllSelected(jobUuid, subdirs)
-  for (const sd of subdirs) {
-    const files = subdirFiles.value.get(`${jobUuid}/${sd.name}`)?.files ?? []
-    if (files.length === 0) continue
-    const key = getSelectionKey(jobUuid, sd.name)
-    if (!selectedFiles.has(key)) selectedFiles.set(key, new Set())
-    const set = selectedFiles.get(key)!
-    if (allSelected) {
-      for (const f of files) set.delete(f.name)
-    } else {
-      for (const f of files) set.add(f.name)
-    }
-  }
-}
-
-async function toggleSubdirSelectAll(jobUuid: string, subdirName: string): Promise<void> {
-  const key = `${jobUuid}/${subdirName}`
-  if (!subdirFiles.value.has(key)) {
-    await loadSubdirFiles(jobUuid, subdirName)
-  }
-  const files = subdirFiles.value.get(key)?.files ?? []
-  if (files.length > 0) {
-    toggleGroupSelection(jobUuid, files, subdirName)
-  }
-}
-
-async function handleBatchDownload(): Promise<void> {
-  const items: ZipDownloadFileItem[] = []
-  for (const [key, filenames] of selectedFiles.entries()) {
-    const parts = key.split('/')
-    const jobUuid = parts[0]
-    const subdir = parts.length > 1 ? parts.slice(1).join('/') : undefined
-    for (const filename of filenames) {
-      items.push({ job_uuid: jobUuid, filename, subdir })
-    }
-  }
-  if (items.length === 0) return
-
-  batchDownloading.value = true
-  downloadProgress.value = -1
-  try {
-    const blob = await downloadZip(taskId.value, items, (event) => {
-      if (event.total && event.total > 0) {
-        downloadProgress.value = Math.round((event.loaded / event.total) * 100)
-      } else {
-        downloadProgress.value = 0
-      }
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `qdyn_files_${taskId.value.slice(0, 8)}.zip`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    ElMessage.success(`Downloaded ${items.length} files`)
-    clearSelection()
-  } catch {
-    ElMessage.error('Failed to download files')
-  } finally {
-    batchDownloading.value = false
-    downloadProgress.value = -1
-  }
-}
-
-// Polling
-let pollTimer: ReturnType<typeof setInterval> | null = null
-let isPollingInProgress = false
-let isPageVisible = ref(!document.hidden)
-let isPageFocused = ref(document.hasFocus())
 
 const taskId = computed(() => route.params.taskId as string)
+
+// loadSubdirFiles is defined here (before useFileSelection) because the
+// composable needs it as a callback parameter.
+async function loadSubdirFiles(jobUuid: string, subdirName: string): Promise<void> {
+  const key = `${jobUuid}/${subdirName}`
+  if (subdirFiles.value.has(key)) return
+
+  subdirFilesLoading.value.add(key)
+  subdirFilesLoading.value = new Set(subdirFilesLoading.value)
+  try {
+    const result = await getSubdirFiles(taskId.value, jobUuid, subdirName)
+    subdirFiles.value.set(key, result)
+    subdirFiles.value = new Map(subdirFiles.value)
+  } catch {
+    // Silently ignore
+  } finally {
+    subdirFilesLoading.value.delete(key)
+    subdirFilesLoading.value = new Set(subdirFilesLoading.value)
+  }
+}
+
+// File selection + batch download (delegated to composable)
+const {
+  downloadState,
+  isFileSelected,
+  toggleFileSelection,
+  toggleGroupSelection,
+  isGroupAllSelected,
+  totalSelectedCount,
+  totalSelectedSize,
+  clearSelection,
+  isSdGroupAllSelected,
+  toggleSdGroupSelectAll,
+  toggleSubdirSelectAll,
+  handleBatchDownload,
+} = useFileSelection(taskId, jobFiles, subdirFiles, loadSubdirFiles)
+
+// Polling (delegated to composable)
+const { start: startPolling, stop: stopPolling } = usePolling(
+  async () => {
+    const result = await tasksStore.fetchJobsStatusSilent(taskId.value)
+    await refreshJobExtras()
+    const activeStates = new Set(['RUNNING', 'PENDING'])
+    const hasActive = result.jobs.some(
+      job => job.derived_state !== null && activeStates.has(job.derived_state)
+    )
+    if (!hasActive) {
+      stopPolling()
+    }
+  },
+  30_000,
+  () => hasRunningJobs.value,
+)
 
 const truncatedTaskId = computed((): string => {
   const id = taskId.value
@@ -948,17 +405,6 @@ async function fetchStructurePreview() {
     // Non-critical: preview unavailable does not block task detail
     structurePreview.value = null
   }
-}
-
-// Phase ordering: nvt < nve < scf/fused < pre_namd < namd
-const PHASE_ORDER: Record<string, number> = {
-  nvt: 0,
-  nve: 1,
-  scf: 2,
-  fused_scf_prenamd: 2,
-  fused_cat: 2,
-  pre_namd: 3,
-  namd: 4,
 }
 
 function jobDisplayName(name: string): string {
@@ -1034,9 +480,6 @@ onMounted(async () => {
   await loadTaskData()
   fetchStructurePreview()  // fire-and-forget: non-blocking
   startPolling()
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  window.addEventListener('focus', handleFocus)
-  window.addEventListener('blur', handleBlur)
 })
 
 // Reload when navigating between tasks (e.g. "Resumed from" link)
@@ -1050,10 +493,6 @@ watch(taskId, async () => {
 })
 
 onUnmounted(() => {
-  stopPolling()
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-  window.removeEventListener('focus', handleFocus)
-  window.removeEventListener('blur', handleBlur)
   // Release all blob URLs to free memory
   for (const url of imageBlobUrls.value.values()) {
     URL.revokeObjectURL(url)
@@ -1167,24 +606,6 @@ async function loadJobFiles(job: JobStatusItem): Promise<void> {
   }
 }
 
-async function loadSubdirFiles(jobUuid: string, subdirName: string): Promise<void> {
-  const key = `${jobUuid}/${subdirName}`
-  if (subdirFiles.value.has(key)) return
-
-  subdirFilesLoading.value.add(key)
-  subdirFilesLoading.value = new Set(subdirFilesLoading.value)
-  try {
-    const result = await getSubdirFiles(taskId.value, jobUuid, subdirName)
-    subdirFiles.value.set(key, result)
-    subdirFiles.value = new Map(subdirFiles.value)
-  } catch {
-    // Silently ignore
-  } finally {
-    subdirFilesLoading.value.delete(key)
-    subdirFilesLoading.value = new Set(subdirFilesLoading.value)
-  }
-}
-
 function downloadSubdirFile(job: JobStatusItem, subdir: string, filename: string): void {
   getSubdirFile(taskId.value, job.uuid, subdir, filename).then(blob => {
     const url = URL.createObjectURL(blob)
@@ -1200,42 +621,6 @@ function downloadSubdirFile(job: JobStatusItem, subdir: string, filename: string
   })
 }
 
-function subdirStatusType(status: string): string {
-  switch (status) {
-    case 'completed': return 'success'
-    case 'running': return 'warning'
-    case 'failed': return 'danger'
-    case 'pending': return 'info'
-    default: return 'info'
-  }
-}
-
-/** Group subdirs by prefix (e.g. "scf_" -> "SCF Frames") for nested collapse */
-interface SubdirGroup {
-  label: string
-  prefix: string
-  subdirs: SubdirInfo[]
-}
-
-function groupSubdirsByPrefix(subdirs: SubdirInfo[]): SubdirGroup[] {
-  const groups = new Map<string, SubdirInfo[]>()
-  for (const sd of subdirs) {
-    // Extract prefix: everything before the last _ + digits
-    const match = sd.name.match(/^(.+?)_\d+$/)
-    const prefix = match ? match[1] : sd.name
-    if (!groups.has(prefix)) groups.set(prefix, [])
-    groups.get(prefix)!.push(sd)
-  }
-  const LABELS: Record<string, string> = {
-    'scf': 'SCF Frames',
-    'nvt_attempt': 'NVT Attempts',
-  }
-  return Array.from(groups.entries()).map(([prefix, sds]) => ({
-    label: LABELS[prefix] || `${prefix} Directories`,
-    prefix,
-    subdirs: sds,
-  }))
-}
 
 async function loadFileBlobUrl(jobUuid: string, fileName: string): Promise<void> {
   const key = `${jobUuid}/${fileName}`
@@ -1281,43 +666,6 @@ function downloadFile(job: JobStatusItem, filename: string): void {
   }).catch(() => {
     ElMessage.error(`Failed to download ${filename}`)
   })
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
-interface FileGroup {
-  label: string
-  category: string
-  files: JobFileItem[]
-}
-
-const CATEGORY_ORDER: { key: string; label: string }[] = [
-  { key: 'image', label: 'Images' },
-  { key: 'input', label: 'Input Files' },
-  { key: 'output', label: 'Output Files' },
-  { key: 'data', label: 'Data Files' },
-]
-
-function groupFilesByCategory(files: JobFileItem[]): FileGroup[] {
-  const grouped = new Map<string, JobFileItem[]>()
-  for (const file of files) {
-    const cat = file.category || 'data'
-    if (!grouped.has(cat)) grouped.set(cat, [])
-    grouped.get(cat)!.push(file)
-  }
-  // Sort files within each group by name
-  for (const list of grouped.values()) {
-    list.sort((a, b) => a.name.localeCompare(b.name))
-  }
-  // Return groups in defined order, skipping empty categories
-  return CATEGORY_ORDER
-    .filter(c => grouped.has(c.key))
-    .map(c => ({ label: c.label, category: c.key, files: grouped.get(c.key)! }))
 }
 
 // Fetch progress only for RUNNING jobs.
@@ -1435,77 +783,6 @@ async function handleDelete(): Promise<void> {
   }
 }
 
-// ============================================
-// Auto-polling
-// ============================================
-
-function shouldPoll(): boolean {
-  return hasRunningJobs.value && isPageVisible.value && isPageFocused.value
-}
-
-function startPolling(): void {
-  stopPolling()
-  if (!shouldPoll()) return
-  pollTimer = setInterval(pollJobs, POLL_INTERVAL_MS)
-}
-
-function stopPolling(): void {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-async function pollJobs(): Promise<void> {
-  if (!shouldPoll() || isPollingInProgress) {
-    if (!shouldPoll()) stopPolling()
-    return
-  }
-  isPollingInProgress = true
-  try {
-    const result = await tasksStore.fetchJobsStatusSilent(taskId.value)
-    // Refresh progress/images/files alongside status polling
-    await refreshJobExtras()
-    // Check if all jobs are now terminal -- if so, stop polling
-    const activeStates = new Set(['RUNNING', 'PENDING'])
-    const hasActive = result.jobs.some(
-      job => job.derived_state !== null && activeStates.has(job.derived_state)
-    )
-    if (!hasActive) {
-      stopPolling()
-    }
-  } catch {
-    // Silently ignore polling errors
-  } finally {
-    isPollingInProgress = false
-  }
-}
-
-function handleVisibilityChange(): void {
-  isPageVisible.value = !document.hidden
-  if (isPageVisible.value) {
-    // Page became visible: restart polling if needed, pollJobs() will be called by startPolling()
-    if (shouldPoll()) {
-      startPolling()
-    }
-  } else {
-    // Page became hidden
-    stopPolling()
-  }
-}
-
-function handleFocus(): void {
-  isPageFocused.value = true
-  if (shouldPoll()) {
-    startPolling()
-  }
-}
-
-function handleBlur(): void {
-  isPageFocused.value = false
-  stopPolling()
-}
-
 // Watch for jobsStatus changes to manage polling lifecycle
 watch(hasRunningJobs, (newValue) => {
   if (newValue) {
@@ -1521,54 +798,6 @@ watch(hasRunningJobs, (newValue) => {
 
 function goBack(): void {
   router.push({ name: 'task-list' })
-}
-
-// ============================================
-// Time formatting helpers
-// ============================================
-
-function normalizeUtcDateTime(isoStr: string): string {
-  const normalized = isoStr.trim().replace(' ', 'T')
-  if (/(?:Z|[+-]\d{2}:\d{2}|[+-]\d{4})$/.test(normalized)) {
-    return normalized
-  }
-  return `${normalized}Z`
-}
-
-function formatDateTime(isoStr: string | null | undefined): string {
-  if (!isoStr) return '-'
-  try {
-    const d = new Date(normalizeUtcDateTime(isoStr))
-    if (isNaN(d.getTime())) return isoStr
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  } catch {
-    return isoStr
-  }
-}
-
-function computeDuration(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start || !end) return '-'
-  try {
-    const startMs = new Date(normalizeUtcDateTime(start)).getTime()
-    const endMs = new Date(normalizeUtcDateTime(end)).getTime()
-    if (isNaN(startMs) || isNaN(endMs)) return '-'
-    const diffSec = Math.floor((endMs - startMs) / 1000)
-    if (diffSec < 0) return '-'
-    const hours = Math.floor(diffSec / 3600)
-    const minutes = Math.floor((diffSec % 3600) / 60)
-    const seconds = diffSec % 60
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
-    if (minutes > 0) return `${minutes}m ${seconds}s`
-    return `${seconds}s`
-  } catch {
-    return '-'
-  }
-}
-
-function isMdJob(job: JobStatusItem): boolean {
-  const stepType = jobProgress.value.get(job.uuid)?.step_type
-  return stepType === 'nvt' || stepType === 'nve'
 }
 
 function isScfJob(job: JobStatusItem): boolean {
@@ -1687,79 +916,6 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   color: var(--fg-placeholder);
 }
 
-/* Error detail styles */
-.job-error-detail {
-  padding: 12px 16px;
-  margin: 0 16px 8px;
-  background-color: var(--el-color-danger-light-9);
-  border-radius: var(--radius-sm);
-  border-left: 3px solid var(--el-color-danger);
-}
-
-.error-loading {
-  padding: var(--space-2) 0;
-}
-
-.error-message {
-  margin-bottom: var(--space-2);
-}
-
-.error-content {
-  padding: var(--space-1) 0;
-}
-
-.traceback-collapse {
-  border: none;
-}
-
-.traceback-pre {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  background-color: var(--el-fill-color-light);
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  margin: 0;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.error-unavailable {
-  padding: var(--space-1) 0;
-}
-
-/* Expand row content */
-.expand-content {
-  padding: var(--space-3) var(--space-4);
-}
-
-.uuid-section {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-
-.uuid-text {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  color: var(--fg-secondary);
-  user-select: all;
-}
-
-.time-section {
-  margin-bottom: 10px;
-}
-
-/* Time descriptions within expand rows */
-.time-section :deep(.el-descriptions__content),
-.time-section :deep(.el-descriptions__label) {
-  font-size: var(--fs-12);
-  color: var(--fg-tertiary);
-}
-
 .resume-tag {
   margin-left: var(--space-2);
 }
@@ -1776,231 +932,6 @@ function handleExpandChange(row: JobStatusItem, expandedRows: JobStatusItem[]): 
   text-decoration: underline;
 }
 
-.progress-section {
-  margin-bottom: var(--space-2);
-}
-
-/* Phosphor color override for RUNNING job progress bars */
-.progress-section :deep(.el-progress-bar__inner) {
-  background-color: var(--phosphor);
-}
-
-.images-section {
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px dashed var(--border-subtle);
-}
-
-.progress-details {
-  margin-top: 6px;
-  display: flex;
-  align-items: center;
-}
-
-.scf-estep-detail {
-  margin-top: var(--space-1);
-  padding-top: var(--space-1);
-  border-top: 1px dashed var(--border-subtle);
-}
-
-.failed-frames-section {
-  margin-top: var(--space-2);
-}
-
-.failed-frames-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.images-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  padding: var(--space-2) 0;
-}
-
-.image-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: 300px;
-}
-
-.image-select-checkbox {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  z-index: 1;
-  padding: 2px 4px;
-  background: var(--el-bg-color-overlay);
-  border-radius: var(--radius-sm);
-}
-
-.result-image {
-  width: 300px;
-  height: 220px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-}
-
-.image-caption {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
-  font-size: var(--fs-12);
-}
-
-.image-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  color: var(--fg-secondary);
-}
-
-/* Files section in expand row */
-.files-section {
-  margin-top: var(--space-2);
-}
-
-.group-select-checkbox {
-  margin-left: var(--space-2);
-  vertical-align: middle;
-}
-
-.files-table {
-  margin-bottom: var(--space-1);
-}
-
-.files-table :deep(.el-table__body-wrapper) {
-  /* Compact rows inside nested file table */
-}
-
-.file-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.file-name-text {
-  font-family: var(--font-mono);
-  font-size: var(--fs-13);
-  word-break: break-all;
-}
-
-.file-size-text {
-  font-size: var(--fs-12);
-  color: var(--fg-tertiary);
-  white-space: nowrap;
-}
-
-.file-action-cell {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
-
-.large-file-warning {
-  color: var(--warning-fg);
-  font-size: var(--fs-16);
-}
-
-/* Input parameters section */
-/* Skeleton placeholder for lazy-loaded sections within an expanded row */
-.section-skeleton {
-  margin: var(--space-2) 0;
-  padding: var(--space-2) 0;
-}
-
-.input-params-section {
-  margin-bottom: var(--space-2);
-}
-
-.incar-table :deep(.el-descriptions__label) {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: 600;
-  min-width: 120px;
-}
-
-.incar-table :deep(.el-descriptions__content) {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-}
-
-.incar-key-with-desc {
-  border-bottom: 1px dashed var(--fg-tertiary);
-  cursor: help;
-}
-
-.kpoints-pre {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  background-color: var(--el-fill-color-light);
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  margin: 0;
-}
-
-/* Subdirectory section styles */
-.subdirs-section {
-  margin-top: var(--space-2);
-}
-
-.subdir-collapse {
-  border: none;
-}
-
-.subdir-collapse :deep(.el-collapse-item__header) {
-  height: 36px;
-  line-height: 36px;
-  font-size: var(--fs-13);
-  background-color: transparent;
-}
-
-.subdir-collapse :deep(.el-collapse-item__wrap) {
-  border-bottom: none;
-}
-
-.subdir-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-}
-
-.subdir-name {
-  font-family: var(--font-mono);
-  font-size: var(--fs-13);
-  font-weight: 500;
-}
-
-.subdir-status-tag {
-  font-size: 11px;
-}
-
-.subdir-file-count {
-  font-size: var(--fs-12);
-  color: var(--fg-tertiary);
-  margin-left: auto;
-  margin-right: var(--space-2);
-}
-
-.subdir-select-checkbox {
-  margin-right: var(--space-2);
-}
-
-.subdir-files-content {
-  padding: 0 var(--space-2) var(--space-2);
-}
 
 .batch-download-bar {
   position: fixed;

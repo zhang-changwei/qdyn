@@ -59,6 +59,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ArrowRight, Check } from '@element-plus/icons-vue'
+import { FUSED_SCF_PRENAMD } from '@/constants/steps'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
@@ -89,13 +90,13 @@ const STEPS_NORMAL: StepConfig[] = [
 const STEPS_FUSED: StepConfig[] = [
   { value: 'nvt', label: 'NVT' },
   { value: 'nve', label: 'NVE' },
-  { value: 'fused_scf_prenamd', label: 'Fused SCF+Pre-NAMD' },
+  { value: FUSED_SCF_PRENAMD, label: 'Fused SCF+Pre-NAMD' },
   { value: 'namd', label: 'NAMD' },
 ]
 
 const isFused = computed((): boolean => {
-  return props.modelValue.includes('fused_scf_prenamd')
-    || props.completedSteps.includes('fused_scf_prenamd')
+  return props.modelValue.includes(FUSED_SCF_PRENAMD)
+    || props.completedSteps.includes(FUSED_SCF_PRENAMD)
 })
 
 const effectiveStepOrder = computed((): string[] => {
@@ -111,8 +112,8 @@ const availableSteps = computed((): StepConfig[] => {
 
 const showFuseToggle = computed((): boolean => {
   const hasScfAndPreNamd = props.modelValue.includes('scf') && props.modelValue.includes('pre_namd')
-  const hasFused = props.modelValue.includes('fused_scf_prenamd')
-  const completedFused = props.completedSteps.includes('fused_scf_prenamd')
+  const hasFused = props.modelValue.includes(FUSED_SCF_PRENAMD)
+  const completedFused = props.completedSteps.includes(FUSED_SCF_PRENAMD)
   const completedScf = props.completedSteps.includes('scf')
   return hasScfAndPreNamd || hasFused || completedFused || completedScf
 })
@@ -120,7 +121,7 @@ const showFuseToggle = computed((): boolean => {
 const fuseToggleDisabled = computed((): boolean => {
   if (!props.resume) return false
   // completedSteps contains fused → locked on
-  if (props.completedSteps.includes('fused_scf_prenamd')) return true
+  if (props.completedSteps.includes(FUSED_SCF_PRENAMD)) return true
   // completedSteps contains scf (independent) → locked off
   if (props.completedSteps.includes('scf')) return true
   return false
@@ -165,7 +166,7 @@ function isStepSelectable(step: string): boolean {
   }
 
   // Normal (new task) mode — allow starting from nvt, scf, or fused_scf_prenamd
-  const allowedFirstSteps = ['nvt', 'scf', 'fused_scf_prenamd']
+  const allowedFirstSteps = ['nvt', 'scf', FUSED_SCF_PRENAMD]
   if (props.modelValue.length === 0) {
     return allowedFirstSteps.includes(step)
   }
@@ -202,10 +203,10 @@ function handleFuseToggle(fused: boolean): void {
   if (fused) {
     newSteps = props.modelValue
       .filter(s => s !== 'scf' && s !== 'pre_namd')
-      .concat('fused_scf_prenamd')
+      .concat(FUSED_SCF_PRENAMD)
   } else {
     newSteps = props.modelValue
-      .filter(s => s !== 'fused_scf_prenamd')
+      .filter(s => s !== FUSED_SCF_PRENAMD)
       .concat('scf', 'pre_namd')
   }
   emit('update:modelValue', [...newSteps].sort((a, b) =>
