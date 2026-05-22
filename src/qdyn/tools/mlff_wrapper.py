@@ -58,7 +58,7 @@ def get_mlff_calculator(
 
     if isinstance(calc, NequipInputT):
         try:
-            from nequip.ase.nequip_calculator import NequIPCalculator
+            from nequip.integrations.ase import NequIPCalculator
         except ImportError:
             raise ImportError("NequIP is not installed or is too old."
                               "Please update the package and try again.")
@@ -71,7 +71,7 @@ def get_mlff_calculator(
         )
 
     elif isinstance(calc, MACEInputT):
-        from mace.calculators import MACECalculator, mace_mp
+        from mace.calculators import MACECalculator
 
         dtype = calc.default_dtype
         calculator = MACECalculator(

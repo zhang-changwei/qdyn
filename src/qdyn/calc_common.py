@@ -1,4 +1,5 @@
 import ast
+from contextlib import contextmanager
 import json
 import operator
 import os
@@ -96,6 +97,17 @@ class TrajWriter:
 
     def close(self):
         self.file.close()
+
+
+@contextmanager
+def change_dir(path: str | Path):
+    """Context manager to temporarily change the working directory."""
+    prev_dir = Path.cwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(prev_dir)
 
 
 def safe_eval(expr: str) -> Any:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import numpy as np
+import numpy.typing as npt
 from ase import Atoms
       
     
@@ -370,144 +371,6 @@ def parse_md_data_from_qdyn_log(
 # ===========================================================================
 # VASP specific functions
 # ===========================================================================
-def parse_md_data_from_oszicar(
-    oszicar_path: 'os.PathLike[str] | str',
-    incar_path: 'os.PathLike[str] | str | None' = None,
-) -> Dict:
-    """Parse MD data from a VASP OSZICAR file using streaming line scan.
-
-    This is the low-level helper that accepts absolute paths and uses
-    streaming I/O (no ``readlines()``).  Higher-level wrappers such as
-    ``extract_md_data_from_oszicar`` and the frontend API service layer
-    should call this function instead of duplicating OSZICAR parsing.
-
-    Parameters
-    ----------
-    oszicar_path : path-like
-        Absolute or relative path to the OSZICAR file.
-    incar_path : path-like or None
-        Path to the INCAR file used to read NELM for SCF convergence
-        checking.  If *None*, the default NELM=60 is assumed.
-
-    Returns
-    -------
-    dict
-        Dictionary with keys:
-        - ``steps``              : list[int]
-        - ``temperatures``       : list[float]
-        - ``total_energies``     : list[float]   (E_pot + E_kin)
-        - ``potential_energies`` : list[float]
-        - ``kinetic_energies``   : list[float]
-        - ``converged``          : list[bool]
-    """
-    from pathlib import Path
-
-    oszicar = Path(oszicar_path)
-    if not oszicar.is_file():
-        raise FileNotFoundError(
-            f"OSZICAR file not found at {oszicar_path}. "
-            "Please check the output for errors."
-        )
-
-    # --- Resolve NELM from INCAR ---
-    nelm = 60  # VASP default
-    if incar_path is not None:
-        incar = Path(incar_path)
-        if incar.is_file():
-            nelm_re = re.compile(r'^\s*NELM\s*=\s*(\d+)', re.IGNORECASE)
-            try:
-                with open(incar, 'r') as f:
-                    for line in f:
-                        m = nelm_re.match(line)
-                        if m:
-                            nelm = int(m.group(1))
-                            break
-            except OSError as e:
-                logging.warning('Failed to open INCAR at %s: %s, using default NELM=60', incar_path, e)
-
-    # --- Streaming parse of OSZICAR ---
-    steps: list[int] = []
-    temperatures: list[float] = []
-    total_energies: list[float] = []
-    potential_energies: list[float] = []
-    kinetic_energies: list[float] = []
-    converged: list[bool] = []
-
-    prev_line: str = ''
-    with open(oszicar, 'r') as f:
-        for line in f:
-            if 'T=' in line:
-                values = line.split()
-                try:
-                    step = int(values[0])
-                    T = float(values[2])
-                    E_pot = float(values[8])
-                    E_kin = float(values[10])
-                    E_total = E_pot + E_kin
-
-                    # SCF convergence: check if the previous electronic-step
-                    # line hit the NELM limit.
-                    step_converged = True
-                    if prev_line:
-                        try:
-                            if int(prev_line.split(":")[1].strip().split()[0]) == nelm:
-                                step_converged = False
-                        except (ValueError, IndexError):
-                            pass
-
-                    steps.append(step)
-                    temperatures.append(T)
-                    total_energies.append(E_total)
-                    potential_energies.append(E_pot)
-                    kinetic_energies.append(E_kin)
-                    converged.append(step_converged)
-                except (ValueError, IndexError) as e:
-                    logging.warning(
-                        'Skipping OSZICAR line due to parsing error: %s — %s',
-                        e, line.strip(),
-                    )
-            prev_line = line
-
-    if len(steps) == 0:
-        raise ValueError("No valid MD steps found in OSZICAR file.")
-
-    return {
-        'steps': steps,
-        'temperatures': temperatures,
-        'total_energies': total_energies,
-        'potential_energies': potential_energies,
-        'kinetic_energies': kinetic_energies,
-        'converged': converged,
-    }
-
-
-def extract_md_data_from_oszicar(oszicar_path: str = 'OSZICAR') -> Dict:
-    """Extract MD data and SCF convergence info from VASP OSZICAR file.
-
-    Compatibility wrapper around :func:`parse_md_data_from_oszicar`.
-    Reads INCAR from the current working directory (matching legacy
-    behaviour).
-
-    Parameters
-    ----------
-    oszicar_path : str
-        Path to OSZICAR file (default: 'OSZICAR').
-
-    Returns
-    -------
-    dict
-        Dictionary containing MD data (unified format for all software):
-        - 'steps': list of step numbers
-        - 'temperatures': list of temperatures (K)
-        - 'total_energies': list of total energies (eV)
-        - 'potential_energies': list of potential energies (eV)
-        - 'kinetic_energies': list of kinetic energies (eV)
-        - 'converged': list of bool, whether each SCF step converged
-    """
-    incar_path: str | None = 'INCAR' if os.path.isfile('INCAR') else None
-    return parse_md_data_from_oszicar(oszicar_path, incar_path)
-
-
 def WeightFromPro(
     infile: str = 'PROCAR',
     whichAtom: np.ndarray | None = None,
@@ -654,3 +517,18 @@ def extract_vbmcbm_from_vasp_outcar(
         cbm = vbm + 1
 
     return vbm, cbm, NBANDS
+
+
+# ===========================================================================
+# OPENMX specific functions
+# ===========================================================================
+def read_scfout(path: str) -> dict[str, npt.NDArray]:
+    try:
+        from qdyn_openmx_postprocess import read_scfout as _read_scfout
+    except ImportError as exc:
+        raise ImportError(
+            "OpenMX postprocess support is optional. "
+            "Install it with `uv sync --extra openmx`."
+        ) from exc
+
+    return _read_scfout(path)

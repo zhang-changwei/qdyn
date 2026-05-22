@@ -118,6 +118,56 @@ class MACEInputT(BaseModel):
     default_dtype: Literal['float32', 'float64'] = 'float32'
     dispersion: DispersionInputT | None = None
 
+class _HamGNNInputAdvT(BaseModel):
+    cutoff_func: str = "cos"
+    edge_sh_normalization: str = "component"
+    edge_sh_normalize: bool = True
+    num_radial: int = 64
+    num_types: int = 96
+    rbf_func: str = "bessel"
+    set_features: bool = True
+    radial_MLP: List[int] = [64, 64]
+    correlation: int = 2
+    num_hidden_features: int = 32
+    use_kan: bool = False
+    radius_scale: float = 1.01
+    build_internal_graph: bool = False
+    eigen_dtype: Literal['float32', 'float64'] = 'float64'
+
+class HamGNNInputT(BaseModel):
+    """Input parameters for HamGNN tight-binding Hamiltonian construction."""
+    version: Literal['v2.5'] = 'v2.5'
+    use_gpu: bool = False
+    use_pretrained_model: bool = False
+    model_hash: str = ''
+    ham_type: Literal['abacus', 'openmx'] = 'openmx'
+    nao_max: int = 13
+    add_H0: bool = False
+    batch_size: int = 32
+
+    cutoff: float = 24.0
+    irreps_edge_sh: str = "0e + 1o + 2e + 3o + 4e"
+    irreps_node_features: str = "64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e"
+    num_layers: int = 3
+
+    kspacing: float = Field(
+        default=0.04,
+        ge=1e-4,
+        le=10.0,
+        description="K-point spacing in 2π × 1/Å",
+        json_schema_extra={"step": 0.001, "precision": 4},
+    )
+    ecut: float = Field(
+        default=150.0,
+        ge=1.0,
+        description="Energy cutoff (in Ry) for two-center integrals in LCAO."
+    )
+
+    adv: _HamGNNInputAdvT = Field(
+        default_factory=_HamGNNInputAdvT,
+        json_schema_extra={"group": "advanced"},
+    )
+
 
 
 class ScissorInputT(BaseModel):
@@ -448,33 +498,6 @@ class NVEInputT(BaseModel):
 class SCFInputT(BaseModel):
     """Input parameters for static SCF calculation."""
 
-    nodes: PositiveInt | None = Field(
-        default=None,
-        description="Number of compute nodes. Leave empty to use qdyn config default.",
-        json_schema_extra={
-            "group": "advanced",
-            "step": 1,
-            "placeholder": "Auto (from config)",
-        },
-    )
-
-    kspacing: float = Field(
-        0.04,
-        ge=1e-4,
-        le=10.0,
-        description="K-point spacing in 2π × 1/Å",
-        json_schema_extra={"step": 0.001, "precision": 4},
-    )
-
-    # SCF-specific
-    scf_thr: float = Field(
-        1e-6,
-        ge=1e-12,
-        le=1.0,
-        description="Electronic convergence criterion (eV)",
-        json_schema_extra={"widget": "log-step"},
-    )
-
     # job control
     scf_step: int = Field(
         1000,
@@ -493,16 +516,12 @@ class SCFInputT(BaseModel):
     )
 
     is_alle: bool = Field(False, description="Whether to use all-electron vasp")
-    parameters: str = Field(
-        '',
-        description="Additional INCAR parameters string",
-        json_schema_extra={
-            **ADVANCED_GROUP,
-            "widget": "textarea",
-            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
-        },
-    )
+    
+    software: Literal['vasp'] = 'vasp'
 
+    calculator: DFTBaseInputT | HamGNNInputT = Field(
+        default_factory=DFTBaseInputT,
+    )
 
 
 class InputT(BaseModel):

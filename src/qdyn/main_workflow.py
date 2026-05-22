@@ -410,8 +410,8 @@ class MainWorkflow:
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        software = input.basic_input.software
         assert input.scf_input is not None
+        software = input.scf_input.software
         if software == 'abacus':
             return []
 
@@ -488,9 +488,9 @@ class MainWorkflow:
         prepare_input_only: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        software = input.basic_input.software
         assert input.scf_input is not None
         assert input.prenamd_input is not None
+        software = input.scf_input.software
         if 'nve' in jobs:
             traj_path = jobs['nve'][0].output['traj_path']
             traj_format = TRAJ_FORMAT_MAPPING[software]
