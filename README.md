@@ -107,3 +107,16 @@ The built assets will be in `frontend/dist/`, served by FastAPI at static file h
 ```bash
 git submodule update --init --recursive
 ```
+
+## Prevent hamgnn from polluting the environment
+add a minimal `pyproject.toml` in `libs/hamgnn/`
+```
+[project]
+name = "hamgnn"
+version = "2.1.0"
+dependencies = [] 
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
