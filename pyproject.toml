@@ -78,7 +78,7 @@ torch = { index = "pytorch" }
 torchaudio = { index = "pytorch" }
 torchvision = { index = "pytorch" }
 pyvaspwfc = { git = "https://github.com/QijingZheng/VaspBandUnfolding" }
-hamgnn = { path = "libs/hamgnn", editable = true }
+hamgnn = { git = "https://github.com/QuantumLab-ZY/HamGNN" }
 
 [tool.uv.extra-build-dependencies]
 torch-cluster = ["torch"]

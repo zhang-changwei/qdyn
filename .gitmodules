@@ -1,3 +1,0 @@
-[submodule "libs/hamgnn"]
-	path = libs/hamgnn
-	url = https://github.com/QuantumLab-ZY/HamGNN.git
