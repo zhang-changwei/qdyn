@@ -4,7 +4,7 @@ import os
 import re
 import logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -522,7 +522,7 @@ def extract_vbmcbm_from_vasp_outcar(
 # ===========================================================================
 # OPENMX specific functions
 # ===========================================================================
-def read_scfout(path: str) -> dict[str, npt.NDArray]:
+def read_scfout(path: str) -> dict[str, Any]:
     try:
         from qdyn_openmx_postprocess import read_scfout as _read_scfout
     except ImportError as exc:
@@ -532,3 +532,69 @@ def read_scfout(path: str) -> dict[str, npt.NDArray]:
         ) from exc
 
     return _read_scfout(path)
+
+def calc_openmx_HK_SK_gamma(
+    scfout_data: dict[str, Any], 
+    tdt: bool = False, 
+    isH: bool = False,
+    ispin: int = 0,
+):
+    natoms: int = scfout_data['atomnum']
+    nao_per_atom: npt.NDArray[np.int32] = scfout_data['nao_per_atom']
+    if isH:
+        level = scfout_data['level']
+        if level <= 2:
+            raise ValueError("H calculation requires postprocess level > 2.")
+        Son: npt.NDArray[np.float64] = scfout_data['Hon'][ispin]
+        Soff: npt.NDArray[np.float64] = scfout_data['Hoff'][ispin]
+    else:
+        Son: npt.NDArray[np.float64] = scfout_data['Son']
+        Soff: npt.NDArray[np.float64] = scfout_data['Soff']
+    edge_index: npt.NDArray[np.int32] = scfout_data['edge_index']
+
+    nao_total = np.sum(nao_per_atom)
+    nao_idx_offset = np.zeros_like(nao_per_atom)
+    nao_idx_offset[1:] = np.cumsum(nao_per_atom[:-1])
+    if tdt:
+        natoms //= 2
+        nao_total //= 2
+
+    SK = np.zeros((nao_total, nao_total), dtype=np.float64)
+    
+    if not tdt:
+        # on-site
+        for i in range(natoms):
+            nao_i = nao_per_atom[i]
+            off_i = nao_idx_offset[i]
+            tmp = Son[i][:nao_i**2] 
+            SK[off_i:off_i+nao_i, off_i:off_i+nao_i] = tmp.reshape(nao_i, nao_i)
+        # off-site
+        for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
+            nao_i = nao_per_atom[i]
+            nao_j = nao_per_atom[j]
+            off_i = nao_idx_offset[i]
+            off_j = nao_idx_offset[j]
+            tmp = Soff[idx][:nao_i*nao_j] 
+            SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+    else:
+        # no on-site
+        for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
+            if i < natoms and j >= natoms:
+                j -= natoms
+                nao_i = nao_per_atom[i]
+                nao_j = nao_per_atom[j]
+                off_i = nao_idx_offset[i]
+                off_j = nao_idx_offset[j]
+                tmp = Soff[idx][:nao_i*nao_j] 
+                SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+
+    return SK
+
+from pydantic import BaseModel
+from numpy.typing import NDArray
+class LACOMetadata:
+    nao_total: int
+    nao_per_atoms: NDArray[np.int32]
+    nao_idx_offset: NDArray[np.int32]
+    nao_max_sum: int
+    nao_max_spdf: tuple[int]

@@ -9,33 +9,76 @@ trajectory. It supports:
 """
 
 import os
-import re
-import logging
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, TYPE_CHECKING
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
-import natsort
-import numpy as np
-import ase.io
 from ase import Atoms
-from jobflow import job, Job
+from jobflow.core.job import job, Job
+import numpy as np
+from pydantic import BaseModel
 
-from ..calc_common import write_stru, read_strus
-from ..input import SCFInputT
-from ..params import params_default, chg_name, ipt_files, STRU_FNAME_MAPPING
+from ..calc_common import write_stru, read_strus, change_dir
+from ..input import SCFInputT, DFTBaseInputT
+from ..params import params_default, CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
 from ..input_prepare import DFTInputs
+from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
 from .run_software import run_software
 
-# Status file names
-STATUS_RUNNING = 'RUNNING'
-STATUS_ENDED = 'ENDED'
-STATUS_FAIL = 'FAIL'
+class SCFLogger:
+
+    def __init__(self, nstep: int, fname: str = 'qdyn_scf.log', retry: bool = False):
+        if not retry:
+            self.log_file = open(fname, 'w')
+            self.log_file.write(
+                f"Step: {nstep}, Interval: 1\n"
+                f"Step     Global_idx     Category\n"
+            )
+            self.log_file.flush()
+            self.cur_step = -1
+        else:
+            self.log_file = open(fname, 'r+')
+            f = self.log_file
+            f.readline()
+            f.readline()
+            line = ''
+            for line in f.readlines():
+                pass
+            try:
+                parts = line.split()
+                self.cur_step = int(parts[0])
+            except Exception:
+                raise ValueError("Failed to parse last line of log file for retry")
+
+    def __call__(self, step: int, global_idx: str, category: str):
+        self.log_file.write(
+            "{:<10d} {:12s} {:12s}\n".format(
+                step, global_idx, category
+            )
+        )
+        self.log_file.flush()
+
+    def close(self):
+        self.log_file.close()
+
+class SCFSolverStub:
+
+    def add(self, step: int, job_dir: Path, stru: Atoms):
+        pass
+
+    def close(self):
+        pass
+
+    def run(self):
+        pass
+
+
+class TrajInfo(BaseModel):
+    path: str
+    format: str
+    start: int
+    stop: int
+
 
 
 def qdyn_scf(
@@ -45,12 +88,14 @@ def qdyn_scf(
     orb_path: str,
     traj_path: str,
     traj_format: str = 'vasp-xdatcar',
+    model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
     threads_per_process: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> List[Job]:
+    retry: bool = False,
+) -> list[Job]:
     """Create SCF jobs for frames from the NVE trajectory.
 
     This is a task distribution function (NOT @job decorated) that:
@@ -64,42 +109,50 @@ def qdyn_scf(
         orb_path: Path to orbital files.
         traj_path: Path to the trajectory file (e.g. XDATCAR for VASP).
         traj_format: Format of the trajectory file.
+        model_path: Path to ML model (if using ML-based SCF solver).
         nodes: Number of nodes.
         processes_per_node: MPI tasks per node.
         threads_per_process: CPUs per task.
         plot: Whether to generate TDKS plot.
         prepare_input_only: If True, only prepare input files.
-
     Returns:
         List of SCF Job objects, one per batch.
     """
 
     batch_size = parameters.batch_size
     total_frames = parameters.scf_step
+    has_tail = False
 
     jobs = []
 
     # Create a job for each batch
     for batch_idx in range(0, total_frames, batch_size):
-        batch_end = min(batch_idx + batch_size, total_frames)
+        batch_end = min(batch_idx + batch_size + 1, total_frames)
+        if batch_end == total_frames:
+            has_tail = True
 
         # Global frame indices (0-based)
         frame_start = batch_idx
         frame_end = batch_end
 
-        j = qdyn_scf_task(
+        j = qdyn_scf_cpu(
             software=software,
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            traj_path=traj_path,
-            traj_format=traj_format,
-            frame_start=frame_start,
-            frame_end=frame_end,
+            traj=TrajInfo(
+                path=traj_path,
+                format=traj_format,
+                start=frame_start,
+                stop=frame_end,
+            ),
+            model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
             prepare_input_only=prepare_input_only,
+            has_tail=has_tail,
+            retry=retry,
         )
         jobs.append(j)
 
@@ -107,20 +160,20 @@ def qdyn_scf(
 
 
 @job
-def qdyn_scf_task(
+def qdyn_scf_cpu(
     software: str,
     parameters: SCFInputT,
     pp_path: str,
     orb_path: str,
-    traj_path: str,
-    traj_format: str = 'vasp-xdatcar',
-    frame_start: int = 0,
-    frame_end: int = 0,
+    traj: TrajInfo,
+    model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
     threads_per_process: int = 1,
     prepare_input_only: bool = False,
-) -> Dict:
+    has_tail: bool = False,
+    retry: bool = False,
+) -> dict:
     """Run a batch of SCF calculations for multiple structures.
 
     This job:
@@ -129,16 +182,12 @@ def qdyn_scf_task(
     3. Prepares common input files (INCAR, KPOINTS, POTCAR)
     4. Runs SCF calculations sequentially with CHGCAR passing
     5. Manages status files for resume capability
-
     Args:
         software: Software name.
         parameters: SCF parameters.
         pp_path: Pseudopotential path.
         orb_path: Orbital file path.
-        traj_path: Path to the trajectory file (e.g. XDATCAR for VASP).
-        traj_format: Format of the trajectory file (e.g. 'vasp-xdatcar').
-        frame_start: Global frame index of the first structure (0-based).
-        frame_end: Global frame index of the last structure (0-based).
+        traj: Information about the trajectory file.
         nodes: Number of compute nodes.
         processes_per_node: MPI tasks per node.
         threads_per_process: CPUs per task.
@@ -153,136 +202,162 @@ def qdyn_scf_task(
         - vbm: VBM band index (from the last successful calculation)
         - cbm: CBM band index (from the last successful calculation)
     """
-    software_lower = software.lower()
+    software = software.lower()
+    calc = parameters.calculator
     nprocs = nodes * processes_per_node
     scf_step = parameters.scf_step
+    frame_start = traj.start
 
-    all_strus = read_strus(traj_format, traj_path=traj_path)
-    selected_structures = all_strus[-scf_step:]
-    batch_structures = selected_structures[frame_start:frame_end]
-    n_frames = len(batch_structures)
+    strus = read_strus(traj.format, traj.path)
+    strus = strus[-scf_step:]
+    strus = strus[traj.start:traj.stop]
+    n_frames = len(strus)
+    nstep = n_frames - 1 # nstep >= 0
+    scf_end = nstep if not has_tail else n_frames
 
     # Prepare common input files once (these will be copied to each subdir)
-    inputs_dict = _prepare_scf_input(software_lower, parameters)
-    dftinputs = DFTInputs(
-        software=software_lower,
-        structure=batch_structures[0],
-        pp_path=pp_path,
-        orb_path=orb_path,
-        kspacing=parameters.kspacing,
-        inputs_dict=inputs_dict,
-        inputs_params=parameters.parameters,
-    )
-    dftinputs.write()
+    if isinstance(calc, DFTBaseInputT):
+        software_dft = software
+        inputs_dict = _prepare_scf_input(software, parameters)
+        dftinputs = DFTInputs(
+            software=software_dft,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict,
+            inputs_params=calc.parameters,
+        )
+        postprocess = False
+        # logger and solver
+        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        last_step = scf_logger.cur_step
+        scf_solver = SCFSolverStub()
+    else:
+        software_dft = calc.ham_type
+        inputs_dict = _prepare_scf_input(software, parameters)
+        inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
+        dftinputs = DFTInputs(
+            software=software_dft,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict,
+        )
+        postprocess = True
+        # logger and solver
+        from ..ml_tools.hamgnn_wrapper import MLSCFSolver
+        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        last_step = scf_logger.cur_step
+        scf_solver = MLSCFSolver(
+            software=software_dft,
+            mlh_input=calc,
+            model_path=model_path,
+            logger=scf_logger,
+            nproc=nprocs,
+            threads_per_proc=threads_per_process,
+        )
+    dftinputs.write(stru=False)
 
     if prepare_input_only:
         return {
             'run_dir': str(Path.cwd()),
-            'successful': 0,
-            'failed': [],
+            'software': software,
+            'software_dft': software_dft,
         }
 
     # Task working directory
     task_dir = Path.cwd()
-    run_dir = str(task_dir)
-
-    # Create subdirectories
-    subdirs = []
     numdigit = len(str(scf_step))
 
-    for local_idx, structure in enumerate(batch_structures, start=1):
-        global_idx = frame_start + local_idx
-        subdir_name = f"scf_{global_idx:0{numdigit}d}"
-        subdir_path = task_dir / subdir_name
-
-        # Create subdirectories and write structure
-        subdir_path.mkdir(exist_ok=True)
-        write_stru(software_lower, structure, subdir_path)
-
-        subdirs.append(str(subdir_path))
-
-    successful = 0
-    failed = []
     prev_chgcar = None
-    chgcar = chg_name[software_lower]
-    stru_name = STRU_FNAME_MAPPING[software_lower]
-    files_to_copy = ipt_files[software_lower]
+    chgcar = CHG_FNAME[software_dft]
+    files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
 
     # Run SCF calculations sequentially with CHGCAR passing
-    for local_idx, subdir in enumerate(subdirs, start=1):
-        global_idx = frame_start + local_idx
-
-        # Check if this subdirectory already has a result
-        status = _get_status(subdir)
-
-        if status == STATUS_ENDED:
-            # Already completed successfully, skip
-            successful += 1
-            # Restore CHGCAR relay for resume scenarios
-            prev_chgcar = None
-            resume_chgcar = os.path.join(subdir, chgcar)
-            if os.path.isfile(resume_chgcar):
-                prev_chgcar = resume_chgcar
+    for idx, stru in enumerate(strus[:scf_end]):
+        if idx <= last_step:
+            # Skip already completed steps
+            # TODO: retry hasn't completed yet
             continue
 
-        if status in [STATUS_RUNNING, STATUS_FAIL]:
-            # Previous run was interrupted, clean up and restart
-            _clean_all_files(subdir, stru_name)
-
-        # Prepare this subdirectory - copy input files from task_dir
+        # Create subdir, copy input files and write structure file
+        global_idx = frame_start + idx + 1
+        subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+        if subdir.is_dir(): # optional
+            shutil.rmtree(subdir)
+        subdir.mkdir(exist_ok=True)
         for fname in files_to_copy:
-            src = fname
-            dst = os.path.join(subdir, fname)
-            shutil.copy2(src, dst)
+            shutil.copy2(task_dir / fname, subdir / fname)
+        write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
 
         # Copy CHGCAR from previous successful calculation for faster convergence
-        if prev_chgcar is not None:
-            shutil.copy2(prev_chgcar, os.path.join(subdir, chgcar))
-
-        # Mark as running
-        _set_status(subdir, STATUS_RUNNING)
+        if prev_chgcar and prev_chgcar.is_file():
+            shutil.copy2(prev_chgcar, subdir / chgcar)
 
         # Change to subdirectory and run
-        os.chdir(subdir)
-
-        try:
-            # Run VASP
+        with change_dir(subdir):
             run_software(
-                software=software_lower, nprocs=nprocs, is_alle=parameters.is_alle
+                software=software_dft, 
+                nprocs=nprocs, 
+                is_alle=parameters.is_alle,
+                postprocess=postprocess,
             )
+            _validate_scf_output(software)
 
-            # Validate output
-            _validate_scf_output(software_lower)
+        # run scf solver
+        scf_solver.add(idx, subdir, stru)
 
-            # Mark as ended
-            _set_status(subdir, STATUS_ENDED)
-            successful += 1
+        # Updates and logging
+        prev_chgcar = subdir / chgcar
+        scf_logger(step=idx, global_idx=subdir.name, category='normal')
+    
+    # run solver for tail frames
+    scf_solver.run()
+    scf_solver.close()
 
-            # Update prev_chgcar for next iteration
-            prev_chgcar = os.path.join(subdir, chgcar)
 
-        except Exception as e:
-            # Mark as failed
-            logging.error(f"SCF calculation failed for frame {global_idx}: {e}")
-            _set_status(subdir, STATUS_FAIL)
-            failed.append(global_idx)
-            break
+    # tdoverlap calculation
+    if software_dft == 'openmx':
+        dftinputs.update_inputs({'postprocess.output.level': 1})
+        dftinputs.update_stru_extras()
 
-        finally:
-            os.chdir(task_dir)
+    if software_dft in {'openmx'}:
+        for idx in range(nstep):
+            global_idx = frame_start + idx + 1
+            subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
 
-    if successful < n_frames:
-        raise ValueError(
-            f"SCF calculation failed in frame indice: {failed}. Please check the "
-            "respective subdirectories for details."
-        )
+            olapdir = subdir / "overlap"
+            olapdir.mkdir(exist_ok=True)
 
-    # frame_end is exclusive, so actual last frame index is frame_end - 1
-    # prepare_namd.py expects inclusive range: (start, end)
+            atoms = strus[idx].copy()
+            atoms.extend(strus[idx + 1])
+            for fname in files_to_copy:
+                shutil.copy2(subdir / fname, olapdir / fname)
+            write_stru(software_dft, atoms, olapdir, extras=dftinputs.stru_extras)
+
+            with change_dir(olapdir):
+                run_software(
+                    software=software_dft,
+                    nprocs=nprocs,
+                    postprocess=True,
+                )
+
+            # save overlap matrix
+            scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
+            SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
+            np.save(olapdir / "overlap.npy", SK)
+
+            # logging
+            scf_logger(step=idx, global_idx=subdir.name, category='overlap')
+    
+    scf_logger.close()
+
     return {
-        'run_dir': run_dir,
-        'successful': successful,
-        'failed': failed,
+        'run_dir': str(task_dir),
+        'software': software,
+        'software_dft': software_dft,
     }
 
 
@@ -296,55 +371,25 @@ def _prepare_scf_input(
 
     Args:
         software: Software name ('vasp', etc.).
-        structure: Atomic structure (used for KPOINTS generation).
         parameters: SCF parameters.
-        pp_path: Path to pseudopotential directory.
-        orb_path: Path to orbital files.
     """
+    assert isinstance(parameters.calculator, DFTBaseInputT)
 
     # Create input files
     input = deepcopy(params_default['scf'][software])
     if software == 'vasp':
-        input['EDIFF'] = parameters.scf_thr
+        input['EDIFF'] = parameters.calculator.scf_thr
+    elif software == 'openmx':
+        # TODO: Set openmx-specific input parameters
+        pass
+    elif software == 'hamgnn':
+        # TODO: ecut
+        pass
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for SCF input preparation yet."
         )
     return input
-
-
-def _get_status(subdir: str) -> str | None:
-    """Get the status of a subdirectory calculation.
-
-    Args:
-        subdir: Path to subdirectory.
-
-    Returns:
-        Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL) or None.
-    """
-    for status in [STATUS_ENDED, STATUS_FAIL, STATUS_RUNNING]:
-        status_file = os.path.join(subdir, status)
-        if os.path.isfile(status_file):
-            return status
-    return None
-
-
-def _set_status(subdir: str, status: str):
-    """Set the status of a subdirectory calculation.
-
-    Args:
-        subdir: Path to subdirectory.
-        status: Status string (STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL).
-    """
-    # Remove old status files
-    for old_status in [STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL]:
-        status_file = os.path.join(subdir, old_status)
-        if os.path.isfile(status_file):
-            os.remove(status_file)
-
-    # Create new status file
-    status_file = os.path.join(subdir, status)
-    Path(status_file).touch()
 
 
 def _clean_all_files(subdir: str, stru: str):
@@ -412,6 +457,11 @@ def _validate_scf_output(software: str):
         for f in ['CHG', 'vasprun.xml']:
             if os.path.isfile(f):
                 os.remove(f)
+    elif software == 'openmx':
+        # TODO
+        pass
+    elif software == 'hamgnn':
+        pass
     else:
         raise NotImplementedError(
             f"Validation for software '{software}' is not implemented."

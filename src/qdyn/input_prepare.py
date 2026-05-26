@@ -48,7 +48,7 @@ class DFTInputs:
             self._kpoints = self.calc_kpoints(kspacing)
         # Step 2: INPUTS
         if inputs_dict is not None:
-            self._inputs = self.update_inputs(inputs_dict, inputs_params)
+            self.update_inputs(inputs_dict, inputs_params)
 
 
     @classmethod
@@ -130,6 +130,10 @@ class DFTInputs:
                 self._stru_extras = '\n'.join(tmp)
         return self._stru_extras
     
+    def update_stru_extras(self) -> str | None:
+        self._stru_extras = None
+        return self.stru_extras
+    
     def calc_kpoints(self, kspacing: float) -> tuple[int, int, int]:
         rec_cell = self.stru.cell.reciprocal().array
 
@@ -142,9 +146,14 @@ class DFTInputs:
 
         return tuple(kpoints) # type: ignore
     
-    def update_inputs(self, inputs_dict: dict, inputs_params: str) -> dict:
+    def update_inputs(self, inputs_dict: dict, inputs_params: str = '') -> None:
         if self.software == 'vasp':
-            incar = Incar.from_dict(inputs_dict)
+            if self._inputs is not None:
+                inputs_base = self._inputs
+                inputs_base.update(inputs_dict)
+            else:
+                inputs_base = inputs_dict
+            incar = Incar.from_dict(inputs_base)
             if inputs_params:
                 incar_append = Incar.from_str(inputs_params)
                 incar.update(incar_append)
@@ -158,24 +167,31 @@ class DFTInputs:
                                    else 4 if nk >= 4 
                                    else 2 if nk >= 2 
                                    else 1)
-            return incar.as_dict()
+            
+            self._inputs = incar.as_dict()
         elif self.software == 'openmx':
+            if self._inputs is not None:
+                inputs_base = self._inputs
+                inputs_base.update(inputs_dict)
+            else:
+                inputs_base = inputs_dict
             if inputs_params:
                 inputs_append = parse_openmx_dat(io.StringIO(inputs_params))
-                inputs_dict.update(inputs_append)
+                inputs_base.update(inputs_append)
             # Standardize default fields and stru fields
-            inputs_dict['system.name'] = 'qdyn'
+            inputs_base['system.name'] = 'qdyn'
             kx, ky, kz = self.kpoints
-            inputs_dict['scf.kgrid'] = f'{kx} {ky} {kz}'
-            inputs_dict.pop('species.number', None)
-            inputs_dict.pop('definition.of.atomic.species', None)
-            inputs_dict.pop('atoms.number', None)
-            inputs_dict.pop('atoms.speciesandcoordinates.unit', None)
-            inputs_dict.pop('atoms.speciesandcoordinates', None)
-            inputs_dict.pop('atoms.unitvectors.unit', None)
-            inputs_dict.pop('atoms.unitvectors', None)
-            inputs_dict.pop('md.init.velocity', None)
-            return inputs_dict
+            inputs_base['scf.kgrid'] = f'{kx} {ky} {kz}'
+            inputs_base.pop('species.number', None)
+            inputs_base.pop('definition.of.atomic.species', None)
+            inputs_base.pop('atoms.number', None)
+            inputs_base.pop('atoms.speciesandcoordinates.unit', None)
+            inputs_base.pop('atoms.speciesandcoordinates', None)
+            inputs_base.pop('atoms.unitvectors.unit', None)
+            inputs_base.pop('atoms.unitvectors', None)
+            inputs_base.pop('md.init.velocity', None)
+            
+            self._inputs = inputs_base
         else:
             raise NotImplementedError(f"Software '{self.software}' is not supported yet.")
 
@@ -198,7 +214,7 @@ class DFTInputs:
         if kpoints:
             self.write_kpoints(software, folder)
         if stru:
-            write_stru(software, self.stru, folder)
+            write_stru(software, self.stru, folder, self.stru_extras)
         if pp:
             self.write_pp(software, folder)
 

@@ -1,5 +1,6 @@
 import ast
 from contextlib import contextmanager
+import io
 import json
 import operator
 import os
@@ -7,11 +8,12 @@ import re
 from pathlib import Path
 from ase import Atoms
 import ase.io
-from typing import Any
+from typing import Any, Literal
 import logging
 
 from ase import Atoms
 import numpy as np
+from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
@@ -417,3 +419,11 @@ def extract_structure_metadata(
             num_atoms = summary.get("num_atoms")
 
     return formula, num_atoms
+
+def eigh(H, S, solver: Literal['scipy', 'cuda'] = 'scipy', overwrite_S=False):
+    if solver == 'scipy':
+        w, v = eigh_(H, S, overwrite_a=True, overwrite_b=overwrite_S)
+        v = v.T       
+    else:
+        raise NotImplementedError("Not supported eigensolver")
+    return w, v

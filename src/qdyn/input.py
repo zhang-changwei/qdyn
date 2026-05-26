@@ -517,7 +517,7 @@ class SCFInputT(BaseModel):
 
     is_alle: bool = Field(False, description="Whether to use all-electron vasp")
     
-    software: Literal['vasp'] = 'vasp'
+    software: Literal['vasp', 'openmx', 'hamgnn'] = 'vasp'
 
     calculator: DFTBaseInputT | HamGNNInputT = Field(
         default_factory=DFTBaseInputT,

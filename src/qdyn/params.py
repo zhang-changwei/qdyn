@@ -102,9 +102,11 @@ BAK_FNAMES = {
 }
 CHG_FNAME = {
     'vasp': 'CHGCAR',
+    'openmx': 'stub',
 }
 INPUT_FNAMES = {
     'vasp': {'INCAR', 'KPOINTS', 'POSCAR', 'POTCAR'},
+    'openmx': {'qdyn.dat'}
 }
 
 STRU_FNAME_MAPPING = {
