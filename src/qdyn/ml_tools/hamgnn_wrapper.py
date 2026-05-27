@@ -1,8 +1,11 @@
 from copy import deepcopy
 import multiprocessing
 from multiprocessing.pool import AsyncResult
+import queue
 import os
 from pathlib import Path
+import sys
+import time
 import warnings
 from typing import Any
 
@@ -97,7 +100,7 @@ def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data
             cell = torch.tensor(cell, dtype=f32),
             pos = torch.tensor(pos, dtype=f32),
             node_counts = torch.tensor([len(stru)], dtype=i64),
-            edge_index = torch.tensor(edge_index, dtype=f32),
+            edge_index = torch.tensor(edge_index, dtype=i64),
             inv_edge_idx = torch.tensor(inv_edge_idx, dtype=i64),
             nbr_shift = torch.tensor(nbr_shift, dtype=f32),
             cell_shift = torch.tensor(cell_shift, dtype=i64),
@@ -148,7 +151,7 @@ def calc_hamgnn_HK_gamma(
         HK[off_i:off_i+nao_i, off_i:off_i+nao_i] += tmp
 
     # off-site
-    for idx, (i, j) in enumerate(edge_index[0], edge_index[1]):
+    for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
         zi = z[i]
         zj = z[j]
         nao_i = nao_per_atoms[i]
@@ -212,16 +215,8 @@ class HamGNNWrapper:
 
 model: HamGNNWrapper | None = None
 
-def init_worker(omp: int, config: HamGNNInputT, model_path: str):
-    os.environ["OMP_NUM_THREADS"] = str(omp)
-    os.environ["MKL_NUM_THREADS"] = str(omp)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(omp)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(omp)
-    os.environ["VECLIB_MAXIMUM_THREADS"] = str(omp)
+def init_worker(omp: int):
     torch.set_num_threads(omp)
-
-    global model
-    model = HamGNNWrapper(config, model_path=model_path, device='cpu')
 
 def n2amd_workflow(
     software: str,
@@ -229,70 +224,107 @@ def n2amd_workflow(
     dtype: np.float32 | np.float64,
     steps: list[int],
     strus: list[Atoms],
-    task_dirs: list[str]
+    task_dirs: list[str],
+    progress_queue: Any,
 ):
     global model
-    assert model is not None, "Model is not initialized in worker process."
+    assert model is not None, (
+        "HamGNN model is not initialized in worker process. "
+        "This workflow requires Linux fork-based workers inheriting a preloaded model."
+    )
 
     SKs, H0Ks, graphs, num_mats = [], [], [], []
     nao_per_atoms = None
     basis_def = None
-    for stru, task_dir in zip(strus, task_dirs):
-        # 1. parse scfout
-        scfout_data = read_scfout(os.path.join(task_dir, 'qdyn.scfout'))
-        if not nao_per_atoms:
-            nao_per_atoms = scfout_data['nao_per_atom']
-        if not basis_def:
-            basis_def = get_basis_def(software, stru, model.nao_max)
-        # 2. calc SK and HK
-        SK = calc_openmx_HK_SK_gamma(scfout_data)
-        SKs.append(SK)
-        if add_H0:
-            H0K = calc_openmx_HK_SK_gamma(scfout_data, isH=True)
-            H0Ks.append(H0K)
-        # 3. gen graph
-        num_mat, graph = gen_hamgnn_graph(software, stru, scfout_data)
-        graphs.append(graph)
-        num_mats.append(num_mat)
-    mat_offsets = np.zeros_like(num_mats)
-    mat_offsets[1:] = np.cumsum(num_mats[:-1])
-    # 4. predict
-    assert nao_per_atoms is not None, "NAO per atom information is missing."
-    assert basis_def is not None, "Basis definition information is missing."
-    hamiltonians = model.predict(graphs, batch_size=len(graphs))
-    # 5. HR -> HK
-    HKs = []
-    for idx in range(len(graphs)):
-        HR = hamiltonians[mat_offsets[idx]:mat_offsets[idx]+num_mats[idx]]
-        HK = calc_hamgnn_HK_gamma(
-            HR, 
-            model.nao_max, 
-            nao_per_atoms, 
-            basis_def, 
-            graphs[idx], 
-            dtype=dtype
+    idx = -1
+    try:
+        for idx, (stru, task_dir) in enumerate(zip(strus, task_dirs)):
+            # 1. parse scfout
+            scfout_data = read_scfout(os.path.join(task_dir, 'qdyn.scfout'))
+            if not nao_per_atoms:
+                nao_per_atoms = scfout_data['nao_per_atom']
+            if not basis_def:
+                basis_def = get_basis_def(software, stru, model.nao_max)
+            # 2. calc SK and HK
+            SK = calc_openmx_HK_SK_gamma(scfout_data)
+            SKs.append(SK)
+            if add_H0:
+                H0K = calc_openmx_HK_SK_gamma(scfout_data, isH=True)
+                H0Ks.append(H0K)
+            # 3. gen graph
+            num_mat, graph = gen_hamgnn_graph(software, stru, scfout_data)
+            graphs.append(graph)
+            num_mats.append(num_mat)
+            # logging
+            progress_queue.put(
+                {
+                    'type': 'prehamgnn',
+                    'step': steps[idx],
+                    'task_dir': task_dirs[idx],
+                }
+            )
+        mat_offsets = np.zeros_like(num_mats)
+        mat_offsets[1:] = np.cumsum(num_mats[:-1])
+        # 4. predict
+        assert nao_per_atoms is not None, "NAO per atom information is missing."
+        assert basis_def is not None, "Basis definition information is missing."
+        hamiltonians = model.predict(graphs, batch_size=len(graphs))
+        # logging
+        progress_queue.put(
+            {
+                'type': 'hamgnn',
+                'step': steps[0] if steps else -1,
+                'task_dir': task_dirs[idx],
+            }
         )
+        # 5. HR -> HK
+        HKs = []
+        for idx in range(len(graphs)):
+            HR = hamiltonians[mat_offsets[idx]:mat_offsets[idx]+num_mats[idx]]
+            HK = calc_hamgnn_HK_gamma(
+                HR, 
+                model.nao_max, 
+                nao_per_atoms, 
+                basis_def, 
+                graphs[idx], 
+                dtype=dtype
+            )
+            if add_H0:
+                HK += H0Ks[idx]
+            HKs.append(HK)
+        del hamiltonians
         if add_H0:
-            HK += H0Ks[idx]
-        HKs.append(HK)
-    del hamiltonians
-    if add_H0:
-        del H0Ks
-    # 6. diag
-    for idx, (HK, SK, graph) in enumerate(zip(HKs, SKs, graphs)):
-        eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
-        eigvecs = eigvecs.T
-        # 7. save wfc.npz
-        np.savez(
-            os.path.join(task_dirs[idx], 'wfc.npz'),
-            eigenvalues=eigvals,
-            wfc=eigvecs,
+            del H0Ks
+        # 6. diag
+        idx = -1
+        for idx, (HK, SK, graph) in enumerate(zip(HKs, SKs, graphs)):
+            eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
+            eigvecs = eigvecs.T
+            # 7. save wfc.npz
+            np.savez(
+                os.path.join(task_dirs[idx], 'wfc.npz'),
+                eigenvalues=eigvals,
+                wfc=eigvecs,
+            )
+            # logging
+            progress_queue.put(
+                {
+                    'type': 'posthamgnn',
+                    'step': steps[idx],
+                    'task_dir': task_dirs[idx],
+                }
+            )
+    except Exception as exc:
+        failed_idx = max(0, idx)
+        progress_queue.put(
+            {
+                'type': 'step_failed',
+                'step': steps[failed_idx] if steps else -1,
+                'task_dir': task_dirs[failed_idx] if task_dirs else '',
+                'error': str(exc),
+            }
         )
-        # 8. logging
-        # with lock:
-        #     pass、
-
-        # 9. cleanup
+        raise
 
 
 class MLSCFSolver:
@@ -311,6 +343,11 @@ class MLSCFSolver:
     ):
         self.software = software
         self.logger = logger
+        if sys.platform != 'linux':
+            raise RuntimeError(
+                f"HamGNN N2AMD multiprocessing with shared model only supports Linux/fork; "
+                f"got platform={sys.platform!r}."
+            )
 
         model_path_ = Path(model_path).expanduser().resolve()
         if not model_path_.is_file():
@@ -319,16 +356,16 @@ class MLSCFSolver:
         mlh_input.batch_size = max(1, mlh_input.batch_size // nproc)
         self.batch_size = mlh_input.batch_size * nproc
         self.nproc = nproc
-        self.pool = multiprocessing.Pool(
-            processes=nproc, 
+        self._ctx = multiprocessing.get_context("fork")
+        global model
+        model = HamGNNWrapper(mlh_input, model_path=str(model_path_), device='cpu')
+        self.progress_queue = self._ctx.Queue()
+        self.pool = self._ctx.Pool(
+            processes=nproc,
             initializer=init_worker,
-            initargs=(
-                threads_per_proc,
-                mlh_input,
-                model_path_,
-            )
+            initargs=(threads_per_proc,),
         )
-        self.lock = multiprocessing.Lock()
+        self._pool_terminated = False
         self.tasks = []
         self.task_count = 0
         
@@ -347,32 +384,88 @@ class MLSCFSolver:
         self.task_count += 1
         if self.task_count >= self.batch_size:
             self.run()
-            self.tasks.clear()
-            self.task_count = 0
 
     def close(self):
+        if self._pool_terminated:
+            self.pool.join()
+            return
         self.pool.close()
         self.pool.join()
+
+    def _terminate_pool(self):
+        if not self._pool_terminated:
+            self.pool.terminate()
+            self._pool_terminated = True
+
+    @staticmethod
+    def _chunk_tasks(
+        tasks: list[tuple[int, Path, Atoms]],
+        nproc: int,
+    ) -> list[list[tuple[int, Path, Atoms]]]:
+        chunks: list[list[tuple[int, Path, Atoms]]] = [[] for _ in range(nproc)]
+        for idx, task in enumerate(tasks):
+            chunks[idx % nproc].append(task)
+        return [chunk for chunk in chunks if chunk]
+
+    def _drain_progress_queue(self):
+        while True:
+            try:
+                message = self.progress_queue.get_nowait()
+            except queue.Empty:
+                break
+            msg_type = message['type']
+            if msg_type == 'step_failed':
+                raise RuntimeError(
+                    f"MLSCFSolver step={message['step']} failed for "
+                    f"{message['task_dir']}: {message['error']}"
+                )
+            else:
+                self.logger(
+                    step=message['step'],
+                    global_idx=Path(message['task_dir']).name,
+                    category=msg_type,
+                )
     
     def run(self):
         if not self.task_count:
             return
         
         results: list[AsyncResult] = []
+        chunks = self._chunk_tasks(self.tasks, self.nproc)
 
-        steps, task_dirs, strus = [], [], []
-        for step, task_dir, stru in self.tasks[::self.nproc]:
-            steps.append(step)
-            task_dirs.append(str(task_dir))
-            strus.append(stru)
-
-        for idx in range(self.nproc):
+        for chunk in chunks:
+            steps = [step for step, _, _ in chunk]
+            task_dirs = [str(task_dir) for _, task_dir, _ in chunk]
+            strus = [stru for _, _, stru in chunk]
             result = self.pool.apply_async(
                 n2amd_workflow, 
-                (self.software, self.add_H0, self.eigen_dtype, steps, strus, task_dirs)
+                (
+                    self.software,
+                    self.add_H0,
+                    self.eigen_dtype,
+                    steps,
+                    strus,
+                    task_dirs,
+                    self.progress_queue,
+                )
             )
             results.append(result)
         
-        for result in results:
-            result.get()
+        try:
+            pending = set(range(len(results)))
+            while pending:
+                time.sleep(1)
+                self._drain_progress_queue()
+                for idx in list(pending):
+                    if results[idx].ready():
+                        pending.remove(idx)
+                        # to raise exceptions if any
+                        results[idx].get()
+            self._drain_progress_queue()
+        except Exception as exc:
+            self._terminate_pool()
+            raise RuntimeError(f"MLSCFSolver.run failed: {exc}") from exc
+        finally:
+            self.tasks.clear()
+            self.task_count = 0
 

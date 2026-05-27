@@ -65,7 +65,7 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
                 except Exception as e:
                     raise ValueError(f"Failed to parse velocities from {stru_path}: {e}")
                 
-            # TODO: constraints
+            # TODO: constraints, dqyao
             structure = Atoms(symbols, positions, cell=cell, pbc=True, velocities=velocities)
     else:
         raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
@@ -173,7 +173,7 @@ def write_stru(
                 stru_lines.append("MD.Init.Velocity>\n\n")
             
             # constraints block
-            # TODO
+            # TODO, dqyao
             if structure.constraints:
                 pass
 

@@ -136,9 +136,10 @@ class _HamGNNInputAdvT(BaseModel):
 
 class HamGNNInputT(BaseModel):
     """Input parameters for HamGNN tight-binding Hamiltonian construction."""
-    version: Literal['v2.5'] = 'v2.5'
+    version: Literal['v2.1'] = 'v2.1'
     use_gpu: bool = False
     use_pretrained_model: bool = False
+    model_name: Literal[''] = ''
     model_hash: str = ''
     ham_type: Literal['abacus', 'openmx'] = 'openmx'
     nao_max: int = 13

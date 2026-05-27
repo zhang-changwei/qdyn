@@ -162,7 +162,7 @@ class DFTInputs:
                 incar['KPAR'] = 1
             else:
                 kx, ky, kz = self.kpoints
-                nk = (kx + 1) * (ky + 1) * (kz + 1) // 2 # Gamma-centered
+                nk = 1 + kx//2 + ky//2 + kz//2 + (kx*ky*kz)//2 # Gamma-centered
                 incar['KPAR'] = (8 if nk >= 8 
                                    else 4 if nk >= 4 
                                    else 2 if nk >= 2 

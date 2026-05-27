@@ -204,7 +204,6 @@ def qdyn_scf_cpu(
     """
     software = software.lower()
     calc = parameters.calculator
-    nprocs = nodes * processes_per_node
     scf_step = parameters.scf_step
     frame_start = traj.start
 
@@ -229,6 +228,9 @@ def qdyn_scf_cpu(
             inputs_params=calc.parameters,
         )
         postprocess = False
+        # resources
+        nprocs = nodes * processes_per_node
+        omp = threads_per_process
         # logger and solver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
         last_step = scf_logger.cur_step
@@ -246,6 +248,9 @@ def qdyn_scf_cpu(
             inputs_dict=inputs_dict,
         )
         postprocess = True
+        # resources
+        nprocs = processes_per_node * threads_per_process # nodes = 1
+        omp = 1
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
@@ -255,7 +260,7 @@ def qdyn_scf_cpu(
             mlh_input=calc,
             model_path=model_path,
             logger=scf_logger,
-            nproc=nprocs,
+            nproc=processes_per_node,
             threads_per_proc=threads_per_process,
         )
     dftinputs.write(stru=False)
@@ -303,6 +308,7 @@ def qdyn_scf_cpu(
                 nprocs=nprocs, 
                 is_alle=parameters.is_alle,
                 postprocess=postprocess,
+                omp=omp,
             )
             _validate_scf_output(software)
 
@@ -342,6 +348,7 @@ def qdyn_scf_cpu(
                     software=software_dft,
                     nprocs=nprocs,
                     postprocess=True,
+                    omp=omp,
                 )
 
             # save overlap matrix
@@ -373,22 +380,22 @@ def _prepare_scf_input(
         software: Software name ('vasp', etc.).
         parameters: SCF parameters.
     """
-    assert isinstance(parameters.calculator, DFTBaseInputT)
-
-    # Create input files
-    input = deepcopy(params_default['scf'][software])
-    if software == 'vasp':
-        input['EDIFF'] = parameters.calculator.scf_thr
-    elif software == 'openmx':
-        # TODO: Set openmx-specific input parameters
-        pass
-    elif software == 'hamgnn':
-        # TODO: ecut
-        pass
+    input = {}
+    if isinstance(parameters.calculator, DFTBaseInputT):
+        input = deepcopy(params_default['scf'][software])
+        if software == 'vasp':
+            input['EDIFF'] = parameters.calculator.scf_thr
+        elif software == 'openmx':
+            # TODO: Set openmx-specific input parameters, dqyao
+            pass
+        else:
+            raise NotImplementedError(
+                f"Software {software} is not supported for SCF input preparation yet."
+            )
     else:
-        raise NotImplementedError(
-            f"Software {software} is not supported for SCF input preparation yet."
-        )
+        # TODO: ecut, dqyao
+        pass
+
     return input
 
 
@@ -458,9 +465,10 @@ def _validate_scf_output(software: str):
             if os.path.isfile(f):
                 os.remove(f)
     elif software == 'openmx':
-        # TODO
+        # TODO qdyao
         pass
     elif software == 'hamgnn':
+        # TODO qdyao
         pass
     else:
         raise NotImplementedError(
