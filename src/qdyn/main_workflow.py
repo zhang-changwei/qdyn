@@ -28,7 +28,7 @@ from .tools.scf import qdyn_scf
 from .tools.fused_scf_prenamd import qdyn_fused_scf_prenamd
 from .tools.prepare_namd import qdyn_pre_namd
 from .tools.namd import qdyn_namd
-from .tools.mlff_wrapper import resolve_model_path
+from .ml_tools.mlff_wrapper import resolve_model_path
 
 
 # States that can be stopped via jc.stop_job()

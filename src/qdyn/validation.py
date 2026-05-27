@@ -11,7 +11,7 @@ import yaml
 from .errors import ConfigError, ValidationError, ResumeError
 from .input import (InputT, NVEInputT, NVTInputT,
                     DFTBaseInputT, NequipInputT, MACEInputT)
-from .tools.mlff_wrapper import (
+from .ml_tools.mlff_wrapper import (
     mace_pretrained_model_filename,
     nequip_pretrained_model_filename,
 )
