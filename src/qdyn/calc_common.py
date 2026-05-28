@@ -1,4 +1,5 @@
 import ast
+import io
 import json
 import operator
 import os
@@ -12,6 +13,7 @@ import logging
 from .input import InputT
 from .pool import WorkerPool
 from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
+from .tools.pseuh import read_stru_pseuh
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,35 @@ def read_strus(
             )
         traj_path = os.path.join(out_dir, track_name)
     return ase.io.read(traj_path, format=stru_format, index=':')
+
+def read_stru(
+    stru: str,
+    stru_format: str = 'vasp',
+    pseudo_h: bool = False,
+    from_str: bool = False,
+) -> Atoms:
+    """Read a single structure from a file path or string.
+
+    Args:
+        stru: Path to the structure file, or the structure content as a
+            string when *from_str* is True.
+        stru_format: ASE I/O format string (e.g. ``'vasp'`` for POSCAR).
+        pseudo_h: If True, treat pseudo-hydrogen placeholder symbols
+            (e.g. ``H050``) and apply FixAtoms.  Delegates to
+            :func:`qdyn.tools.pseuh.read_stru_pseuh`.
+        from_str: If True, *stru* is interpreted as structure text
+            instead of a file path.
+
+    Returns:
+        ASE Atoms object.
+    """
+    if pseudo_h:
+        return read_stru_pseuh(stru, stru_format=stru_format, from_str=from_str)
+
+    if from_str:
+        return ase.io.read(io.StringIO(stru), format=stru_format) # type: ignore
+    else:
+        return ase.io.read(stru, format=stru_format) # type: ignore
 
 
 def write_stru(software: str, structure: Atoms, out_dir: str | Path) -> None:

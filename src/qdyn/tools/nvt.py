@@ -12,10 +12,12 @@ import numpy as np
 from ase import Atoms
 from jobflow.core.job import job
 
+from ..calc_common import read_stru
 from ..input import NVTInputT, DFTBaseInputT
 from ..params import params_default, BAK_FNAMES, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
+from .pseuh import write_poscar_and_potcar
 from .run_software import run_software, MDProgressMonitor
 from .seldyn import add_constraints
 
@@ -73,8 +75,15 @@ def qdyn_nvt(
 
     structure.pop('momenta', None)
     cur_stru = Atoms.fromdict(structure)
+
+    is_pseudo_h = (
+        parameters.pseudo_h is not None
+        and parameters.pseudo_h.is_pseudo_h
+    )
+
     if (
-        parameters.sel.constraint_layers is not None
+        not is_pseudo_h
+        and parameters.sel.constraint_layers is not None
         and not cur_stru.constraints
     ):
         cur_stru = add_constraints(cur_stru, parameters.sel)
@@ -125,8 +134,11 @@ def qdyn_nvt(
             ) as m:
                 run_software(software_lower, nprocs, monitor=m)
             # update structure
-            cur_stru = ase.io.read(STRU2_FNAME_MAPPING[software_lower],
-                                   format=STRU_FORMAT_MAPPING[software_lower])
+            cur_stru = read_stru(
+                STRU2_FNAME_MAPPING[software_lower],
+                stru_format=STRU_FORMAT_MAPPING[software_lower],
+                pseudo_h=is_pseudo_h,
+            )
         else:
             ase.io.write(STRU_FORMAT_MAPPING[software_lower], 
                          cur_stru,
@@ -266,7 +278,7 @@ def _prepare_nvt_input(
         input['TEEND'] = temp_end
         input['EDIFF'] = parameters.calculator.scf_thr
         dftinputs = DFTInputs(
-            software='vasp',
+            software=software,
             structure=structure,
             pp_path=pp_path,
             orb_path=orb_path,
@@ -275,6 +287,11 @@ def _prepare_nvt_input(
             inputs_params=parameters.calculator.parameters,
         )
         dftinputs.write()
+
+        if parameters.pseudo_h is not None and parameters.pseudo_h.is_pseudo_h:
+            write_poscar_and_potcar(
+                structure, pp_path=pp_path, output_dir=Path('.'),
+            )
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for NVT input preparation yet."

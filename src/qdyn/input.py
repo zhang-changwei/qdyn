@@ -354,6 +354,17 @@ class ThermostatsInputT(BaseModel):
     nhc_tdamp: float = 40.0
     nhc_tchain: int = 1
 
+class PseudoHInputT(BaseModel):
+    """Pseudo-hydrogen configuration for surface passivation."""
+
+    is_pseudo_h: bool = Field(
+        default=False,
+        description="Whether to apply pseudo-hydrogen passivation to surface atoms. "
+        "Pseudo-H atoms must be present in the input POSCAR with H\\d{3} "
+        "placeholder symbols (e.g. H050 for ZVAL=0.5).",
+    )
+
+
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
     _comment: str = (
@@ -406,6 +417,11 @@ class NVTInputT(BaseModel):
         json_schema_extra={"group": "advanced"},
     )
 
+    pseudo_h: PseudoHInputT | None = Field(
+        default=None,
+        json_schema_extra={"group": "advanced"},
+    )
+
     software: Literal['vasp', 'nequip', 'mace'] = 'vasp'
 
     calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
@@ -435,6 +451,11 @@ class NVEInputT(BaseModel):
 
     sel: SelDynInputT = Field(
         default_factory=SelDynInputT,
+        json_schema_extra={"group": "advanced"},
+    )
+
+    pseudo_h: PseudoHInputT | None = Field(
+        default=None,
         json_schema_extra={"group": "advanced"},
     )
 
@@ -493,6 +514,10 @@ class SCFInputT(BaseModel):
     )
 
     is_alle: bool = Field(False, description="Whether to use all-electron vasp")
+    pseudo_h: PseudoHInputT | None = Field(
+        default=None,
+        json_schema_extra={"group": "advanced"},
+    )
     parameters: str = Field(
         '',
         description="Additional INCAR parameters string",
@@ -502,7 +527,6 @@ class SCFInputT(BaseModel):
             "placeholder": "e.g. ENCUT = 520\nISYM = 0",
         },
     )
-
 
 
 class InputT(BaseModel):
