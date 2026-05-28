@@ -12,6 +12,7 @@ from typing import Any, Literal
 import logging
 
 from ase import Atoms
+from ase.constraints import FixAtoms
 import numpy as np
 from scipy.linalg import eigh as eigh_
 
@@ -65,8 +66,25 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
                 except Exception as e:
                     raise ValueError(f"Failed to parse velocities from {stru_path}: {e}")
                 
-            # TODO: constraints, dqyao
+            # constraints (MD.Fixed.XYZ)
+            constraint_indices = []
+            pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.DOTALL)
+            match = pattern.search(content)
+            if match:
+                try:
+                    lines = match.group(1).strip().splitlines()
+                    for line in lines:
+                        parts = line.split()
+                        idx = int(parts[0]) - 1
+                        flags = [int(x) for x in parts[1:4]]
+                        if all(f == 1 for f in flags):
+                            constraint_indices.append(idx)
+                except Exception as e:
+                    raise ValueError(f"Failed to parse fixed atoms from {stru_path}: {e}")
+
             structure = Atoms(symbols, positions, cell=cell, pbc=True, velocities=velocities)
+            if constraint_indices:
+                structure.set_constraint(FixAtoms(indices=constraint_indices))
     else:
         raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
     
@@ -173,10 +191,19 @@ def write_stru(
                     )
                 stru_lines.append("MD.Init.Velocity>\n\n")
             
-            # constraints block
-            # TODO, dqyao
+            # constraints block (MD.Fixed.XYZ)
+            fixed_mask = [False] * natoms
             if structure.constraints:
-                pass
+                for constraint in structure.constraints:
+                    if isinstance(constraint, FixAtoms):
+                        for idx in constraint.index:
+                            if 0 <= idx < natoms:
+                                fixed_mask[idx] = True
+            stru_lines.append("<MD.Fixed.XYZ\n")
+            for i in range(natoms):
+                flags = "1 1 1" if fixed_mask[i] else "0 0 0"
+                stru_lines.append(f" {i + 1:5d}  {flags}\n")
+            stru_lines.append("MD.Fixed.XYZ>\n\n")
 
             f.write("".join(stru_lines))
             f.flush()
