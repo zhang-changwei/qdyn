@@ -7,6 +7,7 @@ import numpy as np
 
 from .params import NEQUIP_PRETRAINED_MODELS_TYPE
 from .params import MACE_PRETRAINED_MODELS_TYPE
+from .params import HASH_PATTERN
 
 ## Important!
 # InputT: should contain minimal parameters exposed to users,
@@ -25,7 +26,6 @@ HIDDEN_FIELD: dict[str, Any] = {"hidden": True}
 ADVANCED_GROUP: dict[str, Any] = {"group": "advanced"}
 
 
-from .params import HASH_PATTERN
 def validate_md5_hash(v: str) -> str:
     """Ensure string is either empty or a valid 32-char hex string (MD5)."""
     if v and not HASH_PATTERN.match(v):
@@ -38,6 +38,7 @@ MD5HashStr = Annotated[str, AfterValidator(validate_md5_hash)]
 class BasicInputT(BaseModel):
     """Basic input parameters for QDYN calculations."""
 
+    # deprecated
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
     plot: bool = False
 
@@ -541,6 +542,7 @@ class InputT(BaseModel):
     stru: str = ''
     stru_format: str = 'vasp'
     stru_hash: MD5HashStr = ''
+    plot: bool = False
 
     task_name: str | None = Field(
         default=None,

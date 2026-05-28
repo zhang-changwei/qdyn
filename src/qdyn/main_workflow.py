@@ -1,4 +1,3 @@
-import asyncio
 import json
 from pathlib import Path
 import logging
@@ -16,7 +15,10 @@ from jobflow_remote.config.base import ExecutionConfig
 from jobflow_remote import JobController
 
 from .errors import ConfigError, ResumeError, ValidationError, QueryError
-from .input import DFTBaseInputT, InputT
+from .input import (
+    DFTBaseInputT, InputT,
+    NVTInputT, NVEInputT, SCFInputT, PreNAMDInputT, NAMDInputT,
+)
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
 from .calc_common import TRAJ_FORMAT_MAPPING
@@ -208,6 +210,7 @@ class MainWorkflow:
 
         if omp_threads is not None:
             export['OMP_NUM_THREADS'] = str(omp_threads)
+            export['MKL_NUM_THREADS'] = str(omp_threads)
 
         return ExecutionConfig(
             modules=list(dict.fromkeys(modules)),
@@ -219,7 +222,7 @@ class MainWorkflow:
     def step_nvt(
         self,
         *,
-        input: InputT,
+        input: NVTInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru: str,
@@ -227,10 +230,10 @@ class MainWorkflow:
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        assert input.nvt_input is not None
-        software = input.nvt_input.software
+        software = input.software
         if is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nvt'][0]
@@ -250,7 +253,7 @@ class MainWorkflow:
                 "Provide a structure string or set resume=True with a valid prev_task_id."
             )
         
-        calculator = input.nvt_input.calculator
+        calculator = input.calculator
 
         if isinstance(calculator, DFTBaseInputT):
             nodes = (
@@ -277,7 +280,7 @@ class MainWorkflow:
 
         job_nvt = qdyn_nvt(
             software=software,
-            parameters=input.nvt_input,
+            parameters=input,
             pp_path=pp_path,
             orb_path=orb_path,
             structure=structure,
@@ -285,7 +288,7 @@ class MainWorkflow:
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
-            plot=input.basic_input.plot,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
         qres = build_qresources(
@@ -308,7 +311,7 @@ class MainWorkflow:
     def step_nve(
         self,
         *,
-        input: InputT,
+        input: NVEInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru: str,
@@ -316,10 +319,10 @@ class MainWorkflow:
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        assert input.nve_input is not None
-        software = input.nve_input.software
+        software = input.software
         if 'nvt' in jobs:
             structure = jobs['nvt'][0].output['stru']
         elif is_first_step and resume:
@@ -341,7 +344,7 @@ class MainWorkflow:
                 "Provide a structure string or set resume=True with a valid prev_task_id."
             )
 
-        calculator = input.nve_input.calculator
+        calculator = input.calculator
         
         if isinstance(calculator, DFTBaseInputT):
             nodes = (
@@ -368,7 +371,7 @@ class MainWorkflow:
 
         job_nve = qdyn_nve(
             software=software,
-            parameters=input.nve_input,
+            parameters=input,
             pp_path=pp_path,
             orb_path=orb_path,
             structure=structure,
@@ -376,7 +379,7 @@ class MainWorkflow:
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
-            plot=input.basic_input.plot,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
         qres = build_qresources(
@@ -399,21 +402,18 @@ class MainWorkflow:
     def step_scf(
         self,
         *,
-        input: InputT,
+        input: SCFInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
-        stru: str,
         stru_format: str,
         stru_hash: str,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        assert input.scf_input is not None
-        software = input.scf_input.software
-        if software == 'abacus':
-            return []
+        software = input.software
 
         if 'nve' in jobs:
             traj_path = jobs['nve'][0].output['traj_path']
@@ -440,57 +440,84 @@ class MainWorkflow:
                 "SCF step requires NVE output. Include 'nve' in steps, "
                 "or set resume=True with a prev_task_id that has NVE results."
             )
+        
+        calculator = input.calculator
 
-        nodes = (
-            input.scf_input.nodes
-            if input.scf_input.nodes is not None
-            else active_worker_cfg['scf'][software]['nodes']
-        )
-        processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
-        threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
+        if isinstance(calculator, DFTBaseInputT):
+            nodes = (
+                calculator.nodes
+                if calculator.nodes is not None
+                else active_worker_cfg['scf'][software]['nodes']
+            )
+            processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
+            threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
+            pp_path = active_worker_cfg["pp_path"][software]
+            orb_path = active_worker_cfg["orb_path"][software]
+            model_path = ''
+            res_software = software
+            use_gpu = False
+        else:
+            nodes = 1
+            ncpus = active_worker_cfg['cpus_per_node']
+            processes_per_node = min(8, ncpus)
+            threads_per_process = max(1, ncpus // processes_per_node)
+            pp_path = ''
+            orb_path = ''
+            model_path = resolve_model_path(self.active_pool, calculator)
+            res_software = calculator.ham_type
+            use_gpu = False # calculator.use_gpu
 
         jobs_scf = qdyn_scf(
             software=software,
-            parameters=input.scf_input,
-            pp_path=active_worker_cfg["pp_path"][software],
-            orb_path=active_worker_cfg["orb_path"][software],
+            parameters=input,
+            pp_path=pp_path,
+            orb_path=orb_path,
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
+            model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
-            plot=input.basic_input.plot,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
-        for idx, job_scf in enumerate(jobs_scf):
-            jobs_scf[idx] = set_run_config(
+        qres = build_qresources(
+            active_worker_cfg,
+            use_gpu=use_gpu,
+            nodes=nodes,
+            processes_per_node=processes_per_node,
+            threads_per_process=threads_per_process,
+        )
+        jobs_scf = [
+            set_run_config(
                 job_scf,
-                exec_config=self._build_exec_config([software]),
-                resources=build_qresources(
-                    active_worker_cfg,
-                    active_worker_cfg['scf'][software],
-                    nodes=nodes,
+                exec_config=self._build_exec_config(
+                    [res_software],
+                    omp_threads=qres.threads_per_process,
                 ),
-            )
+                resources=qres,
+            ) for job_scf in jobs_scf
+        ]
+
         return jobs_scf
 
     def step_fused_scf_prenamd(
         self,
         *,
-        input: InputT,
+        scf_input: SCFInputT,
+        prenamd_input: PreNAMDInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
-        stru: str,
         stru_format: str,
         stru_hash: str,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        assert input.scf_input is not None
-        assert input.prenamd_input is not None
-        software = input.scf_input.software
+        software = scf_input.software
+
         if 'nve' in jobs:
             traj_path = jobs['nve'][0].output['traj_path']
             traj_format = TRAJ_FORMAT_MAPPING[software]
@@ -516,73 +543,102 @@ class MainWorkflow:
                 "FUSED_SCF_PRENAMD step requires NVE output. Include 'nve' in steps, "
                 "or set resume=True with a prev_task_id that has NVE results."
             )
+        
+        calculator = scf_input.calculator
 
-        nodes = 1
-        if (input.scf_input.nodes is not None and 
-            input.scf_input.nodes > 1):
-            logging.warning(
-                "FUSED_SCF_PRENAMD step is designed to run on a single node. "
-                "Overriding nodes to 1 for this step."
+        if isinstance(calculator, DFTBaseInputT):
+            nodes = (
+                calculator.nodes
+                if calculator.nodes is not None
+                else active_worker_cfg['scf'][software]['nodes']
             )
-        processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
-        threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
-        total_cpus = nodes * processes_per_node * threads_per_process
-        nproc = max(1, min(8, total_cpus))
-        omp_python = max(1, total_cpus // nproc)
+            processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
+            threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
+            ncpus = processes_per_node * threads_per_process
+            pp_path = active_worker_cfg["pp_path"][software]
+            orb_path = active_worker_cfg["orb_path"][software]
+            model_path = ''
+            res_software = software
+            use_gpu = False
+        else:
+            nodes = 1
+            ncpus = active_worker_cfg['cpus_per_node']
+            processes_per_node = min(8, ncpus)
+            threads_per_process = max(1, ncpus // processes_per_node)
+            pp_path = ''
+            orb_path = ''
+            model_path = resolve_model_path(self.active_pool, calculator)
+            res_software = calculator.ham_type
+            use_gpu = False # calculator.use_gpu
+        nprocs_dft = processes_per_node
+        nprocs_py = max(1, min(8, ncpus))
+        omp_py = max(1, ncpus // nprocs_py)
 
         jobs_fused = qdyn_fused_scf_prenamd(
             software=software,
-            scf_input=input.scf_input,
-            prenamd_input=input.prenamd_input,
-            pp_path=active_worker_cfg["pp_path"][software],
-            orb_path=active_worker_cfg["orb_path"][software],
+            scf_input=scf_input,
+            prenamd_input=prenamd_input,
+            pp_path=pp_path,
+            orb_path=orb_path,
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
-            total_cpus=total_cpus,
-            omp_software=threads_per_process,
-            omp_python=omp_python,
-            plot=input.basic_input.plot,
+            model_path=model_path,
+            nodes=nodes,
+            ncpus=ncpus,
+            nprocs_dft=nprocs_dft,
+            nprocs_py=nprocs_py,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
 
-        for idx, fused_job in enumerate(jobs_fused):
-            software_names = ['python'] if idx == len(jobs_fused) - 1 else [software, 'python']
-            jobs_fused[idx] = set_run_config(
-                fused_job,
+        qres = build_qresources(
+            active_worker_cfg,
+            use_gpu=use_gpu,
+            nodes=nodes,
+            processes_per_node=nprocs_py,
+            threads_per_process=omp_py,
+        )
+        njobs = len(jobs_fused)
+        jobs_fused = [
+            set_run_config(
+                job_fused,
                 exec_config=self._build_exec_config(
-                    software_names,
-                    omp_threads=omp_python,
+                    software_names=(
+                        ['python'] 
+                        if idx == njobs - 1 
+                        else [res_software]
+                    ),
+                    omp_threads=omp_py,
                 ),
-                resources=build_qresources(
-                    active_worker_cfg,
-                    active_worker_cfg['scf'][software],
-                    nodes=nodes,
-                ),
-            )
+                resources=qres,
+            ) for idx, job_fused in enumerate(jobs_fused)
+        ]
         return jobs_fused
 
     def step_pre_namd(
         self,
         *,
-        input: InputT,
+        input: PreNAMDInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        software = input.basic_input.software
-        assert input.prenamd_input is not None
-        prev_step = 'scf' if software != 'abacus' else 'nve'
+        prev_step = 'scf'
         if prev_step in jobs:
             run_dirs = [jobs[prev_step][idx].output['run_dir'] for idx in range(len(jobs[prev_step]))]
+            software = jobs[prev_step][-1].output['software']
         elif is_first_step and resume:
             try:
                 run_dirs = []
+                software = ''
                 for prev_job_uuid in self.job_ids[prev_task_id][prev_step]:
                     output = self.get_job_output(prev_job_uuid)
                     run_dirs.append(output['run_dir'])
+                    software = output['software']
             except Exception as exc:
                 raise ResumeError(
                     f"Previous job(s) for step '{prev_step}' not found or has no output. "
@@ -599,10 +655,10 @@ class MainWorkflow:
         omp_threads = max(1, min(4, ncpus))
         job_pre_namd = qdyn_pre_namd(
             software=software,
-            parameters=input.prenamd_input,
+            parameters=input,
             run_dirs=run_dirs,
             nproc=max(1, ncpus // omp_threads),
-            plot=input.basic_input.plot,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
         job_pre_namd = set_run_config(
@@ -623,15 +679,15 @@ class MainWorkflow:
     def step_namd(
         self,
         *,
-        input: InputT,
+        input: NAMDInputT,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
+        plot: bool,
     ) -> list[Job | Flow]:
         active_worker_cfg = self.active_pool.worker_cfg
-        assert input.namd_input is not None
         if 'fused_scf_prenamd' in jobs:
             prev_output = jobs['fused_scf_prenamd'][-1].output
         elif 'pre_namd' in jobs:
@@ -657,21 +713,21 @@ class MainWorkflow:
                 "resume=True with a prev_task_id that has those results."
             )
 
-        if input.namd_input.surface_hopping == 'FSSH':
+        if input.surface_hopping == 'FSSH':
             nodes = 1
             processes_per_node = 1
             threads_per_process = active_worker_cfg['cpus_per_node']
         else:
             nodes = (
-                input.namd_input.nodes
-                if input.namd_input.nodes is not None
+                input.nodes
+                if input.nodes is not None
                 else 1
             )
             processes_per_node = active_worker_cfg['cpus_per_node']
             threads_per_process = 1
 
         job_namd = qdyn_namd(
-            parameters=input.namd_input,
+            parameters=input,
             nac_path=prev_output['nac_path'],
             deph_path=prev_output['deph_path'],
             VBM=prev_output['VBM'],
@@ -679,7 +735,7 @@ class MainWorkflow:
             nodes=nodes,
             processes_per_node=processes_per_node,
             threads_per_process=threads_per_process,
-            plot=input.basic_input.plot,
+            plot=plot,
             prepare_input_only=prepare_input_only,
         )
         job_namd = set_run_config(
@@ -742,7 +798,7 @@ class MainWorkflow:
         if self._should_run_step('nvt', input.steps, flag) and input.nvt_input is not None:
             next_step = 'nve'
             jobs['nvt'] = self.step_nvt(
-                input=input,
+                input=input.nvt_input,
                 jobs=jobs,
                 is_first_step=first_step == 'nvt',
                 stru=stru,
@@ -750,6 +806,7 @@ class MainWorkflow:
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             flag = self._advance_prepare_flag(flag, input.steps, 'nvt', next_step)
 
@@ -760,7 +817,7 @@ class MainWorkflow:
                 else 'scf'
             )
             jobs['nve'] = self.step_nve(
-                input=input,
+                input=input.nve_input,
                 jobs=jobs,
                 is_first_step=first_step == 'nve',
                 stru=stru,
@@ -768,21 +825,22 @@ class MainWorkflow:
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             flag = self._advance_prepare_flag(flag, input.steps, 'nve', next_step)
 
         if self._should_run_step('scf', input.steps, flag) and input.scf_input is not None:
             next_step = 'pre_namd'
             jobs_scf = self.step_scf(
-                input=input,
+                input=input.scf_input,
                 jobs=jobs,
                 is_first_step=first_step == 'scf',
-                stru=stru,
                 stru_format=stru_format,
                 stru_hash=stru_hash,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             # ABACUS does not need a separate SCF job before PRE_NAMD, so
             # step_scf() returns an empty list and we should not register it.
@@ -797,15 +855,16 @@ class MainWorkflow:
         ):
             next_step = 'namd'
             jobs['fused_scf_prenamd'] = self.step_fused_scf_prenamd(
-                input=input,
+                scf_input=input.scf_input,
+                prenamd_input=input.prenamd_input,
                 jobs=jobs,
                 is_first_step=first_step == 'fused_scf_prenamd',
-                stru=stru,
                 stru_format=stru_format,
                 stru_hash=stru_hash,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             flag = self._advance_prepare_flag(
                 flag, input.steps, 'fused_scf_prenamd', next_step
@@ -817,24 +876,26 @@ class MainWorkflow:
         ):
             next_step = 'namd'
             jobs['pre_namd'] = self.step_pre_namd(
-                input=input,
+                input=input.prenamd_input,
                 jobs=jobs,
                 is_first_step=first_step == 'pre_namd',
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             flag = self._advance_prepare_flag(flag, input.steps, 'pre_namd', next_step)
 
         if self._should_run_step('namd', input.steps, flag) and input.namd_input is not None:
             next_step = ''
             jobs['namd'] = self.step_namd(
-                input=input,
+                input=input.namd_input,
                 jobs=jobs,
                 is_first_step=first_step == 'namd',
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
+                plot=input.plot,
             )
             flag = self._advance_prepare_flag(flag, input.steps, 'namd', next_step)
 

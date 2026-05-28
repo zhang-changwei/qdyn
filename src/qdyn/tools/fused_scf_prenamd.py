@@ -1,29 +1,20 @@
 import os
 import re
-import logging
 import shutil
-from copy import deepcopy
 from pathlib import Path
 from collections.abc import Generator
-from typing import Dict, List, Tuple, Any, TYPE_CHECKING
+from typing import Any, Sequence
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
-import natsort
 import numpy as np
-import ase.io
-from ase import Atoms
-from jobflow import job, Job
+from jobflow.core.job import job, Job
 
-from ..calc_common import write_stru, read_strus, parse_band_index
-from ..input import SCFInputT, PreNAMDInputT
-from ..params import chg_name, ipt_files, STRU_FNAME_MAPPING
+from ..calc_common import write_stru, read_strus, change_dir, parse_band_index
+from ..input import SCFInputT, PreNAMDInputT, DFTBaseInputT
 from ..input_prepare import DFTInputs
-from ..output_postprocess import extract_band_edges
+from ..params import CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
+from ..output_postprocess import extract_band_edges, read_scfout, calc_openmx_HK_SK_gamma
+from .scf import TrajInfo, SCFLogger, SCFSolverStub
 from .scf import _prepare_scf_input, _validate_scf_output
-from .scf import _set_status, STATUS_RUNNING, STATUS_ENDED, STATUS_FAIL
 from .canac import extract_tdolaps, extract_nacs
 from .dephase import calculate_dephasing_time
 from .run_software import run_software
@@ -36,11 +27,14 @@ def qdyn_fused_scf_prenamd(
     orb_path: str,
     traj_path: str,
     traj_format: str,
-    total_cpus: int,
-    omp_software: int = 1,
-    omp_python: int = 1,
+    model_path: str,
+    nodes: int = 1,
+    ncpus: int = 1,
+    nprocs_dft: int = 1,
+    nprocs_py: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
+    retry: bool = False,
 ) -> list[Job]:
     
     batch_size = scf_input.batch_size
@@ -66,14 +60,19 @@ def qdyn_fused_scf_prenamd(
             prenamd_input=prenamd_input,
             pp_path=pp_path,
             orb_path=orb_path,
-            traj_path=traj_path,
-            traj_format=traj_format,
-            frame_start=frame_start,
-            frame_end=frame_end,
-            total_cpus=total_cpus,
-            omp_software=omp_software,
-            omp_python=omp_python,
+            traj=TrajInfo(
+                path=traj_path,
+                format=traj_format,
+                start=frame_start,
+                stop=frame_end,
+            ),
+            model_path=model_path,
+            ncpus=ncpus,
+            nodes=nodes,
+            nprocs_dft=nprocs_dft,
+            nprocs_py=nprocs_py,
             prepare_input_only=prepare_input_only,
+            retry=retry,
         )
         jobs.append(j)
         outs.append(j.output["tdolap_path"])
@@ -86,7 +85,7 @@ def qdyn_fused_scf_prenamd(
         surface_hopping=prenamd_input.surface_hopping,
         VBM=last_batch_job.output["VBM"],
         CBM=last_batch_job.output["CBM"],
-        nproc=max(1, total_cpus // omp_python),
+        nproc=nprocs_py,
         plot=plot,
     )
     jobs.append(j)
@@ -101,74 +100,132 @@ def qdyn_fused_scf_prenamd_task(
     prenamd_input: PreNAMDInputT,
     pp_path: str,
     orb_path: str,
-    traj_path: str,
-    traj_format: str,
-    frame_start: int,
-    frame_end: int,
-    total_cpus: int,
-    omp_software: int = 1,
-    omp_python: int = 4,
+    traj: TrajInfo,
+    model_path: str,
+    ncpus: int,
+    nodes: int = 1,
+    nprocs_dft: int = 1,
+    nprocs_py: int = 1,
     prepare_input_only: bool = False,
+    retry: bool = False,
 ) -> dict:
 
-    all_strus = read_strus(traj_format, traj_path=traj_path)
-    software_lower = software.lower()
-    nprocs = max(1, total_cpus // omp_python)
+    software = software.lower()
+    calc = scf_input.calculator
+    nprocs_dft *= nodes
+    omp_dft = max(1, ncpus // nprocs_dft)
+    omp_py = max(1, ncpus // nprocs_py)
+    nprocs_dft = max(1, ncpus // omp_dft) * nodes
     scf_step = scf_input.scf_step
-    if scf_step < 0:
-        scf_step = len(all_strus)
 
-    selected_structures = all_strus[-scf_step:]
-    batch_structures = selected_structures[frame_start:frame_end]
-    n_frames = len(batch_structures)
+    strus = read_strus(traj.format, traj_path=traj.path)
+    strus = strus[-scf_step:]
+    strus = strus[traj.start:traj.stop]
+    n_frames = len(strus)
+    nstep = n_frames - 1
 
     # Prepare common input files once (these will be copied to each subdir)
-    inputs_dict = _prepare_scf_input(software_lower, scf_input)
-    dftinputs = DFTInputs(
-        software=software_lower,
-        structure=batch_structures[0],
-        pp_path=pp_path,
-        orb_path=orb_path,
-        kspacing=scf_input.kspacing,
-        inputs_dict=inputs_dict,
-        inputs_params=scf_input.parameters,
-    )
-    dftinputs.write()
+    if isinstance(calc, DFTBaseInputT):
+        software_dft = software
+        inputs_dict = _prepare_scf_input(software, scf_input)
+        dftinputs = DFTInputs(
+            software=software,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict,
+            inputs_params=calc.parameters,
+        )
+        postprocess = False
+        # logger and solver
+        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        scf_solver = SCFSolverStub()
+        batch_size = nprocs_py
+    else:
+        software_dft = calc.ham_type
+        inputs_dict = _prepare_scf_input(software, scf_input)
+        if software_dft == 'openmx':
+            inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
+        elif software_dft == 'abacus':
+            inputs_dict['calculation'] = 'get_s'
+        dftinputs = DFTInputs(
+            software=software_dft,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict,
+        )
+        postprocess = True
+        # logger and solver
+        from ..ml_tools.hamgnn_wrapper import MLSCFSolver
+        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        scf_solver = MLSCFSolver(
+            software=software_dft,
+            mlh_input=calc,
+            model_path=model_path,
+            logger=scf_logger,
+            nproc=nprocs_py,
+            threads_per_proc=omp_py,
+        )
+        batch_size = calc.batch_size
+    dftinputs.write(stru=False)
+
+    # for overlap
+    if software_dft in {'abacus', 'openmx'}:
+        if software_dft == 'openmx':
+            inputs_dict['postprocess.output.level'] = 1
+        elif software_dft == 'abacus':
+            inputs_dict['calculation'] = 'get_s'
+        dftinputs_olap = DFTInputs(
+            software=software_dft,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict,
+        )
     
 
     if prepare_input_only:
         return {
             'run_dir': str(Path.cwd()),
-            'successful': 0,
-            'failed': [],
+            'software': software,
+            'software_dft': software_dft,
         }
 
+    # Task working directory
     task_dir = Path.cwd()
-    subdirs: list[str] = []
     numdigit = len(str(scf_step))
 
-    for global_idx, structure in zip(range(frame_start, frame_end), batch_structures):
-        subdir_name = f"scf_{global_idx + 1:0{numdigit}d}" # 1-based index
-        subdir_path = task_dir / subdir_name
-
-        # Create subdirectories and write structure
-        subdir_path.mkdir(exist_ok=True)
-        write_stru(software_lower, structure, subdir_path)
-
-        subdirs.append(str(subdir_path))
-
-    successful = 0
-    failed = []
     prev_chgcar = None
-    chgcar = chg_name[software_lower]
-    files_to_copy = ipt_files[software_lower]
+    chgcar = CHG_FNAME[software_dft]
+    files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
     vbm, cbm = 0, 0
 
-    def remove_large_outputs(start: int, end: int) -> None:
-        for subdir in subdirs[start:end]:
-            for fname in ['WAVECAR', 'CHG', 'CHGCAR', 'OUTCAR', 
-                          'vasprun.xml', 'vaspout.h5']:
-                fpath = os.path.join(subdir, fname)
+    # create subdirs list for canac
+    subdirs: list[str] = []
+    for global_idx in range(traj.start, traj.stop):
+        subdir_name = f"scf_{global_idx + 1:0{numdigit}d}" # 1-based index
+        subdir_path = task_dir / subdir_name
+        subdirs.append(str(subdir_path))
+
+    LARGE_FNAMES = {
+        'vasp': {
+            'WAVECAR', 'CHG', 'CHGCAR', 'OUTCAR', 
+            'vasprun.xml', 'vaspout.h5'
+        },
+        'openmx': {
+            'qdyn.scfout'
+        }
+    }
+    def remove_large_outputs(folders: Sequence[str | Path]) -> None:
+        fnames = LARGE_FNAMES[software_dft]
+
+        for folder in folders:
+            for fname in fnames:
+                fpath = os.path.join(folder, fname)
                 if os.path.isfile(fpath):
                     os.remove(fpath)
 
@@ -179,66 +236,57 @@ def qdyn_fused_scf_prenamd_task(
     # in the group have valid WAVECAR files.
     is_first_step = True
     out = None
-    nstep = n_frames - 1
 
-    for canac_start in range(0, nstep, nprocs):
-        canac_end = min(canac_start + nprocs, nstep)
+    for canac_start in range(-batch_size, nstep, batch_size):
+        canac_end = min(canac_start + batch_size, nstep)
         scf_start = 0 if is_first_step else canac_start + 1
-        scf_end = canac_end + 1
+        scf_end = 1 if is_first_step else canac_end + 1
 
-        # scf block — only run frames that haven't been computed yet
-        for subdir in subdirs[scf_start:scf_end]:
 
-            # Prepare this subdirectory - link input files from task_dir
+        # scf block (head & normal frames)
+        for scf_idx in range(scf_start, scf_end):
+            stru = strus[scf_idx]
+
+            # Create subdir, copy input files and write structure file
+            subdir = Path(subdirs[scf_idx])
+            if subdir.is_dir(): # optional
+                shutil.rmtree(subdir)
+            subdir.mkdir(exist_ok=True)
             for fname in files_to_copy:
-                os.symlink(
-                    os.path.join(str(task_dir), fname),
-                    os.path.join(subdir, fname),
-                )
+                os.symlink(task_dir / fname, subdir / fname)
+            write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
 
             # Move CHGCAR from previous successful calculation for faster convergence
-            if prev_chgcar is not None:
-                shutil.move(prev_chgcar, os.path.join(subdir, chgcar))
-
-            # Mark as running
-            _set_status(subdir, STATUS_RUNNING)
+            if prev_chgcar and prev_chgcar.is_file():
+                shutil.move(prev_chgcar, subdir / chgcar)
 
             # Change to subdirectory and run
-            os.chdir(subdir)
-
-            try:
-                # Run VASP
+            with change_dir(subdir):
                 run_software(
-                    software=software_lower, 
-                    nprocs=total_cpus // omp_software, 
+                    software=software_dft, 
+                    nprocs=nprocs_dft, 
                     is_alle=scf_input.is_alle,
-                    omp=omp_software
+                    postprocess=postprocess,
+                    omp=omp_dft,
                 )
+                _validate_scf_output(software)
 
-                # Validate output
-                _validate_scf_output(software_lower)
+            # run scf solver
+            scf_solver.add(scf_idx, subdir, stru)
 
-                # Mark as ended
-                _set_status(subdir, STATUS_ENDED)
-                successful += 1
+            # Updates and logging
+            prev_chgcar = subdir / chgcar
+            scf_logger(step=scf_idx, global_idx=subdir.name, category='normal')
 
-                # Update prev_chgcar for next iteration
-                prev_chgcar = os.path.join(subdir, chgcar)
+        # ensure the solver is runned, normal frames auto satisfied
+        # useful for head / tail frames
+        scf_solver.run()
 
-            except Exception as e:
-                # Mark as failed
-                failed_idx = subdir.split('_')[-1]  # 1-based
-                raise RuntimeError(
-                    f"SCF calculation failed for frame {failed_idx}"
-                ) from e
 
-            finally:
-                os.chdir(task_dir)
-
-        # prenamd block
+        # prenamd block (head frame)
         if is_first_step:
             vbm, cbm, nbands = extract_band_edges(
-                software_lower,
+                software,
                 subdirs[0],
                 prenamd_input.adv.ikpt,
                 prenamd_input.adv.ispin,
@@ -247,36 +295,86 @@ def qdyn_fused_scf_prenamd_task(
             bmax = parse_band_index(prenamd_input.bmax, vbm, nbands)
             canac: Generator[dict[str, Any] | None, None, None] = extract_tdolaps(
                 run_dirs=subdirs,
-                software=software_lower,  # type: ignore
+                software=software,  # type: ignore
                 is_gamma_ver=dftinputs.gamma,
                 is_alle=prenamd_input.adv.alle,
                 bmin=bmin,
                 bmax=bmax,
                 ikpt=prenamd_input.adv.ikpt,
                 ispin=prenamd_input.adv.ispin,
-                nproc=nprocs,
+                nproc=nprocs_py,
                 dirs_sorted=True,
                 generator=True,
             )
             is_first_step = False
-        next(canac, None)
+            continue
+
+
+        # overlap block (normal frames)
+        if software_dft in {'abacus', 'openmx'}:
+            for canac_idx in range(canac_start, canac_end):
+                subdir = Path(subdirs[canac_idx])
+
+                olapdir = subdir / "overlap"
+                olapdir.mkdir(exist_ok=True)
+
+                atoms = strus[canac_idx].copy()
+                atoms.extend(strus[canac_idx + 1])
+                for fname in files_to_copy:
+                    os.symlink(subdir / fname, olapdir / fname)
+                write_stru(
+                    software_dft, 
+                    atoms, 
+                    olapdir, 
+                    extras=dftinputs_olap.stru_extras, # type: ignore
+                )
+
+                with change_dir(olapdir):
+                    run_software(
+                        software=software_dft, 
+                        nprocs=nprocs_dft, 
+                        postprocess=True,
+                        omp=omp_dft,
+                    )
+
+                # save overlap matrix
+                scfout_data = read_scfout(str(olapdir / "qdyn.scfout")) # type: ignore
+                SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
+                np.save(olapdir / "overlap.npy", SK) # type: ignore
+
+                # logging
+                scf_logger(step=canac_idx, global_idx=subdir.name, category='overlap')
+  
+
+        # prenamd block (normal frames)
+        next(canac, None) # type: ignore
 
         # Remove frames that cannot be needed by later CA-NAC pairs.
         # Keep frame canac_end — it is the left endpoint of the next group.
-        remove_large_outputs(canac_start, canac_end)
+        remove_large_outputs(subdirs[canac_start: canac_end])
+        if software_dft in {'abacus', 'openmx'}:
+            remove_large_outputs(
+                [os.path.join(f, 'overlap') 
+                 for f in subdirs[canac_start: canac_end]]
+            )
 
 
     # tdolap output
-    out = next(canac, None)
+    out = next(canac, None) # type: ignore
     if out is None:
         raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
     # Ensure generator is exhausted before deleting the final boundary frame.
-    next(canac, None)
-    # remove_large_outputs(cleanup_start, n_frames)
+    next(canac, None) # type: ignore
+    # last frame should not be cleaned
+
+    # close the logger and solver
+    scf_logger.close()
+    scf_solver.close()
 
     return {
         "run_dir": str(Path.cwd()),
-        "software": software_lower,
+        "software": software,
+        "software_dft": software_dft,
         "VBM": vbm,
         "CBM": cbm,
         "tdolap_path": out['tdolap_path'],

@@ -1,9 +1,12 @@
+# Note: Do not import any torch related modules at the top level of this file.
+# Instead, import torch inside the functions that require it.
+
 from pathlib import Path
 from ase.calculators.calculator import Calculator
 from ase.calculators.mixing import SumCalculator
 import ase.units
 
-from ..input import NequipInputT, MACEInputT, DispersionInputT
+from ..input import NequipInputT, MACEInputT, HamGNNInputT, DispersionInputT
 from ..params import MACE_PRETRAINED_MODEL_URLS
 from ..pool import WorkerPool
 
@@ -14,7 +17,7 @@ def mace_pretrained_model_filename(model_name: str) -> str:
     return Path(MACE_PRETRAINED_MODEL_URLS[model_name]).name
 
 
-def resolve_model_path(pool: WorkerPool, calc: NequipInputT | MACEInputT) -> str:
+def resolve_model_path(pool: WorkerPool, calc: NequipInputT | MACEInputT | HamGNNInputT) -> str:
     """Return the worker-visible model path for ML-based NVE calculators."""
     if isinstance(calc, NequipInputT):
         if calc.use_pretrained_model:
@@ -29,6 +32,12 @@ def resolve_model_path(pool: WorkerPool, calc: NequipInputT | MACEInputT) -> str
             assert calc.model_name
             model_name = mace_pretrained_model_filename(calc.model_name)
             return f"~/.qdyn/pretrained/{model_name}"
+        return pool.get_user_file_path("model", calc.model_hash)
+    
+    if isinstance(calc, HamGNNInputT):
+        if calc.use_pretrained_model:
+            assert calc.model_name
+            return f"~/.qdyn/pretrained/{calc.model_name}"
         return pool.get_user_file_path("model", calc.model_hash)
 
     return ""

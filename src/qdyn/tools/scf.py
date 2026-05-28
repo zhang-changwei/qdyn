@@ -238,7 +238,10 @@ def qdyn_scf_cpu(
     else:
         software_dft = calc.ham_type
         inputs_dict = _prepare_scf_input(software, parameters)
-        inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
+        if software_dft == 'openmx':
+            inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
+        elif software_dft == 'abacus':
+            inputs_dict['calculation'] = 'get_s'
         dftinputs = DFTInputs(
             software=software_dft,
             structure=strus[0],
@@ -329,7 +332,7 @@ def qdyn_scf_cpu(
         dftinputs.update_inputs({'postprocess.output.level': 1})
         dftinputs.update_stru_extras()
 
-    if software_dft in {'openmx'}:
+    if software_dft in {'abacus', 'openmx'}:
         for idx in range(nstep):
             global_idx = frame_start + idx + 1
             subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
