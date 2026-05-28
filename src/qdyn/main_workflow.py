@@ -416,14 +416,15 @@ class MainWorkflow:
         software = input.software
 
         if 'nve' in jobs:
-            traj_path = jobs['nve'][0].output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[software]
+            nve_output = jobs['nve'][0].output
+            traj_path = nve_output['traj_path']
+            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = TRAJ_FORMAT_MAPPING[software]
+                traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']]
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
@@ -519,14 +520,15 @@ class MainWorkflow:
         software = scf_input.software
 
         if 'nve' in jobs:
-            traj_path = jobs['nve'][0].output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[software]
+            nve_output = jobs['nve'][0].output
+            traj_path = nve_output['traj_path']
+            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = TRAJ_FORMAT_MAPPING[software]
+                traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']]
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "

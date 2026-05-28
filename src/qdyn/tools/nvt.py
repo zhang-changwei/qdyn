@@ -371,7 +371,11 @@ def _run_ase_nvt(
         
     # initial velocities
     if np.allclose(structure.get_velocities(), 0.0):
-        from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+        try:
+            # ase >= 3.29.0
+            from ase.md.velocitydistribution import thermalize_momenta as MaxwellBoltzmannDistribution # type: ignore
+        except ImportError:
+            from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
         MaxwellBoltzmannDistribution(structure, temperature_K=temp_beg)
 

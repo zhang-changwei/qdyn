@@ -619,9 +619,11 @@ def validate_step_input(
         validate_gpu_availability(pool, worker_cfg)
         check_list['gpu'] = True
     
-    if calc.use_pretrained_model and (calc.model_name not in check_list['models']):
+    if calc.use_pretrained_model:
         if not calc.model_name:
             raise ValidationError(f"{software} pretrained model_name is required.")
+        if calc.model_name in check_list['models']:
+            return
         if software == "nequip":
             model_name = nequip_pretrained_model_filename(calc.model_name, device)
         elif software == "mace":
@@ -640,7 +642,9 @@ def validate_step_input(
             )
         check_list['models'].append(calc.model_name)
 
-    elif calc.model_hash and (calc.model_hash not in check_list['models']): # custom model
+    elif calc.model_hash: # custom model
+        if calc.model_hash in check_list['models']:
+            return
         if not pool.user_file_exists("model", calc.model_hash):
             raise ValidationError(
                 f"Custom model with hash '{calc.model_hash}' "

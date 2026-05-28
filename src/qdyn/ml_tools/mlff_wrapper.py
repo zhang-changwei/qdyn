@@ -109,6 +109,10 @@ def get_mlff_calculator(
         if not dispersion_cutoff:
             dispersion_cutoff = 56.6918 if old else 90.0
         dispersion_cutoff *= ase.units.Bohr
+        if dtype == 'float32':
+            dtype = torch.float32
+        elif dtype == 'float64':
+            dtype = torch.float64
 
         d3_calc = TorchDFTD3Calculator(
             device=device,

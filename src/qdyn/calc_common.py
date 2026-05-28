@@ -114,10 +114,11 @@ def write_stru(
             natoms = len(structure)
             syms = []
             raw_syms = structure.get_chemical_symbols()
-            syms_set = set(raw_syms)
+            syms_set = set()
             for s in raw_syms:
                 if s not in syms_set:
                     syms.append(s)
+                    syms_set.add(s)
             valence = [VALENCE_ELECTRONS['openmx'][s] for s in syms]
             pos = structure.get_positions()
             cell = structure.get_cell().array
@@ -134,7 +135,7 @@ def write_stru(
             stru_lines.append("<Definition.of.Atomic.Species\n")
             for s in syms:
                 stru_lines.append(
-                    " {:3s} {18s} {10s}\n".format(
+                    " {:3s} {:18s} {:10s}\n".format(
                         s, ORBITAL_BASIS['openmx'][s], PSEUDO_POTENTIAL['openmx'][s]
                     )
                 )

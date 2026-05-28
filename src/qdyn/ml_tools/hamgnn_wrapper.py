@@ -73,7 +73,7 @@ def get_basis_def(software: str, stru: Atoms, nao_max: int = 26) -> dict[int, np
         basis = np.zeros(nao_max, dtype=np.int32)
         left = 0
         for idx, l in enumerate(spdf):
-            if l > nao_max_spdf:
+            if l > nao_max_spdf[idx]:
                 raise ValueError()
             width = (2*idx+1) * l
             basis[l:l+width] = 1
