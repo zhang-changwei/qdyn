@@ -524,10 +524,10 @@ def _validate_scf_output(software: str, software_dft: str):
             
     elif software == 'hamgnn':
         if software_dft == 'openmx':
-            if not os.path.isfile('placeholder'):
-                raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
+            if not os.path.isfile('qdyn.scfout'):
+                raise FileNotFoundError("Overlap matrix calculation failed: qdyn.scfout not found.")
         elif software_dft == 'abacus':
-            if not os.path.isfile('placeholder'):
+            if not os.path.isfile('placeholder'): # align with 3.11lts
                 raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
         else:
             raise NotImplementedError(
