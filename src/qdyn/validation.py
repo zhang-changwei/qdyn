@@ -9,22 +9,57 @@ import ase.io
 import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
-from .input import (InputT, NVEInputT, NVTInputT,
-                    DFTBaseInputT, NequipInputT, MACEInputT)
-from .tools.mlff_wrapper import (
+from .input import (InputT, NVEInputT, NVTInputT, SCFInputT,
+                    DFTBaseInputT, NequipInputT, MACEInputT, HamGNNInputT)
+from .ml_tools.mlff_wrapper import (
     mace_pretrained_model_filename,
     nequip_pretrained_model_filename,
 )
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
-SUPPORTED_SOFTWARE = ["vasp", "vasp_ae", "abacus", "python", "namd"]
+# installed entry 
+SUPPORTED_SOFTWARE = {
+    "vasp", 
+    "vasp_ae", 
+    "abacus", 
+    "openmx",
+    "python", 
+    "namd",
+    "nequip",
+    "mace",
+    "hamgnn",
+}
+# map from installed to modules / export / pre_run
 SOFTWARE_MAPPING = {
     "vasp_ae": "vasp",
     "vasp": "vasp",
     "abacus": "abacus",
+    "openmx": "openmx",
     "python": "python",
     "namd": "namd",
+    "nequip": "python",
+    "mace": "python",
+    "hamgnn": "python",
+}
+SOFTWARES_IN_STEP_FIELDS = {
+    "vasp",
+    "abacus",
+    "openmx",
+}
+SOFTWARES_REQ_PP = {
+    "vasp",
+    "abacus",
+    "openmx",
+}
+SOFTWARES_REQ_ORB = {
+    "abacus",
+    "openmx",
+}
+ML_SOFTWARE_PAIRS = {
+    "nequip": NequipInputT,
+    "mace": MACEInputT,
+    "hamgnn": HamGNNInputT,
 }
 
 
@@ -213,7 +248,7 @@ def validate_and_fill_runtime_config(
             key,
             f"Missing '{dotted_prefix}.{key}' section in QDYN config.",
         )
-        if key in ["nvt", "nve", "scf"] and software in ["vasp", "abacus"]:
+        if key in ["nvt", "nve", "scf"]:
             if software not in key_cfg:
                 raise ConfigError(
                     f"Invalid resource config for '{dotted_prefix}.{key}.{software}' in QDYN config.\n"
@@ -382,13 +417,14 @@ def validate_and_fill_runtime_config(
             _validate_worker_keys(worker_cfg, "modules", software, [], dotted_prefix)
             _validate_worker_keys(worker_cfg, "export", software, {}, dotted_prefix)
             _validate_worker_keys(worker_cfg, "pre_run", software, "", dotted_prefix)
-            pp_required = True if software in ["vasp", "abacus"] else False
-            _validate_worker_keys(worker_cfg, "pp_path", software, "", dotted_prefix, pp_required)
-            orb_required = True if software in ["abacus"] else False
-            _validate_worker_keys(worker_cfg, "orb_path", software, "", dotted_prefix, orb_required)
-            _validate_worker_keys(worker_cfg, "nvt", software, {}, dotted_prefix)
-            _validate_worker_keys(worker_cfg, "nve", software, {}, dotted_prefix)
-            _validate_worker_keys(worker_cfg, "scf", software, {}, dotted_prefix)
+            if software in SOFTWARES_REQ_PP:
+                _validate_worker_keys(worker_cfg, "pp_path", software, "", dotted_prefix, True)
+            if software in SOFTWARES_REQ_ORB:
+                _validate_worker_keys(worker_cfg, "orb_path", software, "", dotted_prefix, True)
+            if software in SOFTWARES_IN_STEP_FIELDS:
+                _validate_worker_keys(worker_cfg, "nvt", software, {}, dotted_prefix, True)
+                _validate_worker_keys(worker_cfg, "nve", software, {}, dotted_prefix, True)
+                _validate_worker_keys(worker_cfg, "scf", software, {}, dotted_prefix, True)
 
 
     # jf workers
@@ -423,22 +459,19 @@ def validate_workflow_input(
 ) -> None:
     """Validate user workflow input before building the jobflow graph."""
 
-    check_list = {'gpu': False, 'models': []}
+    check_list = {
+        'gpu': False, 
+        'models': [],
+    }
 
-    # software and method
-    software = input.basic_input.software
-    if not (software == "vasp" and method == "namd"):
-        raise NotImplementedError(
-            "Currently only the combination of software='vasp' and method='namd' is supported.\n"
-            f"Got software='{software}', method='{method}'."
-        )
+    # installed software
     installed_cfg = worker_cfg["installed"]
     installed = [key for key, enabled in installed_cfg.items() if enabled]
-    if software not in [SOFTWARE_MAPPING[s] for s in installed]:
-        raise ValidationError(
-            f"Software '{software}' is not installed on the worker."
-        )
     
+    # ------------------------------------------------------------------
+    # Check steps and corresponding input fields
+    # ------------------------------------------------------------------
+
     # steps, coresponding input must be provided
     required_inputs = {
         "nvt": ("nvt_input",),
@@ -455,20 +488,6 @@ def validate_workflow_input(
                     f"Step '{step}' requires '{field_name}' to be provided."
                 )
 
-    # vasp_ae specific (scf / fused_scf_prenamd)
-    if (
-        software == "vasp"
-        and ("scf" in input.steps or "fused_scf_prenamd" in input.steps)
-        and input.scf_input is not None
-        and input.scf_input.is_alle
-    ):
-
-        if "vasp_ae" not in installed:
-            raise ValidationError(
-                "VASP_AE is required for SCF step with all-electron settings, "
-                "but 'vasp_ae' is not installed on the worker."
-            )
-
     # null step check
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
@@ -484,13 +503,17 @@ def validate_workflow_input(
     else:
         raise NotImplementedError(f"Method '{method}' is not supported yet.")
 
+    # ------------------------------------------------------------------
+    # Check workflow starting point: resume / stru / stru_hash
+    # ------------------------------------------------------------------
+
     # In resume task, no stru, stru_format, or stru_hash required
     # In tasks starting from nvt/nve, stru, stru_format reqired
     # In tasks starting from scf/fused_scf_prenamd, stru_hash, stru_format required
     # resume check
     if resume:
         if not prev_task_id:
-            raise ValidationError("prev_task_id must be provided when resume=True.")
+            raise ResumeError("prev_task_id must be provided when resume=True.")
         if prev_task_id not in known_task_ids:
             raise ResumeError(f"Previous task '{prev_task_id}' not found.")
 
@@ -526,8 +549,15 @@ def validate_workflow_input(
             "Either stru, stru_hash, or resume with valid prev_task_id must be provided."
         )
     
+    # ------------------------------------------------------------------
+    # Check specific input fields
+    # ------------------------------------------------------------------
+    
     # nvt specific check
     if isinstance(input.nvt_input, NVTInputT):
+        software = input.nvt_input.software
+        validate_software_installation(software, installed)
+        
         if len(input.nvt_input.thermostats_algo) != len(input.nvt_input.md_step):
             raise ValidationError(
                 "Length of thermostats_algo and md_step must be the same in nvt_input."
@@ -536,94 +566,99 @@ def validate_workflow_input(
             raise ValidationError(
                 "thermostats_algo cannot be empty when nvt_input is provided."
             )
-        validate_md_input(input.nvt_input, active_pool, worker_cfg, check_list)
+        validate_step_input(input.nvt_input, active_pool, worker_cfg, check_list)
 
     # nve specific check
     if isinstance(input.nve_input, NVEInputT):
-        validate_md_input(input.nve_input, active_pool, worker_cfg, check_list)
+        validate_step_input(input.nve_input, active_pool, worker_cfg, check_list)
+
+    # scf specific check
+    if isinstance(input.scf_input, SCFInputT):
+        software = input.scf_input.software
+        if software == "vasp" and input.scf_input.is_alle:
+            software = "vasp_ae"
+        validate_software_installation(software, installed)
+
+        validate_step_input(input.scf_input, active_pool, worker_cfg, check_list)
 
 
-def validate_md_input(
-    md: NVTInputT | NVEInputT,
+
+def validate_software_installation(software: str, installed: list[str]):
+    if software not in installed:
+        raise ValidationError(
+            f"Software '{software}' is required for the selected workflow steps, "
+            f"but is not installed on the worker.\n"
+        )
+
+
+def validate_step_input(
+    step: NVTInputT | NVEInputT | SCFInputT,
     pool: WorkerPool,
     worker_cfg: dict[str, Any],
     check_list: dict[str, Any],
 ):
     CALCULATOR_MISMATCH_MSG = (r"Invalid calculator for MD step "
-                                r"with software '{}'.")
+                               r"with software '{}'.")
     # dft
-    if (md.software in ['vasp'] and
-        not isinstance(md.calculator, DFTBaseInputT)):
-
-        raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
+    if isinstance(step.calculator, DFTBaseInputT):
+        if step.software not in SOFTWARES_IN_STEP_FIELDS:
+            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(step.software))
+        return
     
-    # nequip
-    elif md.software == 'nequip':
-        if not isinstance(md.calculator, NequipInputT):
-            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
-        
-        calc = md.calculator
-        device = 'cuda' if calc.use_gpu else 'cpu'
-        if calc.use_gpu and not check_list['gpu']:
-            validate_gpu_availability(pool, worker_cfg)
-            check_list['gpu'] = True
-        
-        if calc.use_pretrained_model:
-            if not calc.model_name:
-                raise ValidationError("NequIP pretrained model_name is required.")
+    # ml
+    software = step.software
+    calc = step.calculator
+    for k, v in ML_SOFTWARE_PAIRS.items():
+        if software == k and isinstance(calc, v):
+            break
+    else:
+        raise ValidationError(CALCULATOR_MISMATCH_MSG.format(software))
+    
+    device = 'cuda' if calc.use_gpu else 'cpu'
+    if calc.use_gpu and not check_list['gpu']:
+        validate_gpu_availability(pool, worker_cfg)
+        check_list['gpu'] = True
+    
+    if calc.use_pretrained_model:
+        if not calc.model_name:
+            raise ValidationError(f"{software} pretrained model_name is required.")
+        if calc.model_name in check_list['models']:
+            return
+        if software == "nequip":
             model_name = nequip_pretrained_model_filename(calc.model_name, device)
-            model_path = '~/.qdyn/pretrained/' + model_name
-            exists = pool.check_file_exists(model_path)
-            if not exists:
-                raise ValidationError(
-                    f"Pretrained model '{calc.model_name}' for NequIP on {device} not found at '{model_path}'.\n"
-                    "Please download the model from nequip.net and place it in the specified path."
-                )
-            check_list['models'].append(calc.model_name)
-
-        else: # custom model
-            if (
-                not calc.model_hash or 
-                not pool.user_file_exists("model", calc.model_hash)
-            ):
-                raise ValidationError(
-                    f"Custom model with hash '{calc.model_hash}' not found in the active pool.\n"
-                    "Please upload the model file and provide the correct hash."
-                )
-    
-    # mace
-    elif md.software == 'mace':
-        if not isinstance(md.calculator, MACEInputT):
-            raise ValidationError(CALCULATOR_MISMATCH_MSG.format(md.software))
-        
-        calc = md.calculator
-        if calc.use_gpu and not check_list['gpu']:
-            validate_gpu_availability(pool, worker_cfg)
-            check_list['gpu'] = True
-
-        if calc.use_pretrained_model:
-            if not calc.model_name:
-                raise ValidationError("MACE pretrained model_name is required.")
+        elif software == "mace":
             model_name = mace_pretrained_model_filename(calc.model_name)
-            model_path = '~/.qdyn/pretrained/' + model_name
-            exists = pool.check_file_exists(model_path)
-            if not exists:
-                raise ValidationError(
-                    f"Pretrained model '{calc.model_name}' for MACE not found at '{model_path}'.\n"
-                    "Please download the model from the official MACE release page and place it in the specified path."
-                )
-            check_list['models'].append(calc.model_name)
-        else:
-            if (
-                not calc.model_hash
-                or not pool.user_file_exists("model", calc.model_hash)
-            ):
-                raise ValidationError(
-                    f"Custom model with hash '{calc.model_hash}' not found in the active pool.\n"
-                    "Please upload the model file and provide the correct hash."
-                )
-            
+        else: # hamgnn
+            model_name = calc.model_name
         
+        model_path = '~/.qdyn/pretrained/' + model_name
+        exists = pool.check_file_exists(model_path)
+        if not exists:
+            raise ValidationError(
+                f"Pretrained model '{calc.model_name}' for {software} "
+                f"on {device} not found at '{model_path}'.\n"
+                "Please download the model from official site "
+                "and place it in the specified path.\n"
+            )
+        check_list['models'].append(calc.model_name)
+
+    elif calc.model_hash: # custom model
+        if calc.model_hash in check_list['models']:
+            return
+        if not pool.user_file_exists("model", calc.model_hash):
+            raise ValidationError(
+                f"Custom model with hash '{calc.model_hash}' "
+                "not found in the active pool.\n"
+                "Please upload the model file and provide the correct hash."
+            )
+        check_list['models'].append(calc.model_hash)
+
+    else:
+        raise ValidationError(
+            f"Invalid calculator configuration for {software}.\n"
+            "Please provide model_name or model_hash."
+        )
+
 
 def validate_gpu_availability(
     pool: WorkerPool, 

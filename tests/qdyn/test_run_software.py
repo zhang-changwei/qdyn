@@ -4,7 +4,7 @@ import io
 from pathlib import Path
 
 from qdyn.pool import WorkerPool
-from qdyn.tools.run_software import DFTStatus, MDProgressMonitor, run_vasp
+from qdyn.tools.run_software import DFTStatus, MDProgressMonitor, run_software, run_vasp
 
 
 def test_workerpool_check_file_exists_replaces_home_prefix():
@@ -47,7 +47,7 @@ def test_md_progress_monitor_uses_d_eps_not_ncg_for_convergence_check():
     assert log_file.getvalue().startswith("0.0010")
 
 
-def test_run_vasp_calls_monitor_after_process_exit(monkeypatch, tmp_path: Path):
+def test_run_software_calls_monitor_after_process_exit(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "KPOINTS").write_text("kpoints\n0\nGamma\n1 1 1\n", encoding="utf-8")
 
@@ -74,6 +74,6 @@ def test_run_vasp_calls_monitor_after_process_exit(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("qdyn.tools.run_software.time.sleep", lambda *_: None)
     monitor = lambda: calls.append("monitor") or DFTStatus.NORMAL
 
-    run_vasp(1, monitor=monitor)
+    run_software("vasp", 1, monitor=monitor)
 
     assert calls == ["monitor", "monitor"]

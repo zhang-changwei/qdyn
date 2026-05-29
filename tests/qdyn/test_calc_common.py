@@ -1,5 +1,9 @@
+from pathlib import Path
+
 import pytest
+from ase import Atoms
 from qdyn.calc_common import parse_band_index
+from qdyn.calc_common import write_stru
 
 
 class TestParseBandIndex:
@@ -44,3 +48,22 @@ class TestParseBandIndex:
     def test_rejects_invalid_expressions(self, expr):
         with pytest.raises((SyntaxError, ValueError)):
             parse_band_index(expr, 120, 200)
+
+
+def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path):
+    stru = Atoms(
+        "SiOSi",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],
+        ],
+    )
+
+    write_stru("openmx", stru, tmp_path, extras="")
+
+    text = (tmp_path / "qdyn.dat").read_text(encoding="utf-8")
+    assert "Species.Number             2" in text
+    assert "Atoms.Number                  3" in text
+    assert " Si " in text
+    assert " O " in text

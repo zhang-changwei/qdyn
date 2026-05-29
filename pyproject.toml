@@ -33,6 +33,7 @@ ml = [
     "pyg-lib>=0.5.0",
     "scikit-learn>=1.7.2",
     "torch==2.7.1",
+    "torch_geometric>=2.6.0",
     "torch-cluster>=1.6.3",
     "torch-runstats>=0.2.0",
     "torch-scatter>=2.1.2",
@@ -41,6 +42,10 @@ ml = [
     "torchvision==0.22.1",
     "mace-torch>=0.3.15",
     "torch-dftd>=0.5.3",
+    "hamgnn>=2.1.0",
+]
+openmx = [
+    "qdyn-openmx-postprocess",
 ]
 
 [dependency-groups]
@@ -60,9 +65,6 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv]
-environments = [
-    "sys_platform == 'linux'",
-]
 find-links = [
     "https://data.pyg.org/whl/torch-2.7.1+cu126.html"
 ]
@@ -71,10 +73,12 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
+qdyn-openmx-postprocess = { path = "packages/qdyn-openmx-postprocess" }
 torch = { index = "pytorch" }
 torchaudio = { index = "pytorch" }
 torchvision = { index = "pytorch" }
 pyvaspwfc = { git = "https://github.com/QijingZheng/VaspBandUnfolding" }
+hamgnn = { git = "https://github.com/QuantumLab-ZY/HamGNN" }
 
 [tool.uv.extra-build-dependencies]
 torch-cluster = ["torch"]

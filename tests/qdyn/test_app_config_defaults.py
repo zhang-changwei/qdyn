@@ -107,7 +107,7 @@ def test_validate_and_fill_runtime_config_warns_and_sets_optional_defaults(caplo
     assert config["worker_pools"]["local_slurm"]["worker"]["type"] == "local"
     assert config["worker_pools"]["local_slurm"]["worker"]["resources"] == {}
     assert config["worker_pools"]["local_slurm"]["worker"]["gpu_resources"] is None
-    assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {"vasp": ""}
+    assert config["worker_pools"]["local_slurm"]["worker"]["orb_path"] == {}
     assert config["worker_pools"]["local_slurm"]["worker"]["modules"]["vasp"] == []
     assert config["worker_pools"]["local_slurm"]["worker"]["export"]["vasp"] == {}
     assert config["worker_pools"]["local_slurm"]["worker"]["pre_run"]["vasp"] == ""

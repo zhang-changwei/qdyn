@@ -68,8 +68,12 @@ worker_pools:
         vasp: true
         vasp_ae: true
         abacus: false
+        openmx: false
         python: true
         namd: true
+        nequip: false
+        mace: false
+        hamgnn: false
       pp_path:
         vasp: '/absolute/path/to/vasp-pp'
       orb_path:

@@ -191,7 +191,7 @@ def _run_ase_nve(structure: Atoms, parameters: NVEInputT, model_path: str):
     from ase.md import MDLogger
     from ..input import NequipInputT, MACEInputT
     from ..calc_common import TrajWriter
-    from .mlff_wrapper import get_mlff_calculator
+    from ..ml_tools.mlff_wrapper import get_mlff_calculator
 
     md_step = parameters.md_step
     md_dt = parameters.md_dt

@@ -1,4 +1,6 @@
 import ast
+from contextlib import contextmanager
+import io
 import json
 import operator
 import os
@@ -6,16 +8,210 @@ import re
 from pathlib import Path
 from ase import Atoms
 import ase.io
-from typing import Any
+from typing import Any, Literal
 import logging
+
+from ase import Atoms
+from ase.constraints import FixAtoms
+import numpy as np
+from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
-from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
+from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
 
 logger = logging.getLogger(__name__)
 
-def write_strus(software: str, structures: list[Atoms], out_dir: str = '.') -> str:
+def read_stru(stru_format: str, stru_path: str) -> Atoms:
+    """Read a single structure from a file."""
+    if stru_format == 'vasp':
+        return ase.io.read(stru_path, format='vasp')
+    elif stru_format == 'openmx-dat':
+        with open(stru_path) as f:
+            content = f.read()
+            # parse symbols, positions
+            pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.DOTALL)
+            try:
+                match = pattern.search(content)
+                lines = match.group(1).strip().splitlines()
+                symbols, positions = [], []
+                for line in lines:
+                    parts = line.split()
+                    symbols.append(parts[1])
+                    positions.append([float(x) for x in parts[2:5]])
+            except Exception as e:
+                raise ValueError(f"Failed to parse structure from {stru_path}: {e}")
+            
+            # cell
+            pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.DOTALL)
+            try:
+                match = pattern.search(content)
+                lines = match.group(1).strip().splitlines()
+                cell = [[float(x) for x in line.split()] for line in lines]
+            except Exception as e:
+                raise ValueError(f"Failed to parse unit vectors from {stru_path}: {e}")
+            
+            # velocities
+            velocities = None
+            pattern = re.compile(r"<MD\.Init\.Velocity\s+(.*?)\s+MD\.Init\.Velocity>", re.DOTALL)
+            match = pattern.search(content)
+            if match:
+                try:
+                    lines = match.group(1).strip().splitlines()
+                    velocities = []
+                    for line in lines:
+                        parts = line.split()
+                        velocities.append([float(x) for x in parts[1:4]])
+                    velocities = np.array(velocities) * 1e-5
+                except Exception as e:
+                    raise ValueError(f"Failed to parse velocities from {stru_path}: {e}")
+                
+            # constraints (MD.Fixed.XYZ)
+            constraint_indices = []
+            pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.DOTALL)
+            match = pattern.search(content)
+            if match:
+                try:
+                    lines = match.group(1).strip().splitlines()
+                    for line in lines:
+                        parts = line.split()
+                        idx = int(parts[0]) - 1
+                        flags = [int(x) for x in parts[1:4]]
+                        if all(f == 1 for f in flags):
+                            constraint_indices.append(idx)
+                except Exception as e:
+                    raise ValueError(f"Failed to parse fixed atoms from {stru_path}: {e}")
+
+            structure = Atoms(symbols, positions, cell=cell, pbc=True, velocities=velocities)
+            if constraint_indices:
+                structure.set_constraint(FixAtoms(indices=constraint_indices))
+    else:
+        raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
+    
+    return structure
+
+
+def read_strus(stru_format: str, traj_path: str) -> list[Atoms]:
+    """Read structures from trajectory file.
+
+    Args:
+        stru_format: Trajectory format alias or ASE format string
+            (e.g. 'vasp-xdatcar', 'extxyz', 'lammps-data').
+        traj_path: Explicit path to the trajectory file.
+
+    Returns:
+        List of ASE Atoms objects representing the structures.
+    """
+    return ase.io.read(traj_path, format=stru_format, index=':')
+
+
+def write_stru(
+    software: str, 
+    structure: Atoms, 
+    out_dir: str | Path, 
+    extras: str | None = None
+) -> None:
+    """Write ASE Atoms object to a structure file.
+
+    Args:
+        software: Software name ('vasp', 'cp2k', etc.).
+        structure: ASE Atoms object to write.
+        out_dir: Path to output structure file.
+        extras: Additional information to include in the structure file.
+    """
+    if software == 'vasp':
+        ase.io.write(
+            os.path.join(out_dir, "POSCAR"), structure, vasp5=True, direct=True
+        )
+    elif software == 'openmx':
+        from .params import PSEUDO_POTENTIAL, ORBITAL_BASIS
+
+        with open(os.path.join(out_dir, "qdyn.dat"), "w") as f:
+            f.write(extras or "")
+            
+            natoms = len(structure)
+            syms = []
+            raw_syms = structure.get_chemical_symbols()
+            syms_set = set()
+            for s in raw_syms:
+                if s not in syms_set:
+                    syms.append(s)
+                    syms_set.add(s)
+            valence = [VALENCE_ELECTRONS['openmx'][s] for s in syms]
+            pos = structure.get_positions()
+            cell = structure.get_cell().array
+
+            stru_lines = []
+            stru_lines.append(
+                f"\n\n"
+                f"Species.Number             {len(syms)}\n"
+                f"Atoms.Number                  {natoms}\n"
+                f"Atoms.SpeciesAndCoordinates.Unit   Ang\n"
+                f"Atoms.UnitVectors.Unit             Ang\n\n"
+            )
+            # PAO and VPS block
+            stru_lines.append("<Definition.of.Atomic.Species\n")
+            for s in syms:
+                stru_lines.append(
+                    " {:3s} {:18s} {:10s}\n".format(
+                        s, ORBITAL_BASIS['openmx'][s], PSEUDO_POTENTIAL['openmx'][s]
+                    )
+                )
+            stru_lines.append("Definition.of.Atomic.Species>\n\n")
+
+            # species and coordinates block
+            stru_lines.append("<Atoms.SpeciesAndCoordinates\n")
+            for i, (s, v) in enumerate(zip(syms, valence)):
+                stru_lines.append(
+                    " {:5d} {:3s} {:12.8f} {:12.8f} {:12.8f} {:4.1f} {:4.1f}\n".format(
+                        i+1, s, pos[i,0], pos[i,1], pos[i,2], v/2, v/2
+                    )
+                )
+            stru_lines.append("Atoms.SpeciesAndCoordinates>\n\n")
+
+            # unit vectors block
+            stru_lines.append("<Atoms.UnitVectors\n")
+            for i in range(3):
+                stru_lines.append(
+                    " {:12.8f} {:12.8f} {:12.8f}\n".format(
+                        cell[i,0], cell[i,1], cell[i,2]
+                    )
+                )
+            stru_lines.append("Atoms.UnitVectors>\n\n")
+
+            # velocities block (unit: m/s)
+            if 'momenta' in structure.arrays: 
+                vels = structure.get_velocities() * 1e5
+                stru_lines.append("<MD.Init.Velocity\n")
+                for i in range(natoms):
+                    stru_lines.append(
+                        " {:5d} {:12.6f} {:12.6f} {:12.6f}\n".format(
+                            i+1, vels[i,0], vels[i,1], vels[i,2]
+                        )
+                    )
+                stru_lines.append("MD.Init.Velocity>\n\n")
+            
+            # constraints block (MD.Fixed.XYZ)
+            fixed_mask = [False] * natoms
+            if structure.constraints:
+                for constraint in structure.constraints:
+                    if isinstance(constraint, FixAtoms):
+                        for idx in constraint.index:
+                            if 0 <= idx < natoms:
+                                fixed_mask[idx] = True
+            stru_lines.append("<MD.Fixed.XYZ\n")
+            for i in range(natoms):
+                flags = "1 1 1" if fixed_mask[i] else "0 0 0"
+                stru_lines.append(f" {i + 1:5d}  {flags}\n")
+            stru_lines.append("MD.Fixed.XYZ>\n\n")
+
+            f.write("".join(stru_lines))
+            f.flush()
+    else:
+        raise NotImplementedError(f"Unsupported software: {software}")
+
+
+def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.') -> str:
     """Write structures to a trajectory file in software-native format.
 
     Args:
@@ -27,60 +223,15 @@ def write_strus(software: str, structures: list[Atoms], out_dir: str = '.') -> s
     Returns:
         Path to the written trajectory file.
     """
-    track_name = TRAJ_FNAME_MAPPING.get(software)
-    if track_name is None:
+    traj_name = TRAJ_FNAME_MAPPING.get(software)
+    if traj_name is None:
         raise ValueError(f"Unsupported software: {software}")
     ase_format = TRAJ_FORMAT_MAPPING.get(software)
     if ase_format is None:
         raise ValueError(f"Unsupported software: {software}")
-    track_file = os.path.join(out_dir, track_name)
+    track_file = os.path.join(out_dir, traj_name)
     ase.io.write(track_file, structures, format=ase_format)
     return track_file
-
-
-def read_strus(
-    stru_format: str,
-    out_dir: str = '.',
-    traj_path: str | None = None,
-) -> list[Atoms]:
-    """Read structures from trajectory file.
-
-    Args:
-        stru_format: Trajectory format alias or ASE format string
-            (e.g. 'vasp-xdatcar', 'extxyz', 'lammps-data').
-        out_dir: Directory containing the trajectory file (used when
-            traj_path is None).
-        traj_path: Explicit path to the trajectory file. If given,
-            directory is ignored.
-
-    Returns:
-        List of ASE Atoms objects representing the structures.
-    """
-    if traj_path is None:
-        track_name = TRAJ_FNAME_MAPPING.get(stru_format)
-        if track_name is None:
-            raise ValueError(
-                f"Cannot infer trajectory filename from stru_format '{stru_format}'. "
-                "Please provide traj_path explicitly."
-            )
-        traj_path = os.path.join(out_dir, track_name)
-    return ase.io.read(traj_path, format=stru_format, index=':')
-
-
-def write_stru(software: str, structure: Atoms, out_dir: str | Path) -> None:
-    """Write ASE Atoms object to a structure file.
-
-    Args:
-        software: Software name ('vasp', 'cp2k', etc.).
-        structure: ASE Atoms object to write.
-        out_dir: Path to output structure file.
-    """
-    if software == 'vasp':
-        ase.io.write(
-            os.path.join(out_dir, "POSCAR"), structure, vasp5=True, direct=True
-        )
-    else:
-        raise ValueError(f"Unsupported software: {software}")
 
 
 class TrajWriter:
@@ -96,6 +247,17 @@ class TrajWriter:
 
     def close(self):
         self.file.close()
+
+
+@contextmanager
+def change_dir(path: str | Path):
+    """Context manager to temporarily change the working directory."""
+    prev_dir = Path.cwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(prev_dir)
 
 
 def safe_eval(expr: str) -> Any:
@@ -285,3 +447,11 @@ def extract_structure_metadata(
             num_atoms = summary.get("num_atoms")
 
     return formula, num_atoms
+
+def eigh(H, S, solver: Literal['scipy', 'cuda'] = 'scipy', overwrite_S=False):
+    if solver == 'scipy':
+        w, v = eigh_(H, S, overwrite_a=True, overwrite_b=overwrite_S)
+        v = v.T       
+    else:
+        raise NotImplementedError("Not supported eigensolver")
+    return w, v

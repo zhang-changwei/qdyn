@@ -151,23 +151,63 @@ def run_software(
     """
 
     if software == 'vasp':
-        run_vasp(nprocs, monitor=monitor, **kwargs)
+        cmd = run_vasp(nprocs, monitor=monitor, **kwargs)
+    elif software == 'openmx':
+        if 'postprocess' in kwargs and kwargs['postprocess']:
+            cmd = ['mpirun', '-np', str(nprocs), 'openmx_postprocess']
+        else:
+            cmd = ['mpirun', '-np', str(nprocs), 'openmx']
     else:
         raise NotImplementedError(f"Software '{software}' is not supported yet.")
+    env = os.environ.copy()
+    if "omp" in kwargs and kwargs["omp"] is not None:
+        env["OMP_NUM_THREADS"] = str(kwargs["omp"])
+    
+
+    if monitor is None:
+        result = subprocess.run(cmd, env=env)
+        returncode = result.returncode
+    else:
+        process = subprocess.Popen(cmd, env=env)
+        while True:
+            if process.poll() is not None:
+                break
+            dftstatus = monitor()
+            if dftstatus and dftstatus != DFTStatus.NORMAL:
+                process.terminate()
+                raise RuntimeError(f"DFT calculation failed with status: {dftstatus}")
+            time.sleep(30)
+
+        final_status = monitor()
+        if final_status and final_status != DFTStatus.NORMAL:
+            process.terminate()
+            raise RuntimeError(f"DFT calculation failed with status: {final_status}")
+        returncode = process.wait()
+
+
+    if returncode != 0:
+        # Read queue.err for real error details
+        err_hint = ""
+        if os.path.isfile("queue.err"):
+            with open("queue.err") as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+                err_hint = "; ".join(lines[-5:]) if lines else ""
+        raise RuntimeError(
+            f"{software} exited with code {returncode}. "
+            f"Last queue.err lines: {err_hint or '(empty)'}"
+        )
 
 
 def run_vasp(
     nprocs: int, 
     is_alle: bool | None = False, 
-    monitor: Callable | None = None,
     **kwargs: Any
-) -> None:
+):
     """Run VASP calculation using mpirun.
 
     Args:
         nprocs: Number of MPI processes
         is_alle: Whether to use all-electron VASP (vasp_ae)
-        monitor: Optional callback function to monitor the calculation progress
     """
     # Check if using all-electron VASP
     if is_alle:
@@ -189,45 +229,6 @@ def run_vasp(
             vasp_exe = 'vasp_std'
 
     # Launch VASP
-    env = os.environ.copy()
-    if "omp" in kwargs and kwargs["omp"] is not None:
-        env["OMP_NUM_THREADS"] = str(kwargs["omp"])
+    cmd = ['mpirun', '-np', str(nprocs), vasp_exe]
 
-    if monitor is None:
-        result = subprocess.run(
-            ['mpirun', '-np', str(nprocs), vasp_exe],
-            env=env,
-        )
-        returncode = result.returncode
-    else:
-        vasp_process = subprocess.Popen(
-            ['mpirun', '-np', str(nprocs), vasp_exe],
-            env=env,
-        )
-        while True:
-            if vasp_process.poll() is not None:
-                break
-            dftstatus = monitor()
-            if dftstatus and dftstatus != DFTStatus.NORMAL:
-                vasp_process.terminate()
-                raise RuntimeError(f"DFT calculation failed with status: {dftstatus}")
-            time.sleep(30)
-
-        final_status = monitor()
-        if final_status and final_status != DFTStatus.NORMAL:
-            vasp_process.terminate()
-            raise RuntimeError(f"DFT calculation failed with status: {final_status}")
-        returncode = vasp_process.wait()
-
-
-    if returncode != 0:
-        # Read queue.err for real error details
-        err_hint = ""
-        if os.path.isfile("queue.err"):
-            with open("queue.err") as f:
-                lines = [l.strip() for l in f.readlines() if l.strip()]
-                err_hint = "; ".join(lines[-5:]) if lines else ""
-        raise RuntimeError(
-            f"VASP exited with code {returncode}. "
-            f"Last queue.err lines: {err_hint or '(empty)'}"
-        )
+    return cmd
