@@ -9,6 +9,7 @@ trajectory. It supports:
 """
 
 import os
+import re
 import shutil
 from copy import deepcopy
 from pathlib import Path
@@ -217,7 +218,7 @@ def qdyn_scf_cpu(
     # Prepare common input files once (these will be copied to each subdir)
     if isinstance(calc, DFTBaseInputT):
         software_dft = software
-        inputs_dict = _prepare_scf_input(software, parameters)
+        inputs_dict = _prepare_scf_input(software_dft, parameters)
         dftinputs = DFTInputs(
             software=software_dft,
             structure=strus[0],
@@ -237,7 +238,7 @@ def qdyn_scf_cpu(
         scf_solver = SCFSolverStub()
     else:
         software_dft = calc.ham_type
-        inputs_dict = _prepare_scf_input(software, parameters)
+        inputs_dict = _prepare_scf_input(software_dft, parameters)
         if software_dft == 'openmx':
             inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
         elif software_dft == 'abacus':
@@ -313,7 +314,7 @@ def qdyn_scf_cpu(
                 postprocess=postprocess,
                 omp=omp,
             )
-            _validate_scf_output(software)
+            _validate_scf_output(software, software_dft)
 
         # run scf solver
         scf_solver.add(idx, subdir, stru)
@@ -374,7 +375,7 @@ def qdyn_scf_cpu(
 def _prepare_scf_input(
     software: str,
     parameters: SCFInputT,
-):
+) -> dict:
     """Prepare common input files (INCAR, KPOINTS, POTCAR) in current directory.
 
     These files will be copied to each subdirectory.
@@ -389,15 +390,18 @@ def _prepare_scf_input(
         if software == 'vasp':
             input['EDIFF'] = parameters.calculator.scf_thr
         elif software == 'openmx':
-            # TODO: Set openmx-specific input parameters, dqyao
-            pass
+            input['scf.criterion'] = parameters.calculator.scf_thr * 1e-2 # unit: Hatree
         else:
             raise NotImplementedError(
                 f"Software {software} is not supported for SCF input preparation yet."
             )
     else:
-        # TODO: ecut, dqyao
-        pass
+        input = deepcopy(params_default['scf'][software])
+        if software == 'openmx':
+            input['scf.energycutoff'] = parameters.calculator.ecut
+        else:
+            raise NotImplementedError(f"Software {software} is not supported for "
+                                      "tdoverlap calculation input preparation yet.")
 
     return input
 
@@ -417,7 +421,7 @@ def _clean_all_files(subdir: str, stru: str):
             os.remove(fpath)
 
 
-def _validate_scf_output(software: str):
+def _validate_scf_output(software: str, software_dft: str):
     """Validate SCF calculation completed successfully.
 
     Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
@@ -468,11 +472,67 @@ def _validate_scf_output(software: str):
             if os.path.isfile(f):
                 os.remove(f)
     elif software == 'openmx':
-        # TODO qdyao
-        pass
+        if not os.path.isfile('qdyn.out'):
+            raise RuntimeError("SCF calculation failed: qdyn.out not found.")
+        
+        with open('qdyn.out', 'r') as f:
+            text = f.read()
+            
+        # Check completion marker
+        if 'Elapsed.Time.' not in text:
+            raise RuntimeError(
+                "SCF calculation failed: qdyn.out does not contain 'Elapsed.Time.' marker. "
+                "The calculation may not have completed successfully."
+            )
+            
+        # Check SCF convergence
+        max_iter_match = re.search(r"scf\.maxIter\s+([0-9]+)", text)
+        if max_iter_match:
+            try:
+                scf_max_iter = int(max_iter_match.group(1))
+            except ValueError:
+                scf_max_iter = 40
+        criterion_match = re.search(r"scf\.criterion\s+([0-9eE\.+\-]+)", text)
+        if criterion_match:
+            try:
+                scf_criterion = float(criterion_match.group(1))
+            except ValueError:
+                scf_criterion = 1.0e-6
+
+        scf_lines = re.findall(
+            r"^\s*SCF=\s*([0-9]+)\s+NormRD=\s*([0-9eE\.+\-]+)\s+Uele=\s*([0-9eE\.+\-]+)",
+            text,
+            flags=re.MULTILINE,
+        )
+
+        last_step = int(scf_lines[-1][0])
+        if last_step < scf_max_iter:
+            return
+
+        try:
+            uele_last = float(scf_lines[-1][2])
+            uele_prev = float(scf_lines[-2][2])
+        except ValueError:
+            raise RuntimeError(
+                "SCF calculation failed: invalid Uele values in qdyn.out SCF history."
+            )
+        if abs(uele_last - uele_prev) >= scf_criterion:
+            raise RuntimeError(
+                "SCF calculation failed: SCF did not converge. "
+                "qdyn.out last-step Uele change exceeds scf.criterion."
+            )
+            
     elif software == 'hamgnn':
-        # TODO qdyao
-        pass
+        if software_dft == 'openmx':
+            if not os.path.isfile('placeholder'):
+                raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
+        elif software_dft == 'abacus':
+            if not os.path.isfile('placeholder'):
+                raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
+        else:
+            raise NotImplementedError(
+                f"Hamgnn does not support '{software_dft}' yet."
+            )
     else:
         raise NotImplementedError(
             f"Validation for software '{software}' is not implemented."
