@@ -11,7 +11,7 @@ import numpy.typing as npt
 from ase import Atoms
 
 from qdyn.calc_common import read_stru
-from qdyn.params import  VALENCE_ELECTRONS    
+from qdyn.params import  VALENCE_ELECTRONS, ORBITAL_BASIS
     
 def plot_md_results(md_data: dict, filename: str, target_temp: float | None = None):
     import matplotlib
@@ -326,13 +326,23 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
         software_dft = 'openmx'
     except Exception as e:
         raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
+    
+    symbol = stru.symbols.indices()
+    naos = {}
+    for sym in symbol:
+        basis = ORBITAL_BASIS[software_dft][sym]
+        orbitals = basis.partition('-')[2]
+        numbers = re.findall(r'[spdf](\d+)', orbitals)
+        naos[sym] = sum([int(n) for n in numbers])
+
     syms = stru.get_chemical_symbols()
     nele = 0
+    nbands = 0
     for sym in syms:
         nele += VALENCE_ELECTRONS[software_dft][sym]
+        nbands += naos[sym]
     vbm = (nele + 1) // 2
     cbm = vbm + 1
-    nbands = int(1.3 * vbm + 0.5) # TODO: may need adjust parse_band_index
     return vbm, cbm, nbands
 # ===========================================================================
 # qdyn_md.log parser (software-agnostic)
