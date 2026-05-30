@@ -276,7 +276,7 @@ def _validate_spin_kpoint_indices(
 
 
 def extract_band_edges(
-    software: str, dir_path: str, whichk: int = 0, whichs: int = 0 
+    software: str, dir_path: str, whichk: int = 1, whichs: int = 1 
 ) -> Tuple[int, int, int]:
     """Extract VBM and CBM band indices from output files for different software.
 
@@ -290,14 +290,14 @@ def extract_band_edges(
     dir_path : str
         Path to directory containing output files.
     whichk : int
-        K-point index (0-based).
+        K-point index (1-based).
     whichs : int
-        Spin index (0-based).
+        Spin index (1-based).
 
     Returns
     -------
     Tuple[int, int, int]
-        (vbm, cbm, nbands) - VBM and CBM band indices (0-based) and number of bands.
+        (vbm, cbm, nbands) - VBM and CBM band indices (1-based) and number of bands.
     """
     if software == 'vasp':
         return _extract_vbmcbm_from_vasp_outcar(dir_path, whichk, whichs)
@@ -305,7 +305,6 @@ def extract_band_edges(
         return _extract_vbmcbm_from_openmx_out(dir_path, whichk, whichs)
     elif software == 'hamgnn':
         return _extract_vbmcbm_from_hamgnn_fake(dir_path)
-    #TODO：hamgnn use VALENCE_ELECTRONS / 2
     raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
 def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
@@ -319,7 +318,7 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
     Returns
     -------
     Tuple[int, int, int]
-        (vbm, cbm, nbands) - VBM and CBM band indices (0-based) and number of bands.
+        (vbm, cbm, nbands) - VBM and CBM band indices (1-based) and number of bands.
     """
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
@@ -333,7 +332,7 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
         basis = ORBITAL_BASIS[software_dft][sym]
         orbitals = basis.partition('-')[2]
         numbers = re.findall(r'[spdf](\d+)', orbitals)
-        naos[sym] = sum([int(n) for n in numbers])
+        naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
 
     syms = stru.get_chemical_symbols()
     nele = 0
@@ -547,7 +546,7 @@ def _extract_vbmcbm_from_vasp_outcar(
         band_idx = int(parts[0])
         occupation = float(parts[-1])
 
-        if occupation > 0.5:
+        if occupation >= 0.5:
             vbm = band_idx
         else:
             cbm = band_idx
