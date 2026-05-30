@@ -36,13 +36,6 @@ def validate_md5_hash(v: str) -> str:
 MD5HashStr = Annotated[str, AfterValidator(validate_md5_hash)]
 
 
-class BasicInputT(BaseModel):
-    """Basic input parameters for QDYN calculations."""
-
-    # deprecated
-    software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
-    plot: bool = False
-
 class SchedulerConfigT(BaseModel):
     """Scheduler configuration (reserved for future use)."""
 
@@ -554,7 +547,6 @@ class SCFInputT(BaseModel):
 class InputT(BaseModel):
     """Input parameters for QDYN workflow."""
 
-    basic_input: BasicInputT
     scheduler_config: SchedulerConfigT
     nvt_input: NVTInputT | None = None
     nve_input: NVEInputT | None = None
