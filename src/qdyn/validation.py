@@ -14,6 +14,7 @@ from .input import (InputT, NVEInputT, NVTInputT, SCFInputT,
 from .ml_tools.mlff_wrapper import (
     mace_pretrained_model_filename,
     nequip_pretrained_model_filename,
+    hamgnn_pretrained_model_filename,
 )
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
@@ -629,7 +630,7 @@ def validate_step_input(
         elif software == "mace":
             model_name = mace_pretrained_model_filename(calc.model_name)
         else: # hamgnn
-            model_name = calc.model_name
+            model_name = hamgnn_pretrained_model_filename(calc.model_name)
         
         model_path = '~/.qdyn/pretrained/' + model_name
         exists = pool.check_file_exists(model_path)

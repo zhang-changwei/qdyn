@@ -179,6 +179,7 @@ class DFTInputs:
                 inputs_append = parse_openmx_dat(io.StringIO(inputs_params))
                 inputs_base.update(inputs_append)
             # Standardize default fields and stru fields
+            inputs_base.pop('system.currentdirectory', None)
             inputs_base['system.name'] = 'qdyn'
             kx, ky, kz = self.kpoints
             inputs_base['scf.kgrid'] = f'{kx} {ky} {kz}'
@@ -190,6 +191,7 @@ class DFTInputs:
             inputs_base.pop('atoms.unitvectors.unit', None)
             inputs_base.pop('atoms.unitvectors', None)
             inputs_base.pop('md.init.velocity', None)
+            inputs_base.pop('md.fixed.xyz', None)
             
             self._inputs = inputs_base
         else:

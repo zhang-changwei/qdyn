@@ -30,7 +30,7 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
         with open(stru_path) as f:
             content = f.read()
             # parse symbols, positions
-            pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.DOTALL)
+            pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.I | re.S)
             try:
                 match = pattern.search(content)
                 lines = match.group(1).strip().splitlines()
@@ -43,7 +43,7 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
                 raise ValueError(f"Failed to parse structure from {stru_path}: {e}")
             
             # cell
-            pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.DOTALL)
+            pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.I | re.S)
             try:
                 match = pattern.search(content)
                 lines = match.group(1).strip().splitlines()
@@ -53,7 +53,7 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
             
             # velocities
             velocities = None
-            pattern = re.compile(r"<MD\.Init\.Velocity\s+(.*?)\s+MD\.Init\.Velocity>", re.DOTALL)
+            pattern = re.compile(r"<MD\.Init\.Velocity\s+(.*?)\s+MD\.Init\.Velocity>", re.I | re.S)
             match = pattern.search(content)
             if match:
                 try:
@@ -68,7 +68,7 @@ def read_stru(stru_format: str, stru_path: str) -> Atoms:
                 
             # constraints (MD.Fixed.XYZ)
             constraint_indices = []
-            pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.DOTALL)
+            pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.I | re.S)
             match = pattern.search(content)
             if match:
                 try:

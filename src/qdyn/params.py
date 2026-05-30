@@ -1,3 +1,6 @@
+import re
+from typing import Literal
+
 _incar = {
     'ISTART': 0,
     'ISPIN': 1,
@@ -88,7 +91,6 @@ params_default = {
 
 # MD5 hash pattern for uploaded file validation (32-char lowercase hex).
 # Used by InputT validator and /upload/hash endpoint.
-import re
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 
@@ -152,7 +154,6 @@ NEQUIP_PRETRAINED_MODELS = (
     'mir-group/Allegro-OAM-L',
 )
 
-from typing import Literal
 type NEQUIP_PRETRAINED_MODELS_TYPE = Literal[
     'mir-group/NequIP-OAM-L',
     'mir-group/NequIP-OAM-M',
@@ -196,6 +197,14 @@ MACE_PRETRAINED_MODEL_URLS = {
     'large-0b2': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b2/mace-large-density-agnesi-stress.model',
     'medium-0b3': 'https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0b3/mace-mp-0b3-medium.model',
 }
+
+HAMGNN_PRETRAINED_MODELS = (
+    'universal2.0',
+)
+
+type HAMGNN_PRETRAINED_MODELS_TYPE = Literal[
+    'universal2.0',
+]
 
 
 # PBE

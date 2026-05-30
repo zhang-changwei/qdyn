@@ -7,6 +7,7 @@ import numpy as np
 
 from .params import NEQUIP_PRETRAINED_MODELS_TYPE
 from .params import MACE_PRETRAINED_MODELS_TYPE
+from .params import HAMGNN_PRETRAINED_MODELS_TYPE
 from .params import HASH_PATTERN
 
 ## Important!
@@ -120,6 +121,7 @@ class MACEInputT(BaseModel):
     dispersion: DispersionInputT | None = None
 
 class _HamGNNInputAdvT(BaseModel):
+    legacy_edge_update: bool = False
     cutoff_func: str = "cos"
     edge_sh_normalization: str = "component"
     edge_sh_normalize: bool = True
@@ -127,7 +129,8 @@ class _HamGNNInputAdvT(BaseModel):
     num_types: int = 96
     rbf_func: str = "bessel"
     set_features: bool = True
-    radial_MLP: List[int] = [64, 64]
+    radial_MLP: list[int] = [64, 64]
+    use_corr_prod: bool = False
     correlation: int = 2
     num_hidden_features: int = 32
     use_kan: bool = False
@@ -140,10 +143,10 @@ class HamGNNInputT(BaseModel):
     version: Literal['v2.1'] = 'v2.1'
     use_gpu: bool = False
     use_pretrained_model: bool = False
-    model_name: Literal[''] = ''
+    model_name: HAMGNN_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: str = ''
     ham_type: Literal['abacus', 'openmx'] = 'openmx'
-    nao_max: int = 13
+    nao_max: int = 26
     add_H0: bool = False
     batch_size: int = 32
 

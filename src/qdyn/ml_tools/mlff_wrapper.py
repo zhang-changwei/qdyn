@@ -16,6 +16,9 @@ def nequip_pretrained_model_filename(model_name: str, device: str) -> str:
 def mace_pretrained_model_filename(model_name: str) -> str:
     return Path(MACE_PRETRAINED_MODEL_URLS[model_name]).name
 
+def hamgnn_pretrained_model_filename(model_name: str) -> str:
+    return f"{model_name}.ckpt"
+
 
 def resolve_model_path(pool: WorkerPool, calc: NequipInputT | MACEInputT | HamGNNInputT) -> str:
     """Return the worker-visible model path for ML-based NVE calculators."""
@@ -37,7 +40,8 @@ def resolve_model_path(pool: WorkerPool, calc: NequipInputT | MACEInputT | HamGN
     if isinstance(calc, HamGNNInputT):
         if calc.use_pretrained_model:
             assert calc.model_name
-            return f"~/.qdyn/pretrained/{calc.model_name}"
+            model_name = hamgnn_pretrained_model_filename(calc.model_name)
+            return f"~/.qdyn/pretrained/{model_name}"
         return pool.get_user_file_path("model", calc.model_hash)
 
     return ""

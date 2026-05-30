@@ -37,10 +37,42 @@ NAO_MAX_SPDF = {
 def _load_config(config: HamGNNInputT) -> dict[str, Any]:
     default = deepcopy(config_default)
 
+    if config.use_pretrained_model:
+        if config.model_name == 'universal2.0':
+            out = default['output_nets']['HamGNN_out']
+            out['nao_max'] = 26
+            out['add_H0'] = False
+            out['ham_type'] = 'openmx'
+            out['zero_point_shift'] = False
+
+            rep = default['representation_nets']['HamGNN_pre']
+            rep['cutoff'] = 26.0
+            rep['cutoff_func'] = 'cos'
+            rep['irreps_edge_sh'] = '0e + 1o + 2e + 3o + 4e + 5o + 6e'
+            rep['irreps_node_features'] = '128x0e+32x1o+32x1e+32x2o+32x2e+32x3o+32x3e+16x4o+16x4e+16x5o+8x5e+8x6e'
+            rep['num_layers'] = 3
+            rep['num_radial'] = 128
+            rep['num_types'] = 128
+            rep['rbf_func'] = 'bessel'
+            rep['set_features'] = True
+            rep['num_heads'] = 4
+            rep['radial_MLP'] = [128, 128]
+            rep['use_corr_prod'] = True
+            rep['num_hidden_features'] = 32
+            rep['use_kan'] = False
+            rep['radius_scale'] = 1.01
+            rep['build_internal_graph'] = False
+            rep['legacy_edge_update'] = True
+        else:
+            raise ValueError(f"Unsupported HamGNN pretrained model: {config.model_name}")
+        
+        return default
+
     out = default['output_nets']['HamGNN_out']
     out['nao_max'] = config.nao_max
     out['add_H0'] = False
     out['ham_type'] = config.ham_type
+    out['zero_point_shift'] = False
 
     rep = default['representation_nets']['HamGNN_pre']
     rep['cutoff'] = config.cutoff
@@ -53,11 +85,12 @@ def _load_config(config: HamGNNInputT) -> dict[str, Any]:
     rep['rbf_func'] = config.adv.rbf_func
     rep['set_features'] = config.adv.set_features
     rep['radial_MLP'] = config.adv.radial_MLP
-    rep['use_corr_prod'] = False
+    rep['use_corr_prod'] = config.adv.use_corr_prod
     rep['num_hidden_features'] = config.adv.num_hidden_features
     rep['use_kan'] = config.adv.use_kan
     rep['radius_scale'] = config.adv.radius_scale
     rep['build_internal_graph'] = config.adv.build_internal_graph
+    rep['legacy_edge_update'] = config.adv.legacy_edge_update
 
     return default
 

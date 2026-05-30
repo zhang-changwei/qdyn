@@ -154,9 +154,9 @@ def run_software(
         cmd = run_vasp(nprocs, monitor=monitor, **kwargs)
     elif software == 'openmx':
         if 'postprocess' in kwargs and kwargs['postprocess']:
-            cmd = ['mpirun', '-np', str(nprocs), 'openmx_postprocess']
+            cmd = ['mpirun', '-np', str(nprocs), 'openmx_postprocess', 'qdyn.dat']
         else:
-            cmd = ['mpirun', '-np', str(nprocs), 'openmx']
+            cmd = ['mpirun', '-np', str(nprocs), 'openmx', 'qdyn.dat']
     else:
         raise NotImplementedError(f"Software '{software}' is not supported yet.")
     env = os.environ.copy()
