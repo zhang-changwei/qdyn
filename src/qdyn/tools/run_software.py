@@ -62,6 +62,8 @@ class MDProgressMonitor:
 
         if self.software == 'vasp':
             status = self.monitor_vasp(self.monitor_file, self.log_file)
+        elif self.software == 'openmx':
+            status = self.monitor_openmx(self.monitor_file, self.log_file)
         else:
             raise NotImplementedError(
                 f"Monitoring for software '{self.software}' is not implemented yet."
@@ -135,7 +137,10 @@ class MDProgressMonitor:
 
         return DFTStatus.NORMAL
 
-
+    def monitor_openmx(self, monitor_file: io.TextIOWrapper, log_file: io.TextIOWrapper):
+        pass
+        # TODO
+        
 def run_software(
     software: str,
     nprocs: int,

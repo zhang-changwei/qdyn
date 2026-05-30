@@ -9,7 +9,9 @@ from typing import Dict, Tuple, Any
 import numpy as np
 import numpy.typing as npt
 from ase import Atoms
-      
+
+from qdyn.calc_common import read_stru
+from qdyn.params import  VALENCE_ELECTRONS    
     
 def plot_md_results(md_data: dict, filename: str, target_temp: float | None = None):
     import matplotlib
@@ -274,7 +276,7 @@ def _validate_spin_kpoint_indices(
 
 
 def extract_band_edges(
-    software: str, dir_path: str, whichK: int = 0, whichS: int = 0
+    software: str, dir_path: str, whichk: int = 0, whichs: int = 0 
 ) -> Tuple[int, int, int]:
     """Extract VBM and CBM band indices from output files for different software.
 
@@ -287,9 +289,9 @@ def extract_band_edges(
         Software name: 'vasp', 'cp2k', 'siesta', 'abacus', 'openmx'.
     dir_path : str
         Path to directory containing output files.
-    whichK : int
+    whichk : int
         K-point index (0-based).
-    whichS : int
+    whichs : int
         Spin index (0-based).
 
     Returns
@@ -298,10 +300,40 @@ def extract_band_edges(
         (vbm, cbm, nbands) - VBM and CBM band indices (0-based) and number of bands.
     """
     if software == 'vasp':
-        return extract_vbmcbm_from_vasp_outcar(dir_path, whichK, whichS)
+        return _extract_vbmcbm_from_vasp_outcar(dir_path, whichk, whichs)
+    elif software == 'openmx':
+        return _extract_vbmcbm_from_openmx_out(dir_path, whichk, whichs)
+    elif software == 'hamgnn':
+        return _extract_vbmcbm_from_hamgnn_fake(dir_path)
+    #TODO：hamgnn use VALENCE_ELECTRONS / 2
     raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
+def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
+    """Read structure information from dft inputs to calculate VBM and CBM directly.
 
+    Parameters
+    ----------
+    dir_path : str
+        Path to directory (not used in this fake implementation).
+
+    Returns
+    -------
+    Tuple[int, int, int]
+        (vbm, cbm, nbands) - VBM and CBM band indices (0-based) and number of bands.
+    """
+    try:
+        stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
+        software_dft = 'openmx'
+    except Exception as e:
+        raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
+    syms = stru.get_chemical_symbols()
+    nele = 0
+    for sym in syms:
+        nele += VALENCE_ELECTRONS[software_dft][sym]
+    vbm = (nele + 1) // 2
+    cbm = vbm + 1
+    nbands = int(1.3 * vbm + 0.5) # TODO: may need adjust parse_band_index
+    return vbm, cbm, nbands
 # ===========================================================================
 # qdyn_md.log parser (software-agnostic)
 # ===========================================================================
@@ -439,10 +471,10 @@ def WeightFromPro(
         return Energies, np.sum(Weights[:, :, :, whichAtom], axis=-1), TotalWeights
 
 
-def extract_vbmcbm_from_vasp_outcar(
+def _extract_vbmcbm_from_vasp_outcar(
     dir_path: str,
-    whichK: int = 1,
-    whichS: int = 1,
+    whichk: int = 1,
+    whichs: int = 1,
 ) -> Tuple[int, int, int]:
     """Extract VBM and CBM band indices from OUTCAR.
 
@@ -453,9 +485,9 @@ def extract_vbmcbm_from_vasp_outcar(
     ----------
     dir_path : str
         Path to directory containing OUTCAR file.
-    whichK : int
+    whichk : int
         K-point index (1-based).
-    whichS : int
+    whichs : int
         Spin component index (1-based).
 
     Returns
@@ -495,7 +527,7 @@ def extract_vbmcbm_from_vasp_outcar(
     data_lines = [line for line in OUTCAR[start:end] if not re.search('[a-zA-Z]', line)]
 
     # Select bands for the specified spin and k-point
-    offset = ((whichS - 1) * NKPTS + (whichK - 1)) * NBANDS
+    offset = ((whichs - 1) * NKPTS + (whichk - 1)) * NBANDS
     band_lines = data_lines[offset : offset + NBANDS]
 
     vbm = 0
@@ -522,6 +554,94 @@ def extract_vbmcbm_from_vasp_outcar(
 # ===========================================================================
 # OPENMX specific functions
 # ===========================================================================
+def _extract_vbmcbm_from_openmx_out(
+    dir_path: str,
+    whichk: int = 1,
+    whichs: int = 1,
+) -> Tuple[int, int, int]: # TODO: fit 4.0 openmx output
+    """Extract VBM and CBM from OpenMX qdyn.out using Chemical Potential.
+
+    Parses the eigenvalues section of qdyn.out, finds the Chemical Potential,
+    then locates the first band at the specified k-point and spin whose energy
+    exceeds the Chemical Potential — that band is the CBM, and VBM = CBM - 1.
+
+    Parameters
+    ----------
+    dir_path : str
+        Path to directory containing qdyn.out.
+    whichk : int
+        K-point index (1-based).
+    whichs : int
+        Spin index (1-based, 1=up, 2=down).
+
+    Returns
+    -------
+    Tuple[int, int, int]
+        (vbm, cbm, nbands) — 1-based band indices.
+    """
+    out_path = os.path.join(dir_path, 'qdyn.out')
+    with open(out_path, 'r') as f:
+        text = f.read()
+
+    # Parse Chemical Potential from the eigenvalues section header
+    chem_pot_match = re.search(
+        r'Chemical Potential \(Hartree\)\s*=\s*(-?[\d.]+)', text
+    )
+    if not chem_pot_match:
+        raise RuntimeError(
+            "Could not find 'Chemical Potential (Hartree) =' in qdyn.out."
+        )
+    chem_pot = float(chem_pot_match.group(1))
+
+    # Locate the eigenvalues section
+    eig_start = text.find('Eigenvalues (Hartree) of SCF KS-eq.')
+    if eig_start == -1:
+        raise RuntimeError(
+            "Could not find eigenvalues section in qdyn.out."
+        )
+
+    # Locate the specified k-point block (kloop is 0-based in OpenMX)
+    kloop_tag = f'kloop={whichk - 1}'
+    kloop_pos = text.find(kloop_tag, eig_start)
+    if kloop_pos == -1:
+        raise RuntimeError(
+            f"Could not find kloop={whichk - 1} in qdyn.out."
+        )
+
+    # Find the end of this k-point block: next kloop or next '***' separator
+    end_pos = len(text)
+    for marker in ['kloop=', '\n***']:
+        pos = text.find(marker, kloop_pos + len(kloop_tag))
+        if pos != -1:
+            end_pos = min(end_pos, pos)
+
+    block = text[kloop_pos:end_pos]
+
+    col = whichs  # 1 → Up-spin, 2 → Down-spin
+    vbm = 0
+    cbm = 0
+    nbands = 0
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split()
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        band_idx = int(parts[0])
+        energy = float(parts[col])
+        nbands = band_idx
+        if cbm == 0 and energy > chem_pot:
+            cbm = band_idx
+            vbm = band_idx - 1
+
+    if cbm == 0:
+        raise RuntimeError(
+            "Could not determine CBM: no eigenvalue exceeds Chemical Potential."
+        )
+
+    return vbm, cbm, nbands
+
 def read_scfout(path: str) -> dict[str, Any]:
     try:
         from qdyn_openmx_postprocess import read_scfout as _read_scfout

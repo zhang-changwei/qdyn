@@ -314,7 +314,7 @@ def qdyn_scf_cpu(
                 postprocess=postprocess,
                 omp=omp,
             )
-            _validate_scf_output(software, software_dft)
+            _validate_scf_output(software, software_dft, dftinputs.inputs)
 
         # run scf solver
         scf_solver.add(idx, subdir, stru)
@@ -373,7 +373,7 @@ def qdyn_scf_cpu(
 
 
 def _prepare_scf_input(
-    software: str,
+    software_dft: str,
     parameters: SCFInputT,
 ) -> dict:
     """Prepare common input files (INCAR, KPOINTS, POTCAR) in current directory.
@@ -381,26 +381,26 @@ def _prepare_scf_input(
     These files will be copied to each subdirectory.
 
     Args:
-        software: Software name ('vasp', etc.).
+        software_dft: Software name ('vasp', etc.).
         parameters: SCF parameters.
     """
     input = {}
     if isinstance(parameters.calculator, DFTBaseInputT):
-        input = deepcopy(params_default['scf'][software])
-        if software == 'vasp':
+        input = deepcopy(params_default['scf'][software_dft])
+        if software_dft == 'vasp':
             input['EDIFF'] = parameters.calculator.scf_thr
-        elif software == 'openmx':
-            input['scf.criterion'] = parameters.calculator.scf_thr * 1e-2 # unit: Hatree
+        elif software_dft == 'openmx':
+            input['scf.criterion'] = parameters.calculator.scf_thr
         else:
             raise NotImplementedError(
-                f"Software {software} is not supported for SCF input preparation yet."
+                f"Software {software_dft} is not supported for SCF input preparation yet."
             )
     else:
-        input = deepcopy(params_default['scf'][software])
-        if software == 'openmx':
+        input = deepcopy(params_default['scf'][software_dft])
+        if software_dft == 'openmx':
             input['scf.energycutoff'] = parameters.calculator.ecut
         else:
-            raise NotImplementedError(f"Software {software} is not supported for "
+            raise NotImplementedError(f"Software {software_dft} is not supported for "
                                       "tdoverlap calculation input preparation yet.")
 
     return input
@@ -421,7 +421,7 @@ def _clean_all_files(subdir: str, stru: str):
             os.remove(fpath)
 
 
-def _validate_scf_output(software: str, software_dft: str):
+def _validate_scf_output(software: str, software_dft: str, inputs: dict):
     """Validate SCF calculation completed successfully.
 
     Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
@@ -484,20 +484,26 @@ def _validate_scf_output(software: str, software_dft: str):
                 "SCF calculation failed: qdyn.out does not contain 'Elapsed.Time.' marker. "
                 "The calculation may not have completed successfully."
             )
-            
+        
         # Check SCF convergence
-        max_iter_match = re.search(r"scf\.maxIter\s+([0-9]+)", text)
-        if max_iter_match:
-            try:
-                scf_max_iter = int(max_iter_match.group(1))
-            except ValueError:
-                scf_max_iter = 40
-        criterion_match = re.search(r"scf\.criterion\s+([0-9eE\.+\-]+)", text)
-        if criterion_match:
-            try:
-                scf_criterion = float(criterion_match.group(1))
-            except ValueError:
-                scf_criterion = 1.0e-6
+        # scf_max_iter = 40
+        # scf_criterion = 1.0e-6
+        
+        # max_iter_match = re.search(r"scf\.maxIter\s+([0-9]+)", text)
+        # if max_iter_match:
+        #     try:
+        #         scf_max_iter = int(max_iter_match.group(1))
+        #     except ValueError:
+        #         scf_max_iter = 40
+        # criterion_match = re.search(r"scf\.criterion\s+([0-9eE\.+\-]+)", text)
+        # if criterion_match:
+        #     try:
+        #         scf_criterion = float(criterion_match.group(1))
+        #     except ValueError:
+        #         scf_criterion = 1.0e-6
+        
+        scf_max_iter = inputs.get('scf.maxIter', 40)
+        scf_criterion = inputs.get('scf.criterion', 1.0e-6)
 
         scf_lines = re.findall(
             r"^\s*SCF=\s*([0-9]+)\s+NormRD=\s*([0-9eE\.+\-]+)\s+Uele=\s*([0-9eE\.+\-]+)",

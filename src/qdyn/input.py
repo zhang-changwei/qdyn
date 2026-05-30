@@ -87,7 +87,8 @@ class DFTBaseInputT(BaseModel):
         default=1e-6,
         ge=1e-12,
         le=1.0,
-        description="Electronic convergence criterion (eV)",
+        description=("Electronic convergence criterion (eV). "
+        " Hint: The unit is Hartree when using OPENMX."),
         json_schema_extra={"widget": "log-step"},
     )
 
