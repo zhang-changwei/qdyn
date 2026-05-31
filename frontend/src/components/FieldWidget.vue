@@ -1,6 +1,10 @@
 <template>
+  <div v-if="disabled" class="field-disabled-overlay" :title="String(ctx.getFieldValue(field.path) ?? field.schema.default ?? '')">
+    <span v-if="field.resolvedType === 'boolean'">{{ ctx.getFieldValue(field.path) ? 'Yes' : 'No' }}</span>
+    <span v-else class="field-disabled-text">{{ ctx.getFieldValue(field.path) ?? field.schema.default ?? '—' }}</span>
+  </div>
   <!-- log-step -->
-  <div v-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+  <div v-else-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
     <el-button size="small" @click="ctx.logStep(field.path, 0.1)">÷10</el-button>
     <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': ctx.invalidLogInputs[field.path] }" :value="ctx.formatExp(ctx.getFieldValue(field.path))" placeholder="e.g. 1e-6" @change="($event: Event) => ctx.parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
     <el-button size="small" @click="ctx.logStep(field.path, 10)">×10</el-button>
@@ -95,12 +99,33 @@ import { FIELD_WIDGET_CONTEXT_KEY, type FieldDescriptor } from '@/utils/schema-f
 defineProps<{
   field: FieldDescriptor
   mode: 'regular' | 'advanced'
+  disabled?: boolean
 }>()
 
 const ctx = inject(FIELD_WIDGET_CONTEXT_KEY)!
 </script>
 
 <style scoped>
+.field-disabled-overlay {
+  color: var(--fg-tertiary, #909399);
+  font-size: 13px;
+  padding: 5px 11px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border-radius: 4px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  cursor: not-allowed;
+}
+
+.field-disabled-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 :deep(.el-input-number) {
   width: 100%;
 }

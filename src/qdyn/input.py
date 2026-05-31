@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, PositiveInt, AfterValidator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, PositiveInt, AfterValidator
 from typing import Literal, List, Any, Annotated
 
 import numpy as np
@@ -165,22 +165,41 @@ class HamGNNInputT(BaseModel):
     use_pretrained_model: bool = False
     model_name: HAMGNN_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: str = ''
-    ham_type: Literal['abacus', 'openmx'] = 'openmx'
+    ham_type: Literal['abacus', 'openmx'] = Field(
+        default='openmx',
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
     nao_max: Literal[13, 14, 19, 20, 26] = Field(
         default=26,
-        description="Maximum number of NAOs per atom in the Hamiltonian."
+        description="Maximum number of NAOs per atom in the Hamiltonian.",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
     )
-    add_H0: bool = False
+    add_H0: bool = Field(
+        default=False,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
     batch_size: int = Field(
         default=32,
         ge=1,
         description="Number of structures per batch for HamGNN inference.",
         json_schema_extra={"step": 8},
     )
-    cutoff: float = 24.0
-    irreps_edge_sh: str = "0e + 1o + 2e + 3o + 4e"
-    irreps_node_features: str = "64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e"
-    num_layers: int = 3
+    cutoff: float = Field(
+        default=24.0,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    irreps_edge_sh: str = Field(
+        default="0e + 1o + 2e + 3o + 4e",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    irreps_node_features: str = Field(
+        default="64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    num_layers: int = Field(
+        default=3,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
 
     kspacing: float = Field(
         default=0.04,
@@ -192,14 +211,45 @@ class HamGNNInputT(BaseModel):
     ecut: float = Field(
         default=150.0,
         ge=1.0,
-        description="Energy cutoff (in Ry) for two-center integrals in LCAO."
+        description="Energy cutoff (in Ry) for two-center integrals in LCAO.",
     )
 
     adv: _HamGNNInputAdvT = Field(
         default_factory=_HamGNNInputAdvT,
-        json_schema_extra={"group": "advanced"},
+        json_schema_extra={"group": "advanced", "x-disabled-when": {"use_pretrained_model": True}},
     )
 
+    @model_validator(mode='after')
+    def apply_pretrained_defaults(self) -> 'HamGNNInputT':
+        if not self.use_pretrained_model:
+            return self
+        if self.model_name == 'universal2.0':
+            self.ham_type = 'openmx'
+            self.nao_max = 26
+            self.add_H0 = True
+            self.cutoff = 26.0
+            self.irreps_edge_sh = '0e + 1o + 2e + 3o + 4e + 5o + 6e'
+            self.irreps_node_features = (
+                '128x0e+32x1o+32x1e+32x2o+32x2e+32x3o+32x3e'
+                '+16x4o+16x4e+16x5o+8x5e+8x6e'
+            )
+            self.num_layers = 3
+            self.adv = _HamGNNInputAdvT(
+                legacy_edge_update=True,
+                cutoff_func='cos',
+                num_radial=128,
+                num_types=128,
+                rbf_func='bessel',
+                set_features=True,
+                radial_MLP=[128, 128],
+                use_corr_prod=True,
+                num_hidden_features=32,
+                use_kan=False,
+                radius_scale=1.01,
+                build_internal_graph=False,
+                num_heads=4,
+            )
+        return self
 
 
 class ScissorInputT(BaseModel):
@@ -564,7 +614,11 @@ class SCFInputT(BaseModel):
         json_schema_extra={"step": 10},
     )
 
-    is_alle: bool = Field(False, description="Whether to use all-electron vasp")
+    is_alle: bool = Field(
+        False,
+        description="Whether to use all-electron VASP",
+        json_schema_extra={"x-show-when": {"software": "vasp"}},
+    )
     
     software: Literal['vasp', 'openmx', 'hamgnn'] = 'vasp'
 

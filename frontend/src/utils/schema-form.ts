@@ -264,6 +264,7 @@ export interface FieldWidgetContext {
 
   // enum
   isDisabledEnumOption(opt: unknown): boolean
+  isFieldDisabled(field: FieldDescriptor): boolean
 
   // model upload
   isModelHashField(field: FieldDescriptor): boolean

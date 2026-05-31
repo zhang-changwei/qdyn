@@ -18,7 +18,7 @@
                 </el-tooltip>
               </span>
             </template>
-            <FieldWidget :field="rf" mode="regular" />
+            <FieldWidget :field="rf" mode="regular" :disabled="isFieldDisabled(rf)" />
           </el-form-item>
         </el-col>
       </el-row>
@@ -43,7 +43,7 @@
                   </el-tooltip>
                 </span>
               </template>
-              <FieldWidget :field="gf" mode="regular" />
+              <FieldWidget :field="gf" mode="regular" :disabled="isFieldDisabled(gf)" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -70,7 +70,7 @@
                     </el-tooltip>
                   </span>
                 </template>
-                <FieldWidget :field="rf" mode="advanced" />
+                <FieldWidget :field="rf" mode="advanced" :disabled="isFieldDisabled(rf)" />
               </el-form-item>
             </el-col>
           </el-row>
@@ -95,7 +95,7 @@
                       </el-tooltip>
                     </span>
                   </template>
-                  <FieldWidget :field="gf" mode="advanced" />
+                  <FieldWidget :field="gf" mode="advanced" :disabled="isFieldDisabled(gf)" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -658,7 +658,31 @@ function isFieldVisible(field: FieldDescriptor): boolean {
     if (fieldKey === 'model_hash' && usePretrained) return false
   }
 
+  // x-show-when: conditionally show field based on sibling field values
+  const showWhen = field.schema['x-show-when'] as Record<string, unknown> | undefined
+  if (showWhen) {
+    const parentPath = field.path.split('.').slice(0, -1).join('.')
+    for (const [siblingKey, expectedValue] of Object.entries(showWhen)) {
+      const siblingPath = parentPath ? `${parentPath}.${siblingKey}` : siblingKey
+      const actual = getFieldValue(siblingPath)
+      if (actual !== expectedValue) return false
+    }
+  }
+
   return true
+}
+
+function isFieldDisabled(field: FieldDescriptor): boolean {
+  const disabledWhen = field.schema['x-disabled-when'] as Record<string, unknown> | undefined
+  if (disabledWhen) {
+    const parentPath = field.path.split('.').slice(0, -1).join('.')
+    for (const [siblingKey, expectedValue] of Object.entries(disabledWhen)) {
+      const siblingPath = parentPath ? `${parentPath}.${siblingKey}` : siblingKey
+      const actual = getFieldValue(siblingPath)
+      if (actual === expectedValue) return true
+    }
+  }
+  return false
 }
 
 const csvDrafts = reactive<Record<string, string>>({})
@@ -1144,6 +1168,7 @@ provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
   removePairedRow,
   toggleNullableObject,
   isDisabledEnumOption,
+  isFieldDisabled,
   isModelHashField,
   modelUploadDragover,
   modelUploadProgress,
