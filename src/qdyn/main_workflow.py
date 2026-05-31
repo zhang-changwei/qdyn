@@ -1022,7 +1022,8 @@ class MainWorkflow:
         jc = self._ensure_job_controller()
         try:
             job_info = jc.get_job_info(job_id=job_uuid)
-            assert job_info is not None
+            if job_info is None:
+                raise
         except:
             raise QueryError(f"Job '{job_uuid}' not found.")
         return job_info

@@ -45,10 +45,13 @@ def extract_tdolaps(
         import natsort
         run_dirs = natsort.natsorted(run_dirs)
 
-    assert not (is_alle and is_gamma_ver), "Alle and gamma version cannot be both True."
-    assert not (software != 'vasp' and is_alle), "Alle is only supported for VASP."
+    if is_alle and is_gamma_ver:
+        raise ValueError("Alle and gamma version cannot be both True.")
+    if software != 'vasp' and is_alle:
+        raise ValueError("Alle is only supported for VASP.")
     if software in ['abacus', 'siesta', 'openmx', 'hamgnn']:
-        assert is_gamma_ver, f"{software} only supports gamma version currently." # S(gamma) only
+        if not is_gamma_ver:
+            raise ValueError(f"{software} only supports gamma version currently.") # S(gamma) only
 
     if software == 'abacus':
         wfc_path = Path(run_dirs[0]) / 'WFC'
@@ -191,7 +194,8 @@ def extract_nacs(
 ) -> dict[str, Any] :
     pattern = re.compile(r"tdolap_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
     m = pattern.match(os.path.basename(tdolap_path))
-    assert m is not None
+    if m is None:
+        raise ValueError(f"tdolap filename does not match expected pattern: {tdolap_path}")
     nstep = int(m.group(1))
     bmin = int(m.group(2))
     bmax = int(m.group(3))
@@ -273,7 +277,8 @@ def save_hfnamd_inputs(
 ):
     pattern = re.compile(r"nac_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
     m = pattern.match(os.path.basename(nac_path))
-    assert m is not None
+    if m is None:
+        raise ValueError(f"NAC filename does not match expected pattern: {nac_path}")
     nstep = int(m.group(1))
     bmin_stored = int(m.group(2))
     bmax_stored = int(m.group(3))
@@ -368,8 +373,10 @@ def calc_tdolap_wrapper(
 
     # validations
     if software == 'vasp':
-        assert wfc_A._nbands == wfc_B._nbands, "Number of bands mismatch between two steps."
-        assert wfc_A._nplws[ikpt-1] == wfc_B._nplws[ikpt-1], "Number of plane waves mismatch between two steps." # type: ignore
+        if wfc_A._nbands != wfc_B._nbands:
+            raise ValueError("Number of bands mismatch between two steps.")
+        if wfc_A._nplws[ikpt-1] != wfc_B._nplws[ikpt-1]:
+            raise ValueError("Number of plane waves mismatch between two steps.") # type: ignore
 
     # read coefficients
     normalize = True if (software == 'vasp' and not is_alle) else False

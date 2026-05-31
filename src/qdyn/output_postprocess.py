@@ -421,7 +421,8 @@ def WeightFromPro(
     Contribution of selected atoms to the each KS orbital
     """
 
-    assert os.path.isfile(infile), '%s cannot be found!' % infile
+    if not os.path.isfile(infile):
+        raise FileNotFoundError(f"{infile} cannot be found!")
     FileContents = [line for line in open(infile) if line.strip()]
 
     # when the band number is too large, there will be no space between ";" and

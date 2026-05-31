@@ -53,7 +53,8 @@ def qdyn_namd(
 
             pattern = re.compile(r"nac_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
             m = pattern.match(os.path.basename(nac_path))
-            assert m is not None
+            if m is None:
+                raise ValueError(f"NAC filename does not match expected pattern: {nac_path}")
             bmin_stored = int(m.group(2))
             bmax_stored = int(m.group(3))
 
@@ -67,7 +68,8 @@ def qdyn_namd(
     # INICON
     time_start = 2
     time_stop = nsw - parameters.namdtime - 1 if sh == 'FSSH' else nsw - 1
-    assert time_stop > time_start, "Not enough time steps for the specified namdtime."
+    if time_stop <= time_start:
+        raise ValueError("Not enough time steps for the specified namdtime.")
     inibands = [b + 1000 for b in parameters.inibands]
     inicon = sample_initial_conditions(
         time_start,
