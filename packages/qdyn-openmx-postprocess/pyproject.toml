@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.11.0",
+    "numpy>=2.2.6",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "qdyn-openmx-postprocess"
+version = "0.1.0"
+description = "Optional OpenMX postprocess reader extension for QDYN"
+requires-python = ">=3.10, <3.13"
+dependencies = [
+    "numpy>=2.2.6",
+]
+
+[tool.scikit-build]
+wheel.packages = ["src/qdyn_openmx_postprocess"]
+build-dir = "build/{wheel_tag}"
+
+[tool.scikit-build.cmake.define]
+SKBUILD_PROJECT_NAME = "qdyn_openmx_postprocess"
+
+[tool.scikit-build.sdist]
+include = [
+    "CMakeLists.txt",
+    "src/qdyn_openmx_postprocess/__init__.py",
+    "src/qdyn_openmx_postprocess/read_openmx_postprocess.py",
+    "src/cpp/read_openmx_postprocess_core.c",
+    "src/cpp/_read_openmx_postprocess_ext.c",
+]

@@ -135,6 +135,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { stopTask, deleteTask, cancelQueuedTask } from '@/api/tasks'
 import { useTasksStore } from '@/stores/tasks'
 import { getTaskDisplayName } from '@/utils/task-display'
+import { STEP_LABELS_SHORT } from '@/constants/steps'
 import StatusBadge from './StatusBadge.vue'
 import type { TaskSummary } from '@/api/types'
 
@@ -161,15 +162,6 @@ const cancellingQueue = ref(false)
 // ============================================
 // Display name mappings
 // ============================================
-
-const STEP_LABELS: Record<string, string> = {
-  nvt: 'NVT',
-  nve: 'NVE',
-  scf: 'SCF',
-  pre_namd: 'PRE',
-  namd: 'NAMD',
-  fused_scf_prenamd: 'Fused SCF+Pre-NAMD',
-}
 
 // ============================================
 // Computed properties
@@ -318,7 +310,7 @@ function stepPrefix(step: string): string {
 }
 
 function stepLabel(step: string): string {
-  return STEP_LABELS[step] ?? step.toUpperCase()
+  return STEP_LABELS_SHORT[step] ?? step.toUpperCase()
 }
 
 // ============================================

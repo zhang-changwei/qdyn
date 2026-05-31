@@ -336,6 +336,8 @@ def _sync_dispatch(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=active_worker,
         pool_name=pool_name,
+        stru_hash=input_obj.stru_hash,
+        stru_format=input_obj.stru_format,
     )
 
     return runtime_worker
@@ -479,6 +481,8 @@ async def submit_task(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=None,
         pool_name=pool_name,
+        stru_hash=input.stru_hash,
+        stru_format=input.stru_format,
     )
 
     return SubmitResponse(

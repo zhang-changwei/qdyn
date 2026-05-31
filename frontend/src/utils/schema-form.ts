@@ -176,6 +176,164 @@ export function buildDefaultsFromSchema(
   return result
 }
 
+// ============================================
+// FieldDescriptor and FieldWidgetContext types
+// Used by DynamicStepForm and FieldWidget
+// ============================================
+
+/** Descriptor for a single renderable field */
+export interface FieldDescriptor {
+  key: string
+  /** Dot-separated path for nested fields, e.g. "adv.ikpt" */
+  path: string
+  /** Original property schema (may contain anyOf, $ref, _paired* UI metadata, etc.) */
+  schema: JsonSchemaObject
+  /** Resolved schema after normalizing anyOf and resolving $ref */
+  resolvedSchema: JsonSchemaObject
+  /** The resolved primitive type */
+  resolvedType: string
+  /** Widget hint (if any) */
+  widget: string | undefined
+  /** Whether the field is nullable (Optional) */
+  nullable: boolean
+  /** Column span for el-col */
+  colSpan: number
+  /** Group: "advanced" or undefined */
+  group: string | undefined
+}
+
+/**
+ * Typed context provided by DynamicStepForm and injected by FieldWidget.
+ * Centralizes all parent-level functions and state needed for widget rendering.
+ */
+export interface FieldWidgetContext {
+  getFieldValue(path: string): unknown
+  setFieldValue(path: string, value: unknown): void
+
+  // log-step
+  invalidLogInputs: Record<string, boolean>
+  formatExp(value: unknown): string
+  parseExp(path: string, input: string, target: HTMLInputElement): void
+  logStep(path: string, factor: number): void
+
+  // csv widgets
+  getCsvDraftValue(
+    path: string,
+    value: unknown,
+    formatter: (value: unknown) => string,
+  ): string
+  updateCsvDraft(path: string, raw: string): void
+  formatCsvIntegers(value: unknown): string
+  formatCsvStrings(value: unknown): string
+  commitCsvIntegers(path: string, nullable: boolean): void
+  commitCsvStrings(path: string, nullable: boolean): void
+
+  // paired-array-table
+  getPairedEnumValue(field: FieldDescriptor, rowIdx: number): string
+  setPairedEnumValue(field: FieldDescriptor, rowIdx: number, value: unknown): void
+  getPairedIntValue(field: FieldDescriptor, rowIdx: number): number
+  setPairedIntValue(field: FieldDescriptor, rowIdx: number, value: unknown): void
+  addPairedRow(field: FieldDescriptor): void
+  removePairedRow(field: FieldDescriptor, rowIdx: number): void
+
+  // nullable object
+  toggleNullableObject(field: FieldDescriptor, enabled: boolean): void
+
+  // enum
+  isDisabledEnumOption(opt: unknown): boolean
+
+  // model upload
+  isModelHashField(field: FieldDescriptor): boolean
+  modelUploadDragover: Record<string, boolean>
+  modelUploadProgress: Record<string, number>
+  modelUploadFileNames: Record<string, string>
+  setModelFileInputRef(path: string): (el: unknown) => void
+  triggerModelFileInput(path: string): void
+  handleModelDrop(field: FieldDescriptor, event: DragEvent): void
+  handleModelFileInput(field: FieldDescriptor, event: Event): void
+
+  // number/integer
+  getNumberDraftValue(path: string, value: unknown): string
+  startNumberEditing(path: string, value: unknown): void
+  updateNumberDraft(path: string, raw: string): void
+  commitNumberDraft(field: FieldDescriptor): void
+  stepFieldValue(field: FieldDescriptor, direction: 1 | -1): void
+}
+
+/** InjectionKey for FieldWidgetContext */
+export const FIELD_WIDGET_CONTEXT_KEY = Symbol('FieldWidgetContext') as import('vue').InjectionKey<FieldWidgetContext>
+
+/**
+ * Resolve a discriminated union (anyOf with multiple $ref branches) to the
+ * branch schema matching a given enum discriminator value.
+ *
+ * This is the core "enum value → anyOf branch" mapping logic shared between:
+ * - DynamicStepForm's `resolveAnyOfDiscriminator` (auto-finds sibling enum)
+ * - SubmitTaskPage's NVE software watcher (hardcodes enum values)
+ *
+ * The mapping strategy:
+ * 1. Collect non-null $ref branches from `prop.anyOf`.
+ * 2. Match each branch's title (stripped of `InputT`/`Input` suffix, lowercased)
+ *    against the provided enum values.
+ * 3. Assign unmatched branches to remaining enum values in order (fallback for
+ *    names like "DFTBaseInputT" ↔ "vasp").
+ * 4. Return the branch matching `value`, or `undefined` if no match.
+ *
+ * Does NOT handle discriminator discovery or watcher side-effects — callers
+ * are responsible for those.
+ */
+export function resolveDiscriminatorBranch(options: {
+  prop: JsonSchemaObject
+  rootSchema: JsonSchemaObject
+  enumValues: unknown[]
+  value: unknown
+}): JsonSchemaObject | undefined {
+  const { prop, rootSchema, enumValues, value } = options
+
+  if (!prop.anyOf) return undefined
+
+  // Collect non-null $ref branches
+  const refBranches: { ref: string; schema: JsonSchemaObject }[] = []
+  for (const branch of prop.anyOf) {
+    if (branch.$ref) {
+      const resolved = resolveLocalRef(rootSchema, branch.$ref)
+      if (resolved?.properties) {
+        refBranches.push({ ref: branch.$ref, schema: resolved })
+      }
+    }
+  }
+
+  if (refBranches.length < 2) return undefined
+
+  // Build mapping: enum value → ref branch
+  const enumStrings = enumValues.map(String)
+  const branchByEnum = new Map<string, JsonSchemaObject>()
+  const unmatchedBranches: JsonSchemaObject[] = []
+
+  for (const { ref, schema } of refBranches) {
+    const defName = ref.startsWith('#/$defs/') ? ref.slice('#/$defs/'.length) : ''
+    const title = (schema.title ?? defName).replace(/InputT?$/i, '').toLowerCase()
+    const matched = enumStrings.find(
+      (ev) => title === ev.toLowerCase() || title.includes(ev.toLowerCase())
+    )
+    if (matched && !branchByEnum.has(matched)) {
+      branchByEnum.set(matched, schema)
+    } else {
+      unmatchedBranches.push(schema)
+    }
+  }
+
+  // Assign unmatched branches to remaining enum values in order
+  const unmatchedEnums = enumStrings.filter((ev) => !branchByEnum.has(ev))
+  for (let i = 0; i < Math.min(unmatchedBranches.length, unmatchedEnums.length); i++) {
+    branchByEnum.set(unmatchedEnums[i], unmatchedBranches[i])
+  }
+
+  // Look up the target value; return undefined if no match (caller decides fallback)
+  const targetValue = String(value ?? enumStrings[0])
+  return branchByEnum.get(targetValue)
+}
+
 /**
  * Parse a comma-separated string into an array of integers.
  * Returns an empty array if the input is empty or contains no valid integers.

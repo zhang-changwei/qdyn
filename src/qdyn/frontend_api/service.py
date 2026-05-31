@@ -7,8 +7,10 @@ All functions that need MainWorkflow access receive it via dependency
 injection (manager_getter) to avoid circular imports with app.py.
 """
 
+import io
 import json
 import logging
+import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ from .models import (
     JobMdTimeseriesResponse,
     JobProgressResponse,
     JobStatusItem,
+    ZipDownloadFileItem,
     MDAttemptItem,
     MDReferenceLines,
     MDSeriesData,
@@ -858,16 +861,22 @@ _ALLOWED_SUBDIR_PREFIXES = ("scf_", "nvt_attempt_")
 
 # Large file warning threshold (exposed in file listing for frontend display)
 _LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
+_ZIP_MAX_TOTAL_SIZE = 1024 * 1024 * 1024  # 1 GB
 
 # File category classification
-_INPUT_FILENAMES = {"INCAR", "KPOINTS", "POSCAR", "POTCAR"}
+_INPUT_FILENAMES = {
+    "INCAR", "KPOINTS", "POSCAR", "POTCAR",
+    "nequip_in.vasp", "mace_in.vasp",
+}
 _OUTPUT_FILENAMES = {
     "CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml",
     "EIGENVAL", "DOSCAR", "PROCAR", "XDATCAR",
     "CHG", "CHGCAR", "WAVECAR", "IBZKPT", "PCDAT",
     "REPORT", "ELFCAR", "LOCPOT", "AECCAR0", "AECCAR2",
+    "nequip_out.vasp", "mace_out.vasp", "qdyn.extxyz",
 }
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
+_LOG_SUFFIXES = {".log"}
 
 
 def _classify_file(name: str) -> str:
@@ -881,6 +890,8 @@ def _classify_file(name: str) -> str:
         return "output"
     if suffix in _IMAGE_EXTENSIONS:
         return "image"
+    if suffix in _LOG_SUFFIXES:
+        return "output"
     # Default: data (logs, .dat, .txt, and everything else)
     return "data"
 
@@ -1374,6 +1385,69 @@ def serve_subdir_file(
     # Remote access: download bytes
     data = access.download_subdir_file(subdir, filename)
     return data, content_type
+
+
+def build_download_zip(
+    task_id: str,
+    files: list[ZipDownloadFileItem],
+    manager: MainWorkflow,
+) -> bytes:
+    """Build a zip archive containing selected job files.
+
+    Each file is placed under ``{short_uuid}/{subdir/}{filename}``.
+
+    Raises:
+        ValueError: If a filename or subdirectory is invalid or blacklisted.
+        FileNotFoundError: If a run directory or file does not exist.
+        OverflowError: If total uncompressed size exceeds the limit.
+    """
+    buf = io.BytesIO()
+    total_size = 0
+    pool = manager.get_task_pool(task_id)
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in files:
+            filename = item.filename
+            if not filename or "/" in filename or "\\" in filename or ".." in filename:
+                raise ValueError(f"Invalid filename: {filename}")
+            if _is_blacklisted(filename):
+                raise ValueError(f"File type not allowed: {filename}")
+
+            access = pool.build_run_dir_access(item.job_uuid)
+            if access is None:
+                raise FileNotFoundError(
+                    f"Run directory not available for job {item.job_uuid}"
+                )
+
+            short_uuid = item.job_uuid[:8]
+            if item.subdir:
+                subdir = item.subdir
+                if "/" in subdir or "\\" in subdir or ".." in subdir:
+                    raise ValueError(f"Invalid subdir: {subdir}")
+                if not _is_allowed_subdir(subdir):
+                    raise ValueError(f"Subdirectory not allowed: {subdir}")
+                if not access.subdir_file_exists(subdir, filename):
+                    raise FileNotFoundError(
+                        f"File not found: {subdir}/{filename}"
+                    )
+                data = access.download_subdir_file(subdir, filename)
+                zip_path = f"{short_uuid}/{subdir}/{filename}"
+            else:
+                if not access.root_file_exists(filename):
+                    raise FileNotFoundError(f"File not found: {filename}")
+                data = access.download_root_file(filename)
+                zip_path = f"{short_uuid}/{filename}"
+
+            total_size += len(data)
+            if total_size > _ZIP_MAX_TOTAL_SIZE:
+                limit_mb = _ZIP_MAX_TOTAL_SIZE // (1024 * 1024)
+                raise OverflowError(
+                    f"Total download size exceeds {limit_mb} MB limit"
+                )
+
+            zf.writestr(zip_path, data)
+
+    return buf.getvalue()
 
 
 # -----------------------------------------------------------------------------
@@ -2492,7 +2566,7 @@ def _try_preview_for_task(
     Returns None if neither source is available or parsing fails.
     """
     from .structure_preview import build_preview
-    from ..params import STRU_FNAME_MAPPING, TRAJ_FORMAT_MAPPING
+    from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING, TRAJ_FORMAT_MAPPING
 
     # --- Strategy 1: Queued task payload ---
     payload_json = qdyndb.get_queued_payload(task_id)
@@ -2510,7 +2584,7 @@ def _try_preview_for_task(
             stru_hash = input_data.get("stru_hash", "")
             if stru_hash:
                 preview = _preview_from_traj_hash(
-                    stru_hash, stru_format, manager
+                    stru_hash, stru_format, task_id, manager
                 )
                 if preview is not None:
                     return preview
@@ -2519,6 +2593,18 @@ def _try_preview_for_task(
                 "Failed to build preview from queued payload for task %s",
                 task_id,
             )
+
+    # --- Strategy 1b: Persisted stru_hash in task_owners ---
+    # After dispatch, queued_submissions is purged but stru_hash survives
+    # in task_owners (persisted at submit time).
+    meta = qdyndb.get_task_metadata(task_id)
+    if meta and meta.get("stru_hash"):
+        fmt = meta.get("stru_format") or "vasp"
+        preview = _preview_from_traj_hash(
+            meta["stru_hash"], fmt, task_id, manager
+        )
+        if preview is not None:
+            return preview
 
     # --- Strategy 2: First job's run directory ---
     job_ids = qdyndb.get_task_job_ids(task_id)
@@ -2561,7 +2647,7 @@ def _try_preview_for_task(
             try:
                 content = access.read_root_text(stru_filename)
                 # Determine ASE format from software
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 logger.warning(
@@ -2594,7 +2680,7 @@ def _try_preview_for_task(
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 pass
@@ -2605,7 +2691,7 @@ def _try_preview_for_task(
         if stru_filename and access.root_file_exists(stru_filename):
             try:
                 content = access.read_root_text(stru_filename)
-                fmt = software
+                fmt = STRU_FORMAT_MAPPING.get(software, software)
                 return build_preview(content, fmt=fmt)
             except Exception:
                 pass
@@ -2641,7 +2727,7 @@ def _preview_from_job_kwargs(
     import ase.io
     from ase import Atoms
 
-    from ..params import TRAJ_FORMAT_MAPPING
+    from ..params import STRU_FORMAT_MAPPING, TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
     try:
@@ -2660,11 +2746,15 @@ def _preview_from_job_kwargs(
         # --- Case 1: Serialized ASE Atoms dict (NVT/NVE jobs) ---
         stru_dict = kwargs.get("structure")
         if isinstance(stru_dict, dict) and "positions" in stru_dict:
-            # Use fromdict() to restore constraints (FixAtoms etc.)
+            import numpy as np
+            for key in stru_dict:
+                if isinstance(stru_dict[key], list):
+                    stru_dict[key] = np.array(stru_dict[key])
             atoms = Atoms.fromdict(stru_dict)
             buf = io.StringIO()
-            ase.io.write(buf, atoms, format=software)
-            return build_preview(buf.getvalue(), fmt=software)
+            ase_fmt = STRU_FORMAT_MAPPING.get(software, software)
+            ase.io.write(buf, atoms, format=ase_fmt)
+            return build_preview(buf.getvalue(), fmt=ase_fmt)
 
         # --- Case 2: Trajectory file path (SCF jobs) ---
         traj_path = kwargs.get("traj_path")
@@ -2676,7 +2766,7 @@ def _preview_from_job_kwargs(
                 ase_fmt = TRAJ_FORMAT_MAPPING.get(traj_format, traj_format)
                 atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
                 buf = io.StringIO()
-                stru_fmt = software
+                stru_fmt = STRU_FORMAT_MAPPING.get(software, software)
                 ase.io.write(buf, atoms, format=stru_fmt)
                 return build_preview(buf.getvalue(), fmt=stru_fmt)
     except Exception:
@@ -2689,6 +2779,7 @@ def _preview_from_job_kwargs(
 def _preview_from_traj_hash(
     stru_hash: str,
     stru_format: str,
+    task_id: str,
     manager: MainWorkflow,
 ):
     """Read the first frame of a trajectory file identified by hash.
@@ -2702,10 +2793,8 @@ def _preview_from_traj_hash(
     from ..params import TRAJ_FORMAT_MAPPING
     from .structure_preview import build_preview
 
-    data_dir = str(
-        Path(manager.config["basic"].get("user_data", "data/user_data")).resolve()
-    )
-    traj_path = Path(data_dir) / "trajectory" / stru_hash
+    pool = manager.get_task_pool(task_id)
+    traj_path = Path(pool.get_user_file_path('trajectory', stru_hash))
     if not traj_path.is_file():
         return None
 
@@ -2726,18 +2815,20 @@ def _preview_from_traj_hash(
 def _resolve_software_for_task(task_id: str, manager: MainWorkflow) -> str:
     """Determine the software used by a task.
 
-    Checks the queued payload first (input.basic_input.software),
-    then defaults to 'vasp'.
+    Checks step-specific software first (nvt_input/nve_input may differ
+    from basic_input when using MLFF), then basic_input, then 'vasp'.
     """
     payload_json = qdyndb.get_queued_payload(task_id)
     if payload_json:
         try:
             payload = json.loads(payload_json)
             input_data = payload.get("input", {})
-            basic = input_data.get("basic_input", {})
-            sw = basic.get("software")
-            if sw:
-                return sw
+            for section in ("nvt_input", "nve_input", "basic_input"):
+                data = input_data.get(section)
+                if isinstance(data, dict):
+                    sw = data.get("software")
+                    if sw:
+                        return sw
         except Exception:
             pass
     return "vasp"

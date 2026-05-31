@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
-from jobflow import job
+from jobflow import job # type: ignore
 
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
@@ -71,8 +71,8 @@ def qdyn_pre_namd(
     vbm, cbm, nbands = extract_band_edges(
         software=software_lower,
         dir_path=all_scf_dirs[0],
-        whichK=parameters.adv.ikpt,
-        whichS=parameters.adv.ispin,
+        whichk=parameters.adv.ikpt,
+        whichs=parameters.adv.ispin,
     )
     images = []
     if plot:

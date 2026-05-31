@@ -1,294 +1,125 @@
 <template>
   <div class="dynamic-step-form">
-    <!-- Regular fields (3-col grid) -->
-    <el-row :gutter="16">
-      <el-col
-        v-for="field in regularFields"
-        :key="field.key"
-        :span="field.colSpan"
-      >
-        <el-form-item>
-          <template #label>
-            <span>
-              {{ field.schema.title }}
-              <el-tooltip
-                v-if="field.schema.description"
-                :content="field.schema.description"
-                placement="top"
-                :show-after="300"
-              >
-                <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
+    <!-- Regular fields (grouped layout) -->
+    <template v-for="item in regularFieldsGrouped" :key="item.key">
+      <!-- Row of ungrouped fields (multi-column grid) -->
+      <el-row v-if="item.type === 'field-row'" :gutter="16">
+        <el-col v-for="rf in item.fields" :key="rf.key" :span="rf.colSpan">
+          <el-form-item>
+            <template #label>
+              <span>
+                {{ rf.schema.title }}
+                <span v-if="rf.schema._required" class="required-field-mark"> *</span>
+                <el-tooltip v-if="rf.schema.description" :content="rf.schema.description" placement="top" :show-after="300">
+                  <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
+            <FieldWidget :field="rf" mode="regular" />
+          </el-form-item>
+        </el-col>
+      </el-row>
 
-          <!-- log-step widget: ÷10 / ×10 buttons + free-type scientific notation -->
-          <div v-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
-            <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
-            <input
-              type="text"
-              class="log-step-input"
-              :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
-              :value="formatExp(getFieldValue(field.path))"
-              placeholder="e.g. 1e-6"
-              @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
-            />
-            <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
-          </div>
-
-          <!-- band-input widget (int | str, rendered as text) -->
-          <el-input
-            v-else-if="field.widget === 'band-input'"
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- comma-separated-integers widget -->
-          <el-input
-            v-else-if="field.widget === 'comma-separated-integers'"
-            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="updateCsvDraft(field.path, $event)"
-            @change="commitCsvIntegers(field.path, field.nullable)"
-          />
-
-          <!-- comma-separated-strings widget -->
-          <el-input
-            v-else-if="field.widget === 'comma-separated-strings'"
-            :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="updateCsvDraft(field.path, $event)"
-            @change="commitCsvStrings(field.path, field.nullable)"
-          />
-
-          <!-- textarea widget -->
-          <el-input
-            v-else-if="field.widget === 'textarea'"
-            type="textarea"
-            :rows="4"
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- enum select -->
-          <el-select
-            v-else-if="field.resolvedSchema.enum"
-            :model-value="getFieldValue(field.path)"
-            @update:model-value="setFieldValue(field.path, $event)"
-          >
-            <el-option
-              v-for="opt in field.resolvedSchema.enum"
-              :key="String(opt)"
-              :label="String(opt)"
-              :value="opt"
-            />
+      <!-- Group container with border -->
+      <div v-else class="field-group-section">
+        <div class="field-group-label">
+          {{ item.titleBase }}
+          <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+            <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
           </el-select>
-
-          <!-- boolean switch -->
-          <el-switch
-            v-else-if="field.resolvedType === 'boolean'"
-            :model-value="getFieldValue(field.path)"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-
-          <!-- number / integer -->
-          <div
-            v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-            class="smart-number-input"
-          >
-            <el-button
-              class="smart-number-input__btn"
-              size="small"
-              @click="stepFieldValue(field, -1)"
-            >
-              -
-            </el-button>
-            <el-input
-              :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
-              inputmode="decimal"
-              @focus="startNumberEditing(field.path, getFieldValue(field.path))"
-              @update:model-value="updateNumberDraft(field.path, $event)"
-              @blur="commitNumberDraft(field)"
-              @keyup.enter="commitNumberDraft(field)"
-              @keyup.down.prevent="stepFieldValue(field, -1)"
-              @keyup.up.prevent="stepFieldValue(field, 1)"
-            />
-            <el-button
-              class="smart-number-input__btn"
-              size="small"
-              @click="stepFieldValue(field, 1)"
-            >
-              +
-            </el-button>
-          </div>
-
-          <!-- fallback: text input -->
-          <el-input
-            v-else
-            :model-value="String(getFieldValue(field.path) ?? '')"
-            :placeholder="field.schema.placeholder"
-            @update:model-value="setFieldValue(field.path, $event)"
-          />
-        </el-form-item>
-      </el-col>
-    </el-row>
-
-    <!-- Advanced fields in collapsible section -->
-    <el-collapse v-if="advancedFields.length > 0" class="advanced-collapse">
-      <el-collapse-item title="Advanced Parameters" name="advanced">
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px;"
-        >
-          These parameters are for advanced users. Do not modify unless you understand their effects.
-        </el-alert>
+        </div>
         <el-row :gutter="16">
-          <el-col
-            v-for="field in advancedFields"
-            :key="field.key"
-            :span="field.colSpan"
-          >
+          <el-col v-for="gf in item.fields" :key="gf.key" :span="gf.colSpan">
             <el-form-item>
               <template #label>
                 <span>
-                  {{ field.schema.title }}
-                  <el-tooltip
-                    v-if="field.schema.description"
-                    :content="field.schema.description"
-                    placement="top"
-                    :show-after="300"
-                  >
+                  {{ gf.schema.title }}
+                  <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                  <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
                     <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
               </template>
-
-              <!-- comma-separated-integers widget (advanced) -->
-              <el-input
-                v-if="field.widget === 'comma-separated-integers'"
-                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvIntegers)"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="updateCsvDraft(field.path, $event)"
-                @change="commitCsvIntegers(field.path, field.nullable)"
-              />
-
-              <!-- comma-separated-strings widget (advanced) -->
-              <el-input
-                v-else-if="field.widget === 'comma-separated-strings'"
-                :model-value="getCsvDraftValue(field.path, getFieldValue(field.path), formatCsvStrings)"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="updateCsvDraft(field.path, $event)"
-                @change="commitCsvStrings(field.path, field.nullable)"
-              />
-
-              <!-- Single-line text input (widget: "text") -->
-              <el-input
-                v-else-if="field.widget === 'text'"
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event || undefined)"
-              />
-
-              <!-- Advanced textarea for string fields -->
-              <el-input
-                v-else-if="field.resolvedType === 'string' && !field.resolvedSchema.enum"
-                type="textarea"
-                :rows="4"
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
-
-              <!-- Reuse the same widget logic for non-string advanced fields -->
-              <!-- log-step widget (advanced section) -->
-              <div v-else-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
-                <el-button size="small" @click="logStep(field.path, 0.1)">÷10</el-button>
-                <input
-                  type="text"
-                  class="log-step-input"
-                  :class="{ 'log-step-input--invalid': invalidLogInputs[field.path] }"
-                  :value="formatExp(getFieldValue(field.path))"
-                  @change="($event: Event) => parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)"
-                />
-                <el-button size="small" @click="logStep(field.path, 10)">×10</el-button>
-              </div>
-
-              <el-select
-                v-else-if="field.resolvedSchema.enum"
-                :model-value="getFieldValue(field.path)"
-                @update:model-value="setFieldValue(field.path, $event)"
-              >
-                <el-option
-                  v-for="opt in field.resolvedSchema.enum"
-                  :key="String(opt)"
-                  :label="String(opt)"
-                  :value="opt"
-                />
-              </el-select>
-
-              <el-switch
-                v-else-if="field.resolvedType === 'boolean'"
-                :model-value="getFieldValue(field.path)"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
-
-              <div
-                v-else-if="field.resolvedType === 'number' || field.resolvedType === 'integer'"
-                class="smart-number-input"
-              >
-                <el-button
-                  class="smart-number-input__btn"
-                  size="small"
-                  @click="stepFieldValue(field, -1)"
-                >
-                  -
-                </el-button>
-                <el-input
-                  :model-value="getNumberDraftValue(field.path, getFieldValue(field.path))"
-                  inputmode="decimal"
-                  @focus="startNumberEditing(field.path, getFieldValue(field.path))"
-                  @update:model-value="updateNumberDraft(field.path, $event)"
-                  @blur="commitNumberDraft(field)"
-                  @keyup.enter="commitNumberDraft(field)"
-                  @keyup.down.prevent="stepFieldValue(field, -1)"
-                  @keyup.up.prevent="stepFieldValue(field, 1)"
-                />
-                <el-button
-                  class="smart-number-input__btn"
-                  size="small"
-                  @click="stepFieldValue(field, 1)"
-                >
-                  +
-                </el-button>
-              </div>
-
-              <el-input
-                v-else
-                :model-value="String(getFieldValue(field.path) ?? '')"
-                :placeholder="field.schema.placeholder"
-                @update:model-value="setFieldValue(field.path, $event)"
-              />
+              <FieldWidget :field="gf" mode="regular" />
             </el-form-item>
           </el-col>
         </el-row>
+      </div>
+    </template>
+
+    <!-- Advanced fields in collapsible section -->
+    <el-collapse v-if="advancedFields.length > 0" class="advanced-collapse">
+      <el-collapse-item title="Advanced Parameters" name="advanced">
+        <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
+          These parameters are for advanced users. Do not modify unless you understand their effects.
+        </el-alert>
+        <template v-for="item in advancedFieldsGrouped" :key="item.key">
+          <!-- Row of ungrouped advanced fields -->
+          <el-row v-if="item.type === 'field-row'" :gutter="16">
+            <el-col v-for="rf in item.fields" :key="rf.key" :span="rf.colSpan">
+              <el-form-item>
+                <template #label>
+                  <span>
+                    {{ rf.schema.title }}
+                    <span v-if="rf.schema._required" class="required-field-mark"> *</span>
+                    <el-tooltip v-if="rf.schema.description" :content="rf.schema.description" placement="top" :show-after="300">
+                      <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <FieldWidget :field="rf" mode="advanced" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <!-- Group container with border (advanced) -->
+          <div v-else class="field-group-section">
+            <div class="field-group-label">
+              {{ item.titleBase }}
+              <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+                <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
+              </el-select>
+            </div>
+            <el-row :gutter="16">
+              <el-col v-for="gf in item.fields" :key="gf.key" :span="gf.colSpan">
+                <el-form-item>
+                  <template #label>
+                    <span>
+                      {{ gf.schema.title }}
+                      <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                      <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
+                        <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                    </span>
+                  </template>
+                  <FieldWidget :field="gf" mode="advanced" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+          </div>
+        </template>
       </el-collapse-item>
     </el-collapse>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, watch, provide } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { uploadModel } from '@/api/tasks'
+import FieldWidget from '@/components/FieldWidget.vue'
 import {
   resolveLocalRef,
   normalizeNullableSchema,
+  buildDefaultsFromSchema,
+  resolveDiscriminatorBranch,
   parseCommaSeparatedIntegers,
   parseCommaSeparatedStrings,
+  FIELD_WIDGET_CONTEXT_KEY,
   type JsonSchemaObject,
+  type FieldDescriptor,
+  type FieldWidgetContext,
 } from '@/utils/schema-form'
 
 const props = defineProps<{
@@ -299,27 +130,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: Record<string, unknown>]
 }>()
-
-/** Descriptor for a single renderable field */
-interface FieldDescriptor {
-  key: string
-  /** Dot-separated path for nested fields, e.g. "adv.ikpt" */
-  path: string
-  /** Original property schema (may contain anyOf, $ref, etc.) */
-  schema: JsonSchemaObject
-  /** Resolved schema after normalizing anyOf and resolving $ref */
-  resolvedSchema: JsonSchemaObject
-  /** The resolved primitive type */
-  resolvedType: string
-  /** Widget hint (if any) */
-  widget: string | undefined
-  /** Whether the field is nullable (Optional) */
-  nullable: boolean
-  /** Column span for el-col */
-  colSpan: number
-  /** Group: "advanced" or undefined */
-  group: string | undefined
-}
 
 /**
  * Resolve an anyOf union of $ref branches using a discriminator field.
@@ -342,20 +152,15 @@ function resolveAnyOfDiscriminator(
 ): JsonSchemaObject | undefined {
   if (!prop.anyOf) return undefined
 
-  // Collect non-null $ref branches
-  const refBranches: { ref: string; schema: JsonSchemaObject }[] = []
+  // Collect non-null $ref branches — need at least 2 for a real union
+  let refBranchCount = 0
   for (const branch of prop.anyOf) {
     if (branch.$ref) {
       const resolved = resolveLocalRef(rootSchema, branch.$ref)
-      if (resolved?.properties) {
-        refBranches.push({ ref: branch.$ref, schema: resolved })
-      }
+      if (resolved?.properties) refBranchCount++
     }
-    // Ignore {type: "null"} branches — those are for Optional
   }
-
-  // Only handle when we have 2+ object $ref branches (a real union)
-  if (refBranches.length < 2) return undefined
+  if (refBranchCount < 2) return undefined
 
   // Find a discriminator: a sibling enum property
   let discriminatorKey: string | undefined
@@ -369,37 +174,24 @@ function resolveAnyOfDiscriminator(
   }
 
   if (!discriminatorKey || !enumValues) {
-    // No discriminator found — return first branch
-    return refBranches[0].schema
-  }
-
-  // Build mapping: enum value → ref branch
-  // Strategy: lowercase match of title (minus InputT/Input suffix) against enum value
-  const enumStrings = enumValues.map(String)
-  const branchByEnum = new Map<string, JsonSchemaObject>()
-  const unmatchedBranches: JsonSchemaObject[] = []
-
-  for (const { schema } of refBranches) {
-    const title = (schema.title ?? '').replace(/InputT?$/i, '').toLowerCase()
-    const matched = enumStrings.find(
-      (ev) => title === ev.toLowerCase() || title.includes(ev.toLowerCase())
-    )
-    if (matched && !branchByEnum.has(matched)) {
-      branchByEnum.set(matched, schema)
-    } else {
-      unmatchedBranches.push(schema)
+    // No discriminator found — return first matching branch
+    for (const branch of prop.anyOf) {
+      if (branch.$ref) {
+        const resolved = resolveLocalRef(rootSchema, branch.$ref)
+        if (resolved?.properties) return resolved
+      }
     }
+    return undefined
   }
 
-  // Assign unmatched branches to remaining enum values in order
-  const unmatchedEnums = enumStrings.filter((ev) => !branchByEnum.has(ev))
-  for (let i = 0; i < Math.min(unmatchedBranches.length, unmatchedEnums.length); i++) {
-    branchByEnum.set(unmatchedEnums[i], unmatchedBranches[i])
-  }
-
-  // Look up current discriminator value
-  const currentValue = String(modelValue[discriminatorKey] ?? enumStrings[0])
-  return branchByEnum.get(currentValue) ?? refBranches[0].schema
+  // Delegate branch mapping to shared utility
+  const currentValue = modelValue[discriminatorKey] ?? enumValues[0]
+  return resolveDiscriminatorBranch({
+    prop,
+    rootSchema,
+    enumValues,
+    value: currentValue,
+  })
 }
 
 /**
@@ -415,14 +207,111 @@ function buildFieldDescriptors(
   modelValue: Record<string, unknown> = {},
 ): FieldDescriptor[] {
   const result: FieldDescriptor[] = []
+  const pairedArrays = new Map<string, {
+    enumKey: string
+    intKey: string
+    enumProp: JsonSchemaObject
+    intProp: JsonSchemaObject
+  }>()
+  const pairedSkip = new Set<string>()
+  const arrayFields: { key: string; prop: JsonSchemaObject }[] = []
+
+  for (const [key, prop] of Object.entries(properties)) {
+    if (prop.hidden || 'const' in prop) continue
+    const resolved = normalizeNullableSchema(prop).schema
+    if (resolved.type === 'array' && resolved.items && Array.isArray(resolved.default)) {
+      arrayFields.push({ key, prop: resolved })
+    }
+  }
+
+  for (let i = 0; i < arrayFields.length; i++) {
+    for (let j = i + 1; j < arrayFields.length; j++) {
+      const a = arrayFields[i]
+      const b = arrayFields[j]
+      const aDefault = a.prop.default as unknown[]
+      const bDefault = b.prop.default as unknown[]
+
+      if (aDefault.length !== bDefault.length) continue
+      if (pairedArrays.has(a.key) || pairedArrays.has(b.key)) continue
+      if (pairedSkip.has(a.key) || pairedSkip.has(b.key)) continue
+
+      let enumField: typeof a | undefined
+      let intField: typeof a | undefined
+      if (
+        a.prop.items?.enum &&
+        (b.prop.items?.type === 'integer' || b.prop.items?.type === 'number')
+      ) {
+        enumField = a
+        intField = b
+      } else if (
+        b.prop.items?.enum &&
+        (a.prop.items?.type === 'integer' || a.prop.items?.type === 'number')
+      ) {
+        enumField = b
+        intField = a
+      }
+
+      if (enumField && intField) {
+        pairedArrays.set(enumField.key, {
+          enumKey: enumField.key,
+          intKey: intField.key,
+          enumProp: enumField.prop,
+          intProp: intField.prop,
+        })
+        pairedSkip.add(intField.key)
+      }
+    }
+  }
 
   for (const [key, prop] of Object.entries(properties)) {
     // Skip hidden fields
     if (prop.hidden) continue
     // Skip const fields (e.g. log_every with const: 1)
     if ('const' in prop) continue
+    // Skip the numeric partner of a paired array; it is rendered with the enum partner.
+    if (pairedSkip.has(key)) continue
 
     const fullPath = pathPrefix ? `${pathPrefix}.${key}` : key
+
+    if (pairedArrays.has(key)) {
+      const pair = pairedArrays.get(key)!
+      const enumProp = properties[pair.enumKey]
+      const intProp = properties[pair.intKey]
+      const enumPath = pathPrefix ? `${pathPrefix}.${pair.enumKey}` : pair.enumKey
+      const intPath = pathPrefix ? `${pathPrefix}.${pair.intKey}` : pair.intKey
+      const enumOptions = (pair.enumProp.items?.enum ?? []).map(String)
+      const exclusiveMinimum = pair.intProp.items?.exclusiveMinimum
+      const minimum = pair.intProp.items?.minimum
+      const intMin = typeof exclusiveMinimum === 'number'
+        ? exclusiveMinimum + 1
+        : typeof minimum === 'number'
+          ? minimum
+          : 1
+      const enumDefaults = pair.enumProp.default
+      const intDefaults = pair.intProp.default
+
+      result.push({
+        key: `${enumPath}__${intPath}`,
+        path: enumPath,
+        schema: {
+          title: intProp.title ?? enumProp.title ?? 'Rounds',
+          description: intProp.description ?? enumProp.description,
+          _pairedIntPath: intPath,
+          _enumOptions: enumOptions,
+          _intStep: intProp.step ?? 100,
+          _intMin: intMin,
+          _enumDefault: Array.isArray(enumDefaults) ? enumDefaults[0] : enumOptions[0],
+          _intDefault: Array.isArray(intDefaults) ? intDefaults[0] : 500,
+        },
+        resolvedSchema: { type: 'array' },
+        resolvedType: 'array',
+        widget: 'paired-array-table',
+        nullable: false,
+        colSpan: 24,
+        group: enumProp.group ?? intProp.group,
+      })
+      continue
+    }
 
     // Check if this is a $ref to an object — expand its children
     if (prop.$ref) {
@@ -449,19 +338,66 @@ function buildFieldDescriptors(
       )
       if (resolvedBranch?.properties) {
         const parentGroup = prop.group
+        const baseTitle = prop.title ?? key.charAt(0).toUpperCase() + key.slice(1)
+        const branchTitle = resolvedBranch.title?.replace(/InputT?$/i, '') ?? ''
+        const parentTitle = branchTitle ? `${baseTitle} — ${branchTitle}` : baseTitle
+
+        // Find the discriminator sibling enum for embedding in group header
+        let discriminatorKey: string | undefined
+        let discriminatorEnum: unknown[] | undefined
+        for (const [sibKey, sibProp] of Object.entries(properties)) {
+          if (sibProp.enum && sibProp.enum.length >= 2) {
+            discriminatorKey = sibKey
+            discriminatorEnum = sibProp.enum
+            break
+          }
+        }
+        const discriminatorPath = discriminatorKey
+          ? (pathPrefix ? `${pathPrefix}.${discriminatorKey}` : discriminatorKey)
+          : undefined
+
         const nested = buildFieldDescriptors(
           resolvedBranch.properties, rootSchema, fullPath, modelValue,
         )
-        if (parentGroup) {
-          for (const f of nested) {
-            if (!f.group) f.group = parentGroup
+        for (const f of nested) {
+          f.schema = {
+            ...f.schema,
+            _parentTitle: parentTitle,
+            _parentTitleBase: baseTitle,
+            _parentDiscriminatorKey: discriminatorKey,
+            _parentDiscriminatorPath: discriminatorPath,
+            _parentDiscriminatorEnum: discriminatorEnum,
           }
+          if (parentGroup && !f.group) f.group = parentGroup
         }
         result.push(...nested)
         continue
       }
-      // If resolveAnyOfDiscriminator returned undefined, fall through to
-      // normalizeNullableSchema which handles simple Optional[T] anyOf
+      // If resolveAnyOfDiscriminator returned undefined, fall through.
+
+      // Handle anyOf with a single $ref that resolves to an enum (e.g. model_name)
+      // Pattern: anyOf: [{$ref: enum_type}, {const: "", type: "string"}]
+      if (!resolvedBranch) {
+        const refBranch = prop.anyOf.find((b: JsonSchemaObject) => b.$ref)
+        if (refBranch) {
+          const resolved = resolveLocalRef(rootSchema, refBranch.$ref!)
+          if (resolved?.enum) {
+            const group = prop.group ?? resolved.group
+            result.push({
+              key: fullPath,
+              path: fullPath,
+              schema: { ...prop, ...resolved, title: prop.title ?? resolved.title, group },
+              resolvedSchema: resolved,
+              resolvedType: resolved.type ?? 'string',
+              widget: undefined,
+              nullable: false,
+              colSpan: 8,
+              group,
+            })
+            continue
+          }
+        }
+      }
     }
 
     // Check if this is an inline object type — expand it
@@ -472,24 +408,81 @@ function buildFieldDescriptors(
     }
 
     // Normalize nullable / union schemas
-    const { schema: normalized, nullable } = normalizeNullableSchema(prop)
+    let { schema: normalized, nullable } = normalizeNullableSchema(prop)
 
-    const widget = prop.widget ?? normalized.widget
-    const resolvedType = normalized.type ?? ''
     const group = prop.group ?? normalized.group
+
+    if (normalized.$ref && !normalized.type && !normalized.properties) {
+      const refSchema = resolveLocalRef(rootSchema, normalized.$ref)
+      if (refSchema?.properties) {
+        const toggleTitle = `Enable ${(prop.title ?? refSchema.title ?? key).replace(/InputT?$/i, '')}`
+        result.push({
+          key: fullPath,
+          path: fullPath,
+          schema: {
+            ...prop,
+            title: toggleTitle,
+            description: prop.description ?? refSchema.description,
+            type: 'boolean',
+          },
+          resolvedSchema: { type: 'boolean' },
+          resolvedType: 'boolean',
+          widget: 'nullable-object-toggle',
+          nullable: true,
+          colSpan: 8,
+          group,
+        })
+
+        const nested = buildFieldDescriptors(refSchema.properties, rootSchema, fullPath, modelValue)
+        const requiredKeys = new Set(refSchema.required ?? [])
+        for (const f of nested) {
+          if (group && !f.group) f.group = group
+          const fieldKey = f.path.split('.').pop() ?? ''
+          if (requiredKeys.has(fieldKey)) {
+            f.schema = { ...f.schema, _required: true }
+          }
+        }
+        result.push(...nested)
+        continue
+      }
+    }
+
+    let widget = prop.widget ?? normalized.widget
+    const resolvedType = normalized.type ?? ''
+
+    if (resolvedType === 'array' && !widget && normalized.items) {
+      if (normalized.items.type === 'integer' || normalized.items.type === 'number') {
+        widget = 'comma-separated-integers'
+      } else if (normalized.items.enum || normalized.items.type === 'string') {
+        widget = 'comma-separated-strings'
+      }
+    }
 
     // Determine column span: textarea-like fields get wider
     let colSpan = 8
     if (widget === 'comma-separated-integers' || widget === 'comma-separated-strings') {
       colSpan = 16
+    } else if (widget === 'paired-array-table') {
+      colSpan = 24
     } else if (widget === 'textarea') {
       colSpan = 24
     }
 
+    // model_hash upload area needs more width for the dropzone
+    const leafKey = fullPath.split('.').pop() ?? ''
+    if (leafKey === 'model_hash') {
+      colSpan = 24
+    }
+
+    // Friendly title override for model_hash
+    const fieldSchema = leafKey === 'model_hash'
+      ? { ...prop, ...normalized, widget, group, title: 'Custom Model' }
+      : { ...prop, ...normalized, widget, group }
+
     result.push({
       key: fullPath,
       path: fullPath,
-      schema: { ...prop, ...normalized, widget, group },
+      schema: fieldSchema,
       resolvedSchema: normalized,
       resolvedType,
       widget,
@@ -508,18 +501,219 @@ const allFields = computed(() => {
 })
 
 const regularFields = computed(() =>
-  allFields.value.filter((f) => f.group !== 'advanced'),
+  allFields.value.filter((f) => f.group !== 'advanced' && isFieldVisible(f)),
 )
 
 const advancedFields = computed(() =>
-  allFields.value.filter((f) => f.group === 'advanced'),
+  allFields.value.filter((f) => f.group === 'advanced' && isFieldVisible(f)),
 )
+
+/** A row of consecutive standalone fields (no group border, share one el-row) */
+interface FieldRowItem {
+  type: 'field-row'
+  fields: FieldDescriptor[]
+  key: string
+}
+
+/** A group of fields sharing a parent title, rendered inside a border container */
+interface GroupItem {
+  type: 'group'
+  title: string
+  /** Base title without the branch name suffix (e.g. "Calculator" not "Calculator — NequIP") */
+  titleBase: string
+  key: string
+  fields: FieldDescriptor[]
+  /** Path for the discriminator select (e.g. "calc.software") */
+  discriminatorPath?: string
+  /** Enum options for the discriminator */
+  discriminatorEnum?: unknown[]
+}
+
+type FieldOrGroup = FieldRowItem | GroupItem
+
+/**
+ * Group fields into structured sections. Fields with `_parentTitle` are
+ * collected into GroupItems; consecutive ungrouped fields are batched into
+ * FieldRowItems so they share one el-row (multi-column grid).
+ */
+function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
+  const result: FieldOrGroup[] = []
+  let currentParent: string | undefined
+  let currentGroup: GroupItem | null = null
+  let currentRow: FieldRowItem | null = null
+
+  function flushRow(): void {
+    if (currentRow) {
+      result.push(currentRow)
+      currentRow = null
+    }
+  }
+
+  function flushGroup(): void {
+    if (currentGroup) {
+      result.push(currentGroup)
+      currentGroup = null
+    }
+  }
+
+  for (const f of fields) {
+    const parent = f.schema._parentTitle as string | undefined
+    if (parent !== currentParent) {
+      // Flush whatever was accumulating
+      flushGroup()
+      flushRow()
+
+      if (parent) {
+        // Extract discriminator info from the first field in this group
+        const discPath = f.schema._parentDiscriminatorPath as string | undefined
+        const discEnum = f.schema._parentDiscriminatorEnum as unknown[] | undefined
+        const titleBase = f.schema._parentTitleBase as string | undefined
+        currentGroup = {
+          type: 'group',
+          title: parent,
+          titleBase: titleBase ?? parent,
+          key: `__group_${parent}`,
+          fields: [f],
+          discriminatorPath: discPath,
+          discriminatorEnum: discEnum,
+        }
+      } else {
+        // Start a new row batch
+        currentRow = { type: 'field-row', fields: [f], key: `__row_${f.key}` }
+      }
+      currentParent = parent
+    } else if (currentGroup) {
+      currentGroup.fields.push(f)
+    } else {
+      // Accumulate into current row
+      if (!currentRow) {
+        currentRow = { type: 'field-row', fields: [f], key: `__row_${f.key}` }
+      } else {
+        currentRow.fields.push(f)
+      }
+    }
+  }
+  // Flush remaining
+  flushGroup()
+  flushRow()
+  return result
+}
+
+const regularFieldsGrouped = computed(() => groupFields(regularFields.value))
+const advancedFieldsGrouped = computed(() => groupFields(advancedFields.value))
+
+const nullableTogglePaths = computed(() => new Set(
+  allFields.value
+    .filter((field) => field.widget === 'nullable-object-toggle')
+    .map((field) => field.path),
+))
+
+function isFieldVisible(field: FieldDescriptor): boolean {
+  if (field.widget === 'nullable-object-toggle') return true
+
+  for (const togglePath of nullableTogglePaths.value) {
+    if (field.path.startsWith(`${togglePath}.`) && getFieldValue(togglePath) == null) {
+      return false
+    }
+  }
+
+  // Hide standalone discriminator field when it's embedded in a group header
+  const fieldKey = field.path.split('.').pop() ?? ''
+  const isDiscriminator = allFields.value.some(
+    (f) => f.schema._parentDiscriminatorKey === fieldKey &&
+      f.schema._parentDiscriminatorPath === field.path
+  )
+  if (isDiscriminator) return false
+
+  // model_name vs model_hash mutual exclusion based on use_pretrained_model
+  if (fieldKey === 'model_name' || fieldKey === 'model_hash') {
+    const parentPath = field.path.split('.').slice(0, -1).join('.')
+    const raw = parentPath
+      ? getFieldValue(`${parentPath}.use_pretrained_model`)
+      : getFieldValue('use_pretrained_model')
+    // If value not yet in modelValue, check the schema default as fallback
+    let usePretrained = raw
+    if (usePretrained === undefined) {
+      const togglePath = parentPath
+        ? `${parentPath}.use_pretrained_model`
+        : 'use_pretrained_model'
+      const toggleField = allFields.value.find(f => f.path === togglePath)
+      usePretrained = toggleField?.schema?.default ?? false
+    }
+    if (fieldKey === 'model_name' && !usePretrained) return false
+    if (fieldKey === 'model_hash' && usePretrained) return false
+  }
+
+  return true
+}
 
 const csvDrafts = reactive<Record<string, string>>({})
 const numberDrafts = reactive<Record<string, string>>({})
 const numberEditing = reactive<Record<string, boolean>>({})
 const invalidLogInputs = reactive<Record<string, boolean>>({})
 const logInputTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+// --- Model upload state ---
+const modelUploadProgress = reactive<Record<string, number>>({})
+const modelUploadDragover = reactive<Record<string, boolean>>({})
+const modelUploadFileNames = reactive<Record<string, string>>({})
+const modelFileInputs = new Map<string, HTMLInputElement>()
+
+function setModelFileInputRef(path: string) {
+  return (el: unknown) => {
+    if (el instanceof HTMLInputElement) {
+      modelFileInputs.set(path, el)
+    } else {
+      modelFileInputs.delete(path)
+    }
+  }
+}
+
+function triggerModelFileInput(path: string): void {
+  modelFileInputs.get(path)?.click()
+}
+
+function isModelHashField(field: FieldDescriptor): boolean {
+  return field.path.split('.').pop() === 'model_hash'
+}
+
+const DISABLED_ENUM_OPTIONS = new Set(['mace'])
+
+function isDisabledEnumOption(opt: unknown): boolean {
+  return DISABLED_ENUM_OPTIONS.has(String(opt))
+}
+
+async function handleModelUpload(field: FieldDescriptor, file: File): Promise<void> {
+  if (modelUploadProgress[field.path] != null) return
+  modelUploadProgress[field.path] = 0
+  try {
+    const result = await uploadModel(file, (pct) => {
+      modelUploadProgress[field.path] = pct
+    })
+    setFieldValue(field.path, result.hash)
+    modelUploadFileNames[field.path] = file.name
+    ElMessage.success('Model uploaded successfully')
+  } catch {
+    ElMessage.error('Model upload failed')
+  } finally {
+    delete modelUploadProgress[field.path]
+  }
+}
+
+function handleModelDrop(field: FieldDescriptor, event: DragEvent): void {
+  modelUploadDragover[field.path] = false
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) return
+  handleModelUpload(field, files[0])
+}
+
+function handleModelFileInput(field: FieldDescriptor, event: Event): void {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  if (!files || files.length === 0) return
+  handleModelUpload(field, files[0])
+  target.value = '' // reset so same file can be re-selected
+}
 
 watch(
   [() => props.modelValue, allFields],
@@ -584,18 +778,113 @@ function getFieldValue(path: string): unknown {
 }
 
 function setFieldValue(path: string, value: unknown): void {
-  // Deep-clone modelValue to avoid direct mutation
+  emitFieldValues([{ path, value }])
+}
+
+function emitFieldValues(updates: { path: string; value: unknown }[]): void {
   const updated = JSON.parse(JSON.stringify(props.modelValue))
+  for (const { path, value } of updates) {
+    setNestedFieldValue(updated, path, value)
+  }
+  emit('update:modelValue', updated)
+}
+
+function setNestedFieldValue(
+  model: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): void {
   const parts = path.split('.')
-  let obj = updated
+  let obj = model
   for (let i = 0; i < parts.length - 1; i++) {
     if (obj[parts[i]] == null || typeof obj[parts[i]] !== 'object') {
       obj[parts[i]] = {}
     }
-    obj = obj[parts[i]]
+    obj = obj[parts[i]] as Record<string, unknown>
   }
   obj[parts[parts.length - 1]] = value
-  emit('update:modelValue', updated)
+}
+
+// --- Paired array helpers ---
+
+function getArrayFieldValue(path: string): unknown[] {
+  const value = getFieldValue(path)
+  return Array.isArray(value) ? value : []
+}
+
+function getPairedIntPath(field: FieldDescriptor): string {
+  return String(field.schema._pairedIntPath ?? '')
+}
+
+function getPairedEnumValue(field: FieldDescriptor, rowIdx: number): string {
+  return String(getArrayFieldValue(field.path)[rowIdx] ?? '')
+}
+
+function getPairedIntValue(field: FieldDescriptor, rowIdx: number): number {
+  const value = getArrayFieldValue(getPairedIntPath(field))[rowIdx]
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function setPairedEnumValue(field: FieldDescriptor, rowIdx: number, value: unknown): void {
+  const enumArr = [...getArrayFieldValue(field.path)]
+  enumArr[rowIdx] = String(value)
+  setFieldValue(field.path, enumArr)
+}
+
+function setPairedIntValue(field: FieldDescriptor, rowIdx: number, value: unknown): void {
+  const intArr = [...getArrayFieldValue(getPairedIntPath(field))]
+  const parsed = Number(value ?? 0)
+  intArr[rowIdx] = Number.isFinite(parsed) ? parsed : 0
+  setFieldValue(getPairedIntPath(field), intArr)
+}
+
+function addPairedRow(field: FieldDescriptor): void {
+  const intPath = getPairedIntPath(field)
+  const enumArr = [...getArrayFieldValue(field.path)]
+  const intArr = [...getArrayFieldValue(intPath)]
+
+  enumArr.push(field.schema._enumDefault ?? '')
+  intArr.push(field.schema._intDefault ?? 500)
+
+  emitFieldValues([
+    { path: field.path, value: enumArr },
+    { path: intPath, value: intArr },
+  ])
+}
+
+function removePairedRow(field: FieldDescriptor, rowIdx: number): void {
+  const intPath = getPairedIntPath(field)
+  const enumArr = [...getArrayFieldValue(field.path)]
+  const intArr = [...getArrayFieldValue(intPath)]
+
+  if (enumArr.length <= 1) return
+
+  enumArr.splice(rowIdx, 1)
+  intArr.splice(rowIdx, 1)
+
+  emitFieldValues([
+    { path: field.path, value: enumArr },
+    { path: intPath, value: intArr },
+  ])
+}
+
+function toggleNullableObject(field: FieldDescriptor, enabled: boolean): void {
+  if (enabled) {
+    const { schema: normalized } = normalizeNullableSchema(field.schema)
+    const ref = normalized.$ref
+    if (ref) {
+      const refSchema = resolveLocalRef(props.schema, ref)
+      if (refSchema) {
+        setFieldValue(field.path, buildDefaultsFromSchema(refSchema, props.schema))
+        return
+      }
+    }
+    setFieldValue(field.path, {})
+    return
+  }
+
+  setFieldValue(field.path, null)
 }
 
 // --- Smart number formatting (all el-input-number fields) ---
@@ -781,6 +1070,43 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   csvDrafts[path] = formatCsvStrings(parsed)
   setFieldValue(path, parsed)
 }
+
+// --- Provide FieldWidgetContext for FieldWidget child components ---
+provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
+  getFieldValue,
+  setFieldValue,
+  invalidLogInputs,
+  formatExp,
+  parseExp,
+  logStep,
+  getCsvDraftValue,
+  updateCsvDraft,
+  formatCsvIntegers,
+  formatCsvStrings,
+  commitCsvIntegers,
+  commitCsvStrings,
+  getPairedEnumValue,
+  setPairedEnumValue,
+  getPairedIntValue,
+  setPairedIntValue,
+  addPairedRow,
+  removePairedRow,
+  toggleNullableObject,
+  isDisabledEnumOption,
+  isModelHashField,
+  modelUploadDragover,
+  modelUploadProgress,
+  modelUploadFileNames,
+  setModelFileInputRef,
+  triggerModelFileInput,
+  handleModelDrop,
+  handleModelFileInput,
+  getNumberDraftValue,
+  startNumberEditing,
+  updateNumberDraft,
+  commitNumberDraft,
+  stepFieldValue,
+})
 </script>
 
 <style scoped>
@@ -792,18 +1118,14 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   margin-top: var(--space-2);
 }
 
-:deep(.el-input-number) {
-  width: 100%;
-}
-
-:deep(.el-select) {
-  width: 100%;
-}
-
 :deep(.param-help-icon) {
   font-size: 14px;
   color: var(--fg-placeholder);
   cursor: help;
+}
+
+.required-field-mark {
+  color: var(--el-color-danger);
 }
 
 /* Textarea for Extra INCAR and similar free-text fields */
@@ -812,39 +1134,30 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   font-size: var(--fs-13);
 }
 
-.smart-number-input {
+/* --- Group section (border container for Calculator, Thermostats, etc.) --- */
+.field-group-section {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
+}
+
+.field-group-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-secondary, #606266);
+  margin-bottom: var(--space-2);
 }
 
-.smart-number-input__btn {
-  flex: 0 0 auto;
+.inline-discriminator-select {
+  width: 140px;
 }
 
-.log-step-input {
-  width: 100px;
-  text-align: center;
-  font-family: var(--font-mono);
-  padding: 4px 8px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-14);
-  background: var(--bg-surface);
-  color: var(--fg-primary);
-  transition: border-color var(--dur-base) var(--ease-standard),
-              box-shadow var(--dur-base) var(--ease-standard);
+.inline-discriminator-select :deep(.el-input__wrapper) {
+  padding: 1px 8px;
 }
 
-.log-step-input:focus {
-  outline: none;
-  border-color: var(--brand-primary);
-  box-shadow: 0 0 0 1px var(--brand-primary-soft);
-}
-
-.log-step-input--invalid {
-  border-color: var(--danger-fg);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger-fg) 30%, transparent);
-}
 </style>

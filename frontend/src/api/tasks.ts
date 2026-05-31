@@ -7,6 +7,7 @@
  * - GET /frontend/tasks/{taskId}/jobs/status - Get all jobs status for a task
  * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/status - Get single job detail
  * - GET /frontend/tasks/{taskId}/jobs/{jobUuid}/error - Get job error details
+ * - POST /frontend/tasks/{taskId}/download-zip - Download selected files as zip
  * - POST /frontend/tasks/{taskId}/stop - Stop all running jobs
  * - DELETE /frontend/tasks/{taskId} - Delete a task
  */
@@ -61,6 +62,41 @@ export async function uploadTrajectory(
  */
 export async function checkTrajectoryHash(hash: string): Promise<{ exists: boolean; formula?: string; num_atoms?: number; num_frames?: number }> {
   const resp = await http.get('/upload/hash', { params: { hash, file_type: 'trajectory' } })
+  return resp.data
+}
+
+// ============================================
+// Model Upload API (direct endpoints, not /frontend)
+// ============================================
+
+/**
+ * Upload a model file to the server.
+ * Uses multipart/form-data with streaming progress.
+ */
+export async function uploadModel(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<{ hash: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('file_type', 'model')
+  const resp = await http.post('/upload', formData, {
+    timeout: 0,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) {
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      }
+    },
+  })
+  return resp.data
+}
+
+/**
+ * Check if a model file with the given hash already exists on the server.
+ */
+export async function checkModelHash(hash: string): Promise<{ exists: boolean }> {
+  const resp = await http.get('/upload/hash', { params: { hash, file_type: 'model' } })
   return resp.data
 }
 
@@ -214,6 +250,28 @@ export async function getJobFile(taskId: string, jobUuid: string, filename: stri
   const response = await http.get(
     `/frontend/tasks/${taskId}/jobs/${jobUuid}/files/${encodeURIComponent(filename)}`,
     { responseType: 'blob' }
+  )
+  return response.data
+}
+
+export interface ZipDownloadFileItem {
+  job_uuid: string
+  filename: string
+  subdir?: string
+}
+
+/**
+ * Download selected files from one task as a zip archive.
+ */
+export async function downloadZip(
+  taskId: string,
+  files: ZipDownloadFileItem[],
+  onDownloadProgress?: (event: { loaded: number; total?: number }) => void,
+): Promise<Blob> {
+  const response = await http.post(
+    `/frontend/tasks/${taskId}/download-zip`,
+    { files },
+    { responseType: 'blob', onDownloadProgress },
   )
   return response.data
 }

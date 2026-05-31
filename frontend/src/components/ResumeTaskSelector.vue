@@ -122,6 +122,7 @@
 import { computed } from 'vue'
 import { Monitor } from '@element-plus/icons-vue'
 import { getTaskDisplayName } from '@/utils/task-display'
+import { STEP_LABELS } from '@/constants/steps'
 import type { TaskSummary } from '@/api/types'
 
 const props = withDefaults(defineProps<{
@@ -188,14 +189,6 @@ function formatDate(timestamp: number): string {
   })
 }
 
-const STEP_LABELS: Record<string, string> = {
-  nvt: 'NVT',
-  nve: 'NVE',
-  scf: 'SCF',
-  pre_namd: 'Pre-NAMD',
-  namd: 'NAMD',
-  fused_scf_prenamd: 'Fused SCF+Pre-NAMD',
-}
 
 function stepLabel(step: string): string {
   return STEP_LABELS[step] ?? step

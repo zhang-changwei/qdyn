@@ -192,10 +192,12 @@ def test_get_task_pool_name_raises_when_missing(monkeypatch):
 def test_build_qresources_uses_qresources_with_override_order():
     resources = build_qresources(
         {
-            "partition": "base",
-            "nodes": 9,
-            "ntasks_per_node": 9,
-            "cpus_per_task": 9,
+            "resources": {
+                "partition": "base",
+                "nodes": 9,
+                "ntasks_per_node": 9,
+                "cpus_per_task": 9,
+            }
         },
         {"nodes": 2, "processes_per_node": 4, "threads_per_process": 8},
         nodes=3,
@@ -468,19 +470,49 @@ def test_step_scf_uses_active_pool_user_data_path(monkeypatch):
     )
 
     jobs = manager.step_scf(
-        input=payload,
+        input=payload.scf_input,
         jobs={},
         is_first_step=False,
-        stru="",
         stru_format="extxyz",
         stru_hash="traj-hash",
         resume=False,
         prev_task_id="",
         prepare_input_only=False,
+        plot=False,
     )
 
     assert [job.uuid for job in jobs] == ["job-1"]
     assert captured["traj_path"] == "/remote/user_data/trajectory/traj-hash"
+    assert captured["traj_format"] == "extxyz"
+
+
+def test_step_scf_uses_nve_output_software_for_traj_format(monkeypatch):
+    manager = _make_manager()
+
+    captured: dict[str, object] = {}
+
+    def fake_qdyn_scf(**kwargs):
+        captured["traj_path"] = kwargs["traj_path"]
+        captured["traj_format"] = kwargs["traj_format"]
+        return [SimpleNamespace(uuid="job-1")]
+
+    monkeypatch.setattr("qdyn.main_workflow.qdyn_scf", fake_qdyn_scf)
+    monkeypatch.setattr("qdyn.main_workflow.set_run_config", lambda job, **_: job)
+
+    jobs = manager.step_scf(
+        input=SCFInputT(),
+        jobs={"nve": [SimpleNamespace(output={"traj_path": "/tmp/traj.xyz", "software": "mace"})]},
+        is_first_step=False,
+        stru_format="vasp",
+        stru_hash="",
+        resume=False,
+        prev_task_id="",
+        prepare_input_only=False,
+        plot=False,
+    )
+
+    assert [job.uuid for job in jobs] == ["job-1"]
+    assert captured["traj_path"] == "/tmp/traj.xyz"
     assert captured["traj_format"] == "extxyz"
 
 
@@ -512,7 +544,7 @@ def test_step_nve_uses_calculator_nodes(monkeypatch):
     )
 
     jobs = manager.step_nve(
-        input=payload,
+        input=payload.nve_input,
         jobs={"nvt": [SimpleNamespace(output={"stru": structure})]},
         is_first_step=False,
         stru="",
@@ -520,6 +552,7 @@ def test_step_nve_uses_calculator_nodes(monkeypatch):
         resume=False,
         prev_task_id="",
         prepare_input_only=False,
+        plot=False,
     )
 
     assert [job.uuid for job in jobs] == ["job-1"]
@@ -579,7 +612,7 @@ def test_step_nve_uses_mace_software_and_model_path(monkeypatch):
     )
 
     jobs = manager.step_nve(
-        input=payload,
+        input=payload.nve_input,
         jobs={"nvt": [SimpleNamespace(output={"stru": structure})]},
         is_first_step=False,
         stru="",
@@ -587,12 +620,13 @@ def test_step_nve_uses_mace_software_and_model_path(monkeypatch):
         resume=False,
         prev_task_id="",
         prepare_input_only=False,
+        plot=False,
     )
 
     assert [job.uuid for job in jobs] == ["job-mace"]
     assert captured["software"] == "mace"
     assert captured["model_path"] == "~/.qdyn/pretrained/mace-mp-0b3-medium.model"
-    assert captured["nodes"] == 2
+    assert captured["nodes"] == 1
     assert captured["pp_path"] == ""
     assert captured["orb_path"] == ""
     assert captured["modules"] == ["ml-stack"]
@@ -603,3 +637,35 @@ def test_workerpool_remote_property_uses_worker_type():
 
     assert manager.get_pool("local_slurm").remote is False
     assert manager.get_pool("remote_pool").remote is True
+
+
+def test_validate_step_input_allows_reusing_same_pretrained_model_across_steps():
+    from qdyn.input import MACEInputT
+    from qdyn.validation import validate_step_input
+
+    call_count = {"check_file_exists": 0}
+
+    def fake_check_file_exists(path):
+        call_count["check_file_exists"] += 1
+        return True
+
+    pool = SimpleNamespace(
+        check_file_exists=fake_check_file_exists,
+        user_file_exists=lambda *args, **kwargs: False,
+    )
+    worker_cfg = {"gpu_resources": None}
+    check_list = {"gpu": False, "models": []}
+    step = NVEInputT(
+        software="mace",
+        calculator=MACEInputT(
+            use_gpu=False,
+            use_pretrained_model=True,
+            model_name="medium-0b3",
+        ),
+    )
+
+    validate_step_input(step, pool, worker_cfg, check_list)
+    validate_step_input(step, pool, worker_cfg, check_list)
+
+    assert check_list["models"] == ["medium-0b3"]
+    assert call_count["check_file_exists"] == 1

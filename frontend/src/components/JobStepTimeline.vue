@@ -18,6 +18,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { JobStatusItem, DerivedState } from '@/api/types'
+import { FUSED_SCF_PRENAMD } from '@/constants/steps'
 
 const props = defineProps<{
   jobs: JobStatusItem[]
@@ -37,7 +38,7 @@ const workflowSteps = computed<StepConfig[]>(() => {
     return [
       { value: 'nvt', label: 'NVT' },
       { value: 'nve', label: 'NVE' },
-      { value: 'fused_scf_prenamd', label: 'Fused SCF+Pre-NAMD' },
+      { value: FUSED_SCF_PRENAMD, label: 'Fused SCF+Pre-NAMD' },
       { value: 'namd', label: 'NAMD' },
     ]
   }
@@ -77,7 +78,7 @@ const jobStatusMap = computed((): Record<string, DerivedState | null> => {
 function extractStepName(jobName: string): string | null {
   const n = jobName.toLowerCase()
   // Fused priority match (before scf/namd substring would match)
-  if (n.includes('fused') || n.includes('cat_canac')) return 'fused_scf_prenamd'
+  if (n.includes('fused') || n.includes('cat_canac')) return FUSED_SCF_PRENAMD
   for (const step of workflowSteps.value) {
     if (n.includes(step.value)) {
       return step.value

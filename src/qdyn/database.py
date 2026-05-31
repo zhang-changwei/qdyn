@@ -70,6 +70,8 @@ class QdynDB:
             "worker": "ALTER TABLE task_owners ADD COLUMN worker TEXT DEFAULT NULL",
             "pool_name": "ALTER TABLE task_owners ADD COLUMN pool_name TEXT DEFAULT NULL",
             "task_name": "ALTER TABLE task_owners ADD COLUMN task_name TEXT DEFAULT NULL",
+            "stru_hash": "ALTER TABLE task_owners ADD COLUMN stru_hash TEXT DEFAULT NULL",
+            "stru_format": "ALTER TABLE task_owners ADD COLUMN stru_format TEXT DEFAULT NULL",
         }
         added_pool_name = False
         for col, ddl in migrations.items():
@@ -182,16 +184,18 @@ class QdynDB:
         prev_task_id: str | None = None,
         worker: str | None = None,
         pool_name: str | None = None,
+        stru_hash: str | None = None,
+        stru_format: str | None = None,
     ) -> None:
-        """Persist task name, structure metadata, resume lineage, worker, and pool for a task."""
+        """Persist task name, structure metadata, resume lineage, worker, pool, and trajectory hash/format."""
         conn = self.get_db()
         with self._lock:
             conn.execute(
                 "UPDATE task_owners SET task_name = ?, formula = ?, num_atoms = ?, "
-                "prev_task_id = ?, worker = ?, pool_name = ? "
+                "prev_task_id = ?, worker = ?, pool_name = ?, stru_hash = ?, stru_format = ? "
                 "WHERE task_id = ?",
                 (task_name, formula, num_atoms, prev_task_id, worker, pool_name,
-                 task_id),
+                 stru_hash, stru_format, task_id),
             )
             conn.commit()
 
@@ -207,11 +211,11 @@ class QdynDB:
             return cursor.rowcount > 0
 
     def get_task_metadata(self, task_id: str) -> dict | None:
-        """Return task_name, formula, num_atoms, prev_task_id, worker, and pool_name for a task (or None)."""
+        """Return task metadata including stru_hash for a task (or None)."""
         conn = self.get_db()
         with self._lock:
             row = conn.execute(
-                "SELECT task_name, formula, num_atoms, prev_task_id, worker, pool_name "
+                "SELECT task_name, formula, num_atoms, prev_task_id, worker, pool_name, stru_hash, stru_format "
                 "FROM task_owners WHERE task_id = ?",
                 (task_id,),
             ).fetchone()

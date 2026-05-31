@@ -11,7 +11,8 @@ import numpy as np
 from ase import Atoms
 from pymatgen.io.vasp import Incar
 
-from .params import potcar_default
+from .calc_common import write_stru
+from .params import PSEUDO_POTENTIAL
 
 
 class DFTInputs:
@@ -29,6 +30,7 @@ class DFTInputs:
         # init 
         self.allow_modify = True
         self._stru: Atoms | None = structure
+        self._stru_extras: str | None = None
         self._pp_path = (Path(pp_path).expanduser().resolve() 
                          if pp_path is not None else None)
         self._orb_path = (Path(orb_path).expanduser().resolve() 
@@ -46,7 +48,7 @@ class DFTInputs:
             self._kpoints = self.calc_kpoints(kspacing)
         # Step 2: INPUTS
         if inputs_dict is not None:
-            self._inputs = self.update_inputs(inputs_dict, inputs_params)
+            self.update_inputs(inputs_dict, inputs_params)
 
 
     @classmethod
@@ -113,6 +115,25 @@ class DFTInputs:
             raise ValueError("Inputs are not set.")
         return self._inputs
     
+    @property
+    def stru_extras(self) -> str | None:
+        if self._stru_extras is None:
+            tmp = []
+            if self.software == 'openmx':
+                for key, value in self.inputs.items():
+                    if isinstance(value, list):
+                        tmp.append(f'<{key}')
+                        tmp.extend(value)
+                        tmp.append(f'{key}>')
+                    else:
+                        tmp.append(f'{key}    {value}')
+                self._stru_extras = '\n'.join(tmp)
+        return self._stru_extras
+    
+    def update_stru_extras(self) -> str | None:
+        self._stru_extras = None
+        return self.stru_extras
+    
     def calc_kpoints(self, kspacing: float) -> tuple[int, int, int]:
         rec_cell = self.stru.cell.reciprocal().array
 
@@ -125,9 +146,14 @@ class DFTInputs:
 
         return tuple(kpoints) # type: ignore
     
-    def update_inputs(self, inputs_dict: dict, inputs_params: str) -> dict:
+    def update_inputs(self, inputs_dict: dict, inputs_params: str = '') -> None:
         if self.software == 'vasp':
-            incar = Incar.from_dict(inputs_dict)
+            if self._inputs is not None:
+                inputs_base = self._inputs
+                inputs_base.update(inputs_dict)
+            else:
+                inputs_base = inputs_dict
+            incar = Incar.from_dict(inputs_base)
             if inputs_params:
                 incar_append = Incar.from_str(inputs_params)
                 incar.update(incar_append)
@@ -136,12 +162,38 @@ class DFTInputs:
                 incar['KPAR'] = 1
             else:
                 kx, ky, kz = self.kpoints
-                nk = (kx//2) * (ky//2) * (kz//2) # Gamma-centered
+                nk = 1 + kx//2 + ky//2 + kz//2 + (kx*ky*kz)//2 # Gamma-centered
                 incar['KPAR'] = (8 if nk >= 8 
                                    else 4 if nk >= 4 
                                    else 2 if nk >= 2 
                                    else 1)
-            return incar.as_dict()
+            
+            self._inputs = incar.as_dict()
+        elif self.software == 'openmx':
+            if self._inputs is not None:
+                inputs_base = self._inputs
+                inputs_base.update(inputs_dict)
+            else:
+                inputs_base = inputs_dict
+            if inputs_params:
+                inputs_append = parse_openmx_dat(io.StringIO(inputs_params))
+                inputs_base.update(inputs_append)
+            # Standardize default fields and stru fields
+            inputs_base.pop('system.currentdirectory', None)
+            inputs_base['system.name'] = 'qdyn'
+            kx, ky, kz = self.kpoints
+            inputs_base['scf.kgrid'] = f'{kx} {ky} {kz}'
+            inputs_base.pop('species.number', None)
+            inputs_base.pop('definition.of.atomic.species', None)
+            inputs_base.pop('atoms.number', None)
+            inputs_base.pop('atoms.speciesandcoordinates.unit', None)
+            inputs_base.pop('atoms.speciesandcoordinates', None)
+            inputs_base.pop('atoms.unitvectors.unit', None)
+            inputs_base.pop('atoms.unitvectors', None)
+            inputs_base.pop('md.init.velocity', None)
+            inputs_base.pop('md.fixed.xyz', None)
+            
+            self._inputs = inputs_base
         else:
             raise NotImplementedError(f"Software '{self.software}' is not supported yet.")
 
@@ -164,11 +216,7 @@ class DFTInputs:
         if kpoints:
             self.write_kpoints(software, folder)
         if stru:
-            STRU_FNAME = {"vasp": "POSCAR"}
-            STRU_FORMAT = {"vasp": "vasp"}
-            ase.io.write(folder / STRU_FNAME[software], 
-                         self.stru, 
-                         format=STRU_FORMAT[software])
+            write_stru(software, self.stru, folder, self.stru_extras)
         if pp:
             self.write_pp(software, folder)
 
@@ -176,6 +224,8 @@ class DFTInputs:
         if software == 'vasp':
             incar = Incar.from_dict(self.inputs)
             incar.write_file(folder / 'INCAR')
+        elif software == 'openmx':
+            pass
         else:
             raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
@@ -189,6 +239,8 @@ class DFTInputs:
                 f.write("Gamma\n")
                 f.write(f"{kpoints[0]} {kpoints[1]} {kpoints[2]}\n")
                 f.write("0.0 0.0 0.0\n")
+        elif software == 'openmx':
+            pass
         else:
             raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
@@ -202,15 +254,44 @@ class DFTInputs:
 
             with open(folder / 'POTCAR', 'w') as outf:
                 for s in unique_symbols:
-                    pp_file = self.pp_path / potcar_default.get(s, s) / "POTCAR"
+                    pp_file = self.pp_path / PSEUDO_POTENTIAL[software][s] / "POTCAR"
                     if not pp_file.is_file():
                         raise FileNotFoundError(
                             f"POTCAR for element {s} not found in {self.pp_path}.")
                     with open(pp_file, 'r') as inf:
                         shutil.copyfileobj(inf, outf)
+        elif software == 'openmx':
+            pass
         else:
             raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
+
+def parse_openmx_dat(params: io.StringIO, inner: bool = False) -> dict:
+    inputs_dict = {}
+    inputs_list = []
+    while True:
+        line = params.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line.startswith('#'):
+            continue
+        elif line.startswith('<'):
+            block = line[1:].lower()
+            outputs_list = parse_openmx_dat(params, inner=True)[0]
+            inputs_dict[block] = outputs_list
+        elif line.endswith('>'):
+            return {0: inputs_list}
+        elif inner:
+            inputs_list.append(line)
+        else:
+            try:
+                parts = line.split()
+                inputs_dict[parts[0].lower()] = '  '.join(parts[1:])
+            except Exception as e:
+                raise ValueError(f'Failed to parse openmx-dat with {e}')
+            
+    return inputs_dict
 
 def symmetric_kpoints(structure: Atoms, kpoints: list[float]) -> List[int]:
     kpoints_rev = [int(k + 0.5) for k in kpoints]

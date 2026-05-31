@@ -170,102 +170,20 @@
         <template #header>
           <span class="section-title">2. Trajectory File</span>
         </template>
-        <div
-          class="traj-uploader"
-          :class="{ 'is-dragover': trajDragover }"
-          @dragenter.prevent="trajDragover = true"
-          @dragover.prevent="trajDragover = true"
-          @dragleave.prevent="trajDragover = false"
-          @drop.prevent="handleTrajDrop"
-          @click="triggerTrajInput"
-        >
-          <input
-            ref="trajInputRef"
-            type="file"
-            hidden
-            @change="handleTrajFileChange"
-          />
-
-          <!-- idle state -->
-          <div v-if="trajStatus === 'idle'" class="upload-prompt">
-            <el-icon class="upload-icon" :size="40"><Upload /></el-icon>
-            <div class="upload-text">
-              <span>Drag trajectory file here or </span>
-              <el-button type="primary" link>click to upload</el-button>
-            </div>
-            <div class="upload-hint">
-              Supports XDATCAR or other trajectory formats
-            </div>
-          </div>
-
-          <!-- hashing / checking / uploading / done / error -->
-          <div v-else class="traj-status-area" @click.stop>
-            <div class="traj-file-info">
-              <el-icon><Document /></el-icon>
-              <span class="traj-file-name">{{ trajFileName }}</span>
-              <span class="traj-file-size">({{ formatFileSize(trajFileSize) }})</span>
-              <el-button
-                v-if="trajStatus !== 'uploading'"
-                type="danger"
-                link
-                @click.stop="clearTrajFile"
-              >
-                Remove
-              </el-button>
-            </div>
-
-            <!-- hashing progress -->
-            <div v-if="trajStatus === 'hashing'" class="traj-progress-row">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>Calculating file hash...</span>
-              <el-progress
-                :percentage="trajHashProgress"
-                :show-text="true"
-                :stroke-width="8"
-                style="flex: 1; margin-left: 8px;"
-              />
-            </div>
-
-            <!-- checking server -->
-            <div v-if="trajStatus === 'checking'" class="traj-progress-row">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>Checking server...</span>
-            </div>
-
-            <!-- uploading progress -->
-            <div v-if="trajStatus === 'uploading'" class="traj-progress-row">
-              <span>Uploading...</span>
-              <el-progress
-                :percentage="trajUploadProgress"
-                :show-text="true"
-                :stroke-width="8"
-                status="warning"
-                style="flex: 1; margin-left: 8px;"
-              />
-            </div>
-
-            <!-- done -->
-            <div v-if="trajStatus === 'done'" class="traj-done-area">
-              <div class="traj-progress-row traj-done">
-                <el-icon color="var(--el-color-success)"><SuccessFilled /></el-icon>
-                <span>{{ trajSkippedUpload ? 'File already on server' : 'Upload complete' }}</span>
-              </div>
-              <div v-if="trajSummary" class="traj-summary">
-                {{ trajSummary.formula }} · {{ trajSummary.num_atoms }} atoms{{ trajSummary.num_frames ? ` · ${trajSummary.num_frames} frames` : '' }}
-              </div>
-              <div class="traj-hash-display">
-                MD5: <code>{{ trajHash }}</code>
-              </div>
-            </div>
-
-            <!-- error -->
-            <div v-if="trajStatus === 'error'" class="traj-progress-row traj-error">
-              <el-icon color="var(--el-color-danger)"><CircleClose /></el-icon>
-              <span>{{ trajErrorMsg }}</span>
-              <el-button type="primary" link @click.stop="retryTrajUpload">Retry</el-button>
-            </div>
-          </div>
-        </div>
+        <TrajectoryUploader
+          :status="trajStatus"
+          :hash="trajHash"
+          :file-name="trajFileName"
+          :file-size="trajFileSize"
+          :hash-progress="trajHashProgress"
+          :upload-progress="trajUploadProgress"
+          :skipped-upload="trajSkippedUpload"
+          :summary="trajSummary"
+          :error-message="trajErrorMsg"
+          @file-selected="processTrajFile"
+          @clear="clearTrajFile"
+          @retry="retryTrajUpload"
+        />
       </el-card>
 
       <!-- Method & Basic Settings section -->
@@ -338,7 +256,7 @@
           <template v-for="(step, stepIdx) in formData.steps" :key="step">
             <!-- Fused mode info alert -->
             <el-alert
-              v-if="step === 'fused_scf_prenamd'"
+              v-if="step === FUSED_SCF_PRENAMD"
               title="Fused mode forces single-node execution for SCF"
               type="info"
               :closable="false"
@@ -381,7 +299,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, QuestionFilled, Upload, Document, Loading, SuccessFilled, CircleClose } from '@element-plus/icons-vue'
+import { FUSED_SCF_PRENAMD } from '@/constants/steps'
+import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import SparkMD5 from 'spark-md5'
 import PoscarUploader from '@/components/PoscarUploader.vue'
@@ -389,10 +308,11 @@ import StepSelector from '@/components/StepSelector.vue'
 import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import StructureViewer from '@/components/StructureViewer.vue'
+import TrajectoryUploader from '@/components/TrajectoryUploader.vue'
 import { validatePoscar, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
-import { buildDefaultsFromSchema } from '@/utils/schema-form'
+import { buildDefaultsFromSchema, resolveDiscriminatorBranch } from '@/utils/schema-form'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
@@ -416,7 +336,7 @@ interface StepInputEntry {
 }
 
 function getStepInputEntries(step: string): StepInputEntry[] {
-  if (step === 'fused_scf_prenamd') {
+  if (step === FUSED_SCF_PRENAMD) {
     return [
       { inputKey: 'scf_input', schemaKey: 'scf', label: 'SCF Parameters' },
       { inputKey: 'prenamd_input', schemaKey: 'pre_namd', label: 'Pre-NAMD Parameters' },
@@ -458,10 +378,8 @@ const resumeTasksLoading = ref(false)
 const selectedResumeTaskId = ref<string | null>(null)
 const selectedResumeTask = ref<TaskSummary | null>(null)
 
-// Trajectory upload state
+// Trajectory upload state (parent-owned to survive v-if unmount)
 type TrajStatus = 'idle' | 'hashing' | 'checking' | 'uploading' | 'done' | 'error'
-const trajInputRef = ref<HTMLInputElement>()
-const trajDragover = ref(false)
 const trajStatus = ref<TrajStatus>('idle')
 const trajFile = ref<File | null>(null)
 const trajFileName = ref('')
@@ -481,7 +399,7 @@ const trajVersion = ref(0) // Concurrency guard: prevents stale async flows from
 const isSCFFirstStep = computed(() => {
   if (submitMode.value !== 'new') return false
   if (formData.steps.length === 0) return false
-  return formData.steps[0] === 'scf' || formData.steps[0] === 'fused_scf_prenamd'
+  return formData.steps[0] === 'scf' || formData.steps[0] === FUSED_SCF_PRENAMD
 })
 
 /**
@@ -676,39 +594,16 @@ watch(
     if (!schemas.value) return
     const nveSchema = schemas.value.nve
     if (!nveSchema?.properties?.calculator?.anyOf) return
-    const defs = nveSchema.$defs ?? {}
 
-    // Build enum→branch mapping (same logic as DynamicStepForm's resolveAnyOfDiscriminator)
-    const refBranches = nveSchema.properties.calculator.anyOf
-      .filter((b: { $ref?: string }) => b.$ref)
-      .map((b: { $ref?: string }) => {
-        const defName = b.$ref?.replace('#/$defs/', '') ?? ''
-        return { defName, schema: defs[defName] }
-      })
-      .filter((b: { schema?: unknown }) => b.schema)
-
+    // Use shared discriminator branch resolver
     const softwareEnum = ['vasp', 'nequip', 'mace']
-    const branchByEnum = new Map<string, Record<string, unknown>>()
-    const unmatched: { defName: string; schema: Record<string, unknown> }[] = []
+    const targetSchema = resolveDiscriminatorBranch({
+      prop: nveSchema.properties.calculator,
+      rootSchema: nveSchema,
+      enumValues: softwareEnum,
+      value: newSoftware,
+    })
 
-    for (const branch of refBranches) {
-      const title = (branch.schema.title ?? branch.defName)
-        .replace(/InputT?$/i, '').toLowerCase()
-      const matched = softwareEnum.find(
-        (ev) => title === ev || title.includes(ev)
-      )
-      if (matched && !branchByEnum.has(matched)) {
-        branchByEnum.set(matched, branch.schema as Record<string, unknown>)
-      } else {
-        unmatched.push(branch as { defName: string; schema: Record<string, unknown> })
-      }
-    }
-    const unmatchedEnums = softwareEnum.filter((ev) => !branchByEnum.has(ev))
-    for (let i = 0; i < Math.min(unmatched.length, unmatchedEnums.length); i++) {
-      branchByEnum.set(unmatchedEnums[i], unmatched[i].schema)
-    }
-
-    const targetSchema = branchByEnum.get(String(newSoftware))
     if (targetSchema) {
       const defaults = buildDefaultsFromSchema(
         targetSchema as Parameters<typeof buildDefaultsFromSchema>[0],
@@ -873,36 +768,6 @@ async function computeFileMD5(file: File, onProgress?: (percent: number) => void
   return spark.end()
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
-function triggerTrajInput(): void {
-  if (trajStatus.value === 'idle') {
-    trajInputRef.value?.click()
-  }
-}
-
-function handleTrajDrop(e: DragEvent): void {
-  trajDragover.value = false
-  const files = e.dataTransfer?.files
-  if (files && files.length > 0) {
-    processTrajFile(files[0])
-  }
-}
-
-function handleTrajFileChange(e: Event): void {
-  const input = e.target as HTMLInputElement
-  if (input.files && input.files.length > 0) {
-    processTrajFile(input.files[0])
-  }
-  // Reset input value so selecting the same file again triggers change
-  input.value = ''
-}
-
 function clearTrajFile(): void {
   trajVersion.value++ // Invalidate any in-flight async operations
   trajFile.value = null
@@ -977,9 +842,10 @@ async function processTrajFile(file: File): Promise<void> {
   } catch (err) {
     if (trajVersion.value !== myVersion) return // Superseded; discard stale error
     // Extract detail from axios error response, fall back to generic message
-    const axiosErr = err as any
-    trajErrorMsg.value = axiosErr?.response?.data?.detail
-      || (err instanceof Error ? err.message : 'Upload failed')
+    const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+    trajErrorMsg.value = typeof detail === 'string'
+      ? detail
+      : err instanceof Error ? err.message : 'Upload failed'
     trajStatus.value = 'error'
   }
 }
@@ -1121,7 +987,7 @@ async function handleSubmit(): Promise<void> {
   }
 
   // Fused mode: force scf_input.nodes = 1 before payload construction
-  if (formData.steps.includes('fused_scf_prenamd')) {
+  if (formData.steps.includes(FUSED_SCF_PRENAMD)) {
     const scfInput = formData.scf_input as Record<string, unknown>
     if (scfInput) {
       scfInput.nodes = 1
@@ -1275,113 +1141,6 @@ async function handleSubmit(): Promise<void> {
   font-size: 14px;
   color: var(--fg-placeholder);
   cursor: help;
-}
-
-/* Trajectory uploader — visually matched to PoscarUploader */
-.traj-uploader {
-  border: 2px dashed var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: 40px 20px;
-  text-align: center;
-  cursor: pointer;
-  transition: border-color var(--dur-base) var(--ease-standard),
-              background-color var(--dur-base) var(--ease-standard);
-  background-color: var(--bg-surface);
-}
-
-.traj-uploader:hover {
-  border-color: var(--brand-primary);
-  background-color: var(--bg-surface-alt);
-}
-
-.traj-uploader.is-dragover {
-  border-color: var(--brand-primary);
-  background-color: var(--brand-primary-soft);
-}
-
-.upload-prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.upload-icon {
-  font-size: 48px;
-  color: var(--fg-placeholder);
-}
-
-.upload-text {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--fg-tertiary);
-}
-
-.upload-hint {
-  font-size: var(--fs-12);
-  color: var(--fg-placeholder);
-}
-
-.traj-status-area {
-  cursor: default;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.traj-file-info {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font: var(--text-body);
-}
-
-.traj-file-name {
-  font: var(--text-body-strong);
-  font-family: var(--font-mono);
-}
-
-.traj-file-size {
-  color: var(--fg-tertiary);
-}
-
-.traj-progress-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font: var(--text-small);
-}
-
-.traj-done {
-  color: var(--success-fg);
-}
-
-.traj-error {
-  color: var(--danger-fg);
-}
-
-.traj-done-area {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.traj-summary {
-  font: var(--text-body-strong);
-  color: var(--fg-primary);
-}
-
-.traj-hash-display {
-  font: var(--text-caption);
-  color: var(--fg-tertiary);
-}
-
-.traj-hash-display code {
-  font-family: var(--font-mono);
-  background: var(--bg-surface-alt);
-  padding: 1px 4px;
-  border-radius: var(--radius-sm);
 }
 
 /* Pool status card */
