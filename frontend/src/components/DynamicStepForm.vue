@@ -31,6 +31,8 @@
             <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
           </el-select>
         </div>
+        <!-- Config importer (e.g. HamGNN config.yaml drag-drop) -->
+        <ConfigImporter v-if="shouldShowConfigImporter(item)" ref="configImporterRef" :spec="item.configImport!" @import="handleConfigImport(item, $event)" />
         <el-row :gutter="16">
           <el-col v-for="gf in item.fields" :key="gf.key" :span="gf.colSpan">
             <el-form-item>
@@ -38,6 +40,9 @@
                 <span>
                   {{ gf.schema.title }}
                   <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                  <el-tooltip v-if="isModifiedSinceImport(gf.path)" content="Value differs from imported config" placement="top" :show-after="300">
+                    <el-icon class="config-modified-icon"><WarningFilled /></el-icon>
+                  </el-tooltip>
                   <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
                     <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
                   </el-tooltip>
@@ -90,6 +95,9 @@
                     <span>
                       {{ gf.schema.title }}
                       <span v-if="gf.schema._required" class="required-field-mark"> *</span>
+                      <el-tooltip v-if="isModifiedSinceImport(gf.path)" content="Value differs from imported config" placement="top" :show-after="300">
+                        <el-icon class="config-modified-icon"><WarningFilled /></el-icon>
+                      </el-tooltip>
                       <el-tooltip v-if="gf.schema.description" :content="gf.schema.description" placement="top" :show-after="300">
                         <el-icon class="param-help-icon"><QuestionFilled /></el-icon>
                       </el-tooltip>
@@ -107,11 +115,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch, provide } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
+import { computed, reactive, ref, watch, provide } from 'vue'
+import { QuestionFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { uploadModel } from '@/api/tasks'
 import FieldWidget from '@/components/FieldWidget.vue'
+import ConfigImporter from '@/components/ConfigImporter.vue'
+import type { ConfigImportSpec, ConfigImportResult } from '@/components/ConfigImporter.vue'
 import {
   resolveLocalRef,
   normalizeNullableSchema,
@@ -346,6 +356,9 @@ function buildFieldDescriptors(
         const branchTitle = resolvedBranch.title?.replace(/InputT?$/i, '') ?? ''
         const parentTitle = branchTitle ? `${baseTitle} — ${branchTitle}` : baseTitle
 
+        // Detect x-config-import metadata on the resolved branch schema
+        const branchConfigImport = resolvedBranch['x-config-import'] as ConfigImportSpec | undefined
+
         // Find the discriminator sibling enum for embedding in group header
         let discriminatorKey: string | undefined
         let discriminatorEnum: unknown[] | undefined
@@ -373,6 +386,7 @@ function buildFieldDescriptors(
             _parentDiscriminatorEnum: discriminatorEnum,
             _parentAnyOfPath: fullPath,
             _parentAnyOfProp: prop,
+            _parentConfigImport: branchConfigImport,
           }
           if (parentGroup && !f.group) f.group = parentGroup
         }
@@ -537,6 +551,8 @@ interface GroupItem {
   anyOfPath?: string
   /** Original property schema of the sibling anyOf field (contains discriminator metadata) */
   anyOfProp?: JsonSchemaObject
+  /** Config import spec from x-config-import schema metadata */
+  configImport?: ConfigImportSpec
 }
 
 type FieldOrGroup = FieldRowItem | GroupItem
@@ -580,6 +596,7 @@ function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
         const titleBase = f.schema._parentTitleBase as string | undefined
         const aoPath = f.schema._parentAnyOfPath as string | undefined
         const aoProp = f.schema._parentAnyOfProp as JsonSchemaObject | undefined
+        const cfgImport = f.schema._parentConfigImport as ConfigImportSpec | undefined
         currentGroup = {
           type: 'group',
           title: parent,
@@ -590,6 +607,7 @@ function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
           discriminatorEnum: discEnum,
           anyOfPath: aoPath,
           anyOfProp: aoProp,
+          configImport: cfgImport,
         }
       } else {
         // Start a new row batch
@@ -684,6 +702,85 @@ function isFieldDisabled(field: FieldDescriptor): boolean {
   }
   return false
 }
+
+// --- Config import state ---
+const configImporterRef = ref<InstanceType<typeof ConfigImporter> | null>(null)
+const importedFieldValues = reactive<Record<string, unknown>>({})
+
+function handleConfigImport(item: GroupItem, result: ConfigImportResult): void {
+  const updates = result.updates.map(u => ({
+    path: item.anyOfPath ? `${item.anyOfPath}.${u.path}` : u.path,
+    value: u.value,
+  }))
+  // Clear previous import records before recording new ones
+  for (const key of Object.keys(importedFieldValues)) {
+    delete importedFieldValues[key]
+  }
+  for (const u of updates) {
+    importedFieldValues[u.path] = u.value
+  }
+  emitFieldValues(updates)
+  ElMessage.success(`Imported ${result.count} fields from ${result.fileName}`)
+}
+
+function isModifiedSinceImport(path: string): boolean {
+  if (!(path in importedFieldValues)) return false
+  const imported = importedFieldValues[path]
+  const current = getFieldValue(path)
+  return JSON.stringify(imported) !== JSON.stringify(current)
+}
+
+function shouldShowConfigImporter(item: GroupItem): boolean {
+  if (!item.configImport || !item.anyOfPath) return false
+  const pretrainedPath = `${item.anyOfPath}.use_pretrained_model`
+  const val = getFieldValue(pretrainedPath)
+  return val === false
+}
+
+// Watch use_pretrained_model + model_name: apply pretrained overrides from schema.
+// When a pretrained model is selected, update frozen fields to show the model's
+// actual values instead of the generic defaults from input.py.
+watch(
+  [() => props.modelValue, allFields],
+  () => {
+    for (const item of [...regularFieldsGrouped.value, ...advancedFieldsGrouped.value]) {
+      if (item.type === 'field-row' || !item.anyOfPath || !item.anyOfProp) continue
+
+      // Resolve the current anyOf branch to find x-pretrained-overrides
+      const disc = item.anyOfProp.discriminator as { mapping?: Record<string, string> } | undefined
+      if (!disc?.mapping) continue
+      const discPath = item.discriminatorPath
+      if (!discPath) continue
+      const discValue = String(getFieldValue(discPath) ?? '')
+      const branchRef = disc.mapping[discValue]
+      if (!branchRef) continue
+      const branchSchema = resolveLocalRef(props.schema, branchRef)
+      const overridesMap = branchSchema?.['x-pretrained-overrides'] as Record<string, Record<string, unknown>> | undefined
+      if (!overridesMap) continue
+
+      const pretrainedPath = `${item.anyOfPath}.use_pretrained_model`
+      const modelNamePath = `${item.anyOfPath}.model_name`
+      const usePretrained = getFieldValue(pretrainedPath)
+      const modelName = String(getFieldValue(modelNamePath) ?? '')
+
+      if (usePretrained && modelName && overridesMap[modelName]) {
+        const overrides = overridesMap[modelName]
+        const updates: { path: string; value: unknown }[] = []
+        for (const [key, value] of Object.entries(overrides)) {
+          const fullPath = `${item.anyOfPath}.${key}`
+          const current = getFieldValue(fullPath)
+          if (JSON.stringify(current) !== JSON.stringify(value)) {
+            updates.push({ path: fullPath, value })
+          }
+        }
+        if (updates.length > 0) {
+          emitFieldValues(updates)
+        }
+      }
+    }
+  },
+  { deep: true },
+)
 
 const csvDrafts = reactive<Record<string, string>>({})
 const numberDrafts = reactive<Record<string, string>>({})
@@ -1246,6 +1343,14 @@ provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
 
 .step-note li {
   margin-bottom: 2px;
+}
+
+/* --- Config import modification marker --- */
+:deep(.config-modified-icon) {
+  font-size: 14px;
+  color: var(--el-color-warning);
+  cursor: help;
+  margin-left: 2px;
 }
 
 </style>

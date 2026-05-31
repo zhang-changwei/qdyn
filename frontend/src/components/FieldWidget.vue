@@ -117,13 +117,14 @@ const ctx = inject(FIELD_WIDGET_CONTEXT_KEY)!
   display: flex;
   align-items: center;
   cursor: not-allowed;
+  overflow: hidden;
+  width: 100%;
 }
 
 .field-disabled-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-all;
+  width: 100%;
 }
 
 :deep(.el-input-number) {

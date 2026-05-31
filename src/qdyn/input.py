@@ -8,6 +8,7 @@ import numpy as np
 from .params import NEQUIP_PRETRAINED_MODELS_TYPE
 from .params import MACE_PRETRAINED_MODELS_TYPE
 from .params import HAMGNN_PRETRAINED_MODELS_TYPE
+from .params import HAMGNN_PRETRAINED_CONFIGS
 from .params import HASH_PATTERN
 
 ## Important!
@@ -157,6 +158,40 @@ class _HamGNNInputAdvT(BaseModel):
 
 class HamGNNInputT(BaseModel):
     """Input parameters for HamGNN tight-binding Hamiltonian construction."""
+    model_config = ConfigDict(json_schema_extra={
+        "x-config-import": {
+            "format": "yaml",
+            "maxBytes": 262144,
+            "hint": "Drop HamGNN config.yaml here to auto-fill parameters",
+            "set": {"use_pretrained_model": False, "model_name": ""},
+            "mapping": {
+                "output_nets.HamGNN_out.ham_type": "ham_type",
+                "output_nets.HamGNN_out.nao_max": "nao_max",
+                "output_nets.HamGNN_out.add_H0": "add_H0",
+                "representation_nets.HamGNN_pre.cutoff": "cutoff",
+                "representation_nets.HamGNN_pre.irreps_edge_sh": "irreps_edge_sh",
+                "representation_nets.HamGNN_pre.irreps_node_features": "irreps_node_features",
+                "representation_nets.HamGNN_pre.num_layers": "num_layers",
+                "representation_nets.HamGNN_pre.cutoff_func": "adv.cutoff_func",
+                "representation_nets.HamGNN_pre.edge_sh_normalization": "adv.edge_sh_normalization",
+                "representation_nets.HamGNN_pre.edge_sh_normalize": "adv.edge_sh_normalize",
+                "representation_nets.HamGNN_pre.num_radial": "adv.num_radial",
+                "representation_nets.HamGNN_pre.num_types": "adv.num_types",
+                "representation_nets.HamGNN_pre.rbf_func": "adv.rbf_func",
+                "representation_nets.HamGNN_pre.set_features": "adv.set_features",
+                "representation_nets.HamGNN_pre.radial_MLP": "adv.radial_MLP",
+                "representation_nets.HamGNN_pre.use_corr_prod": "adv.use_corr_prod",
+                "representation_nets.HamGNN_pre.correlation": "adv.correlation",
+                "representation_nets.HamGNN_pre.num_hidden_features": "adv.num_hidden_features",
+                "representation_nets.HamGNN_pre.use_kan": "adv.use_kan",
+                "representation_nets.HamGNN_pre.radius_scale": "adv.radius_scale",
+                "representation_nets.HamGNN_pre.build_internal_graph": "adv.build_internal_graph",
+                "representation_nets.HamGNN_pre.legacy_edge_update": "adv.legacy_edge_update",
+            }
+        },
+        "x-pretrained-overrides": HAMGNN_PRETRAINED_CONFIGS,
+    })
+
     version: Literal['v2.1'] = Field(
         default='v2.1',
         description='HamGNN model version',
@@ -223,32 +258,14 @@ class HamGNNInputT(BaseModel):
     def apply_pretrained_defaults(self) -> 'HamGNNInputT':
         if not self.use_pretrained_model:
             return self
-        if self.model_name == 'universal2.0':
-            self.ham_type = 'openmx'
-            self.nao_max = 26
-            self.add_H0 = True
-            self.cutoff = 26.0
-            self.irreps_edge_sh = '0e + 1o + 2e + 3o + 4e + 5o + 6e'
-            self.irreps_node_features = (
-                '128x0e+32x1o+32x1e+32x2o+32x2e+32x3o+32x3e'
-                '+16x4o+16x4e+16x5o+8x5e+8x6e'
-            )
-            self.num_layers = 3
-            self.adv = _HamGNNInputAdvT(
-                legacy_edge_update=True,
-                cutoff_func='cos',
-                num_radial=128,
-                num_types=128,
-                rbf_func='bessel',
-                set_features=True,
-                radial_MLP=[128, 128],
-                use_corr_prod=True,
-                num_hidden_features=32,
-                use_kan=False,
-                radius_scale=1.01,
-                build_internal_graph=False,
-                num_heads=4,
-            )
+        defaults = HAMGNN_PRETRAINED_CONFIGS.get(self.model_name)
+        if defaults is None:
+            return self
+        for key, value in defaults.items():
+            if key == "adv":
+                self.adv = _HamGNNInputAdvT(**value)
+            else:
+                setattr(self, key, value)
         return self
 
 
