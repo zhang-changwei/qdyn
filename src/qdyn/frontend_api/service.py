@@ -1735,7 +1735,7 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
         if access.root_file_exists("qdyn_md.log"):
             data = parse_qdyn_log_text(access.read_root_text("qdyn_md.log"))
             current_step = data['steps'][-1]
-            total_steps = data['total_logged_steps'] * data['interval']
+            total_steps = data['total_steps']
             last_temp = data['temperatures'][-1]
             last_energy = data['potential_energies'][-1]
     except Exception as exc:
@@ -2333,10 +2333,9 @@ def get_job_md_timeseries(
             total_steps = int(nsw_val)
     # If INCAR is missing but qdyn_md.log header has total info, derive NSW
     if total_steps is None:
-        interval = raw_data.get('interval', 1)
-        total_logged = raw_data.get('total_logged_steps', 0)
-        if total_logged > 0:
-            total_steps = total_logged * interval
+        total_from_header = raw_data.get('total_steps', 0)
+        if total_from_header > 0:
+            total_steps = total_from_header
 
     stats = MDTimeseriesStats(
         current_step=raw_data['steps'][-1] if raw_data['steps'] else 0,

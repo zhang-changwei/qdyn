@@ -64,7 +64,7 @@ class MDProgressMonitor:
             self.log_file = open('qdyn_md.log', 'w')
             # Write header
             self.log_file.write(
-                f"Step: {self.nstep // self.log_every}, Interval: {self.log_every}\n"
+                f"Step: {self.nstep}, Interval: {self.log_every}\n"
                 f"Time[ps]       Etot[eV]     Epot[eV]     Ekin[eV]         T[K]\n"
             )
             self.log_file.flush()
