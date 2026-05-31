@@ -7,7 +7,6 @@ import sqlite3
 from typing import Any, Tuple, Dict, List, Literal, Sequence
 
 from ase import Atoms
-import ase.io
 from jobflow.core.job import Job
 from jobflow.core.flow import Flow
 from jobflow_remote import SETTINGS, set_run_config, submit_flow
@@ -21,7 +20,7 @@ from .input import (
 )
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
-from .calc_common import TRAJ_FORMAT_MAPPING
+from .calc_common import TRAJ_FORMAT_MAPPING, read_stru
 from .pool import WorkerPool
 
 from .tools.nvt import qdyn_nvt
@@ -244,7 +243,8 @@ class MainWorkflow:
                     "Cannot resume nvt."
                 ) from exc
         elif stru:
-            structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore[arg-type]
+            with io.StringIO(stru) as s:
+                structure = read_stru(stru_format, s).todict()
             if structure.get('constraints') is not None:
                 structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
         else:
@@ -335,7 +335,8 @@ class MainWorkflow:
                     "Cannot resume nve."
                 ) from exc
         elif stru:
-            structure = ase.io.read(io.StringIO(stru), format=stru_format).todict()  # type: ignore[arg-type]
+            with io.StringIO(stru) as s:
+                structure = read_stru(stru_format, s).todict()
             if structure.get('constraints') is not None:
                 structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
         else:

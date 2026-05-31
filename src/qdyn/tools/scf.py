@@ -21,7 +21,8 @@ from pydantic import BaseModel
 
 from ..calc_common import write_stru, read_strus, change_dir
 from ..input import SCFInputT, DFTBaseInputT
-from ..params import params_default, CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
+from ..params import params_default, CHG_FNAME, INPUT_FNAMES
+from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
 from .run_software import run_software
@@ -299,7 +300,12 @@ def qdyn_scf_cpu(
         subdir.mkdir(exist_ok=True)
         for fname in files_to_copy:
             shutil.copy2(task_dir / fname, subdir / fname)
-        write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
+        write_stru(
+            subdir / STRU_FNAME_MAPPING[software_dft],
+            stru,
+            stru_format=STRU_FORMAT_MAPPING[software_dft],
+            extras=dftinputs.stru_extras
+        )
 
         # Copy CHGCAR from previous successful calculation for faster convergence
         if prev_chgcar and prev_chgcar.is_file():
@@ -345,7 +351,12 @@ def qdyn_scf_cpu(
             atoms.extend(strus[idx + 1])
             for fname in files_to_copy:
                 shutil.copy2(subdir / fname, olapdir / fname)
-            write_stru(software_dft, atoms, olapdir, extras=dftinputs.stru_extras)
+            write_stru(
+                olapdir / STRU_FNAME_MAPPING[software_dft],
+                atoms,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
 
             with change_dir(olapdir):
                 run_software(

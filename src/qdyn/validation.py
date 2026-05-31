@@ -4,8 +4,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Collection
-
-import ase.io
 import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
@@ -16,6 +14,7 @@ from .ml_tools.mlff_wrapper import (
     nequip_pretrained_model_filename,
     hamgnn_pretrained_model_filename,
 )
+from .calc_common import read_stru
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -521,7 +520,8 @@ def validate_workflow_input(
     # stru / stru_hash check
     elif stru:
         try:
-            ase.io.read(io.StringIO(stru), format=stru_format, index=":")
+            with io.StringIO(stru) as s:
+                read_stru(stru_format, s)
         except Exception as exc:
             raise ValidationError(
                 f"Provided structure string could not be parsed "

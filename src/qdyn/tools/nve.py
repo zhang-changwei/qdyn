@@ -2,16 +2,15 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
-import ase.io
 from ase import Atoms
 from jobflow.core.job import job
 import numpy as np
 
-
+from ..calc_common import write_stru
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
     params_default, TRAJ_FNAME_MAPPING, 
-    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
 )
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
@@ -100,18 +99,20 @@ def qdyn_nve(
             run_software(software_lower, nprocs, monitor=m)
     
     else:
-        ase.io.write(STRU_FNAME_MAPPING[software_lower],
-                     cstru,
-                     format=STRU_FORMAT_MAPPING[software_lower],)
+        write_stru(STRU_FNAME_MAPPING[software_lower],
+                   cstru,
+                   stru_format=STRU_FORMAT_MAPPING[software_lower],
+                   extras=None)
         if prepare_input_only:
             return {
                 'run_dir': str(Path.cwd()),
                 'software': software,
             }
         converged, _ = _run_ase_nve(cstru, parameters, model_path)
-        ase.io.write(STRU2_FNAME_MAPPING[software_lower],
-                     cstru,
-                     format=STRU_FORMAT_MAPPING[software_lower],)
+        write_stru(STRU2_FNAME_MAPPING[software_lower],
+                   cstru,
+                   stru_format=STRU2_FORMAT_MAPPING[software_lower],
+                   extras=None)
         if not converged:
             raise RuntimeError(
                 "NVE calculation failed: ASE MD did not converge properly. "

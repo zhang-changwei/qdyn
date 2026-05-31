@@ -6,13 +6,12 @@ from pathlib import Path
 import shutil
 from typing import Any, Dict, List, Tuple, Union
 
-import ase.io
 import numpy as np
 from ase import Atoms
 from pymatgen.io.vasp import Incar
 
-from .calc_common import write_stru
-from .params import PSEUDO_POTENTIAL
+from .calc_common import write_stru, read_stru
+from .params import PSEUDO_POTENTIAL, STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
 
 
 class DFTInputs:
@@ -64,7 +63,7 @@ class DFTInputs:
 
         if software == 'vasp':
             if stru_file is not None:
-                obj._stru = ase.io.read(stru_file, format='vasp')
+                obj._stru = read_stru('vasp', stru_file)
             if kpoints_file is not None:
                 from pymatgen.io.vasp import Kpoints
 
@@ -176,7 +175,8 @@ class DFTInputs:
             else:
                 inputs_base = inputs_dict
             if inputs_params:
-                inputs_append = parse_openmx_dat(io.StringIO(inputs_params))
+                with io.StringIO(inputs_params) as s:
+                    inputs_append = parse_openmx_dat(s)
                 inputs_base.update(inputs_append)
             # Standardize default fields and stru fields
             inputs_base.pop('system.currentdirectory', None)
@@ -216,7 +216,10 @@ class DFTInputs:
         if kpoints:
             self.write_kpoints(software, folder)
         if stru:
-            write_stru(software, self.stru, folder, self.stru_extras)
+            write_stru(folder / STRU_FNAME_MAPPING[software], 
+                       self.stru,
+                       STRU_FORMAT_MAPPING[software], 
+                       self.stru_extras)
         if pp:
             self.write_pp(software, folder)
 

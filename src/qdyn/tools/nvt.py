@@ -5,15 +5,15 @@ from pathlib import Path
 from typing import Literal
 from copy import deepcopy
 
-import ase.io
 import numpy as np
-
 
 from ase import Atoms
 from jobflow.core.job import job
 
+from ..calc_common import read_stru, write_stru
 from ..input import NVTInputT, DFTBaseInputT
-from ..params import params_default, BAK_FNAMES, STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+from ..params import params_default, BAK_FNAMES
+from ..params import STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .run_software import run_software, MDProgressMonitor
@@ -96,7 +96,7 @@ def qdyn_nvt(
 
         if isinstance(calculator, DFTBaseInputT):
             # Prepare input files
-            _prepare_nvt_input(
+            dftinputs = _prepare_nvt_input(
                 software=software_lower,
                 structure=cur_stru, # type: ignore
                 parameters=parameters,
@@ -125,12 +125,13 @@ def qdyn_nvt(
             ) as m:
                 run_software(software_lower, nprocs, monitor=m)
             # update structure
-            cur_stru = ase.io.read(STRU2_FNAME_MAPPING[software_lower],
-                                   format=STRU_FORMAT_MAPPING[software_lower])
+            cur_stru = read_stru(STRU2_FORMAT_MAPPING[software_lower],
+                                 STRU2_FNAME_MAPPING[software_lower])
         else:
-            ase.io.write(STRU_FNAME_MAPPING[software_lower],
-                         cur_stru,
-                         format=STRU_FORMAT_MAPPING[software_lower],)
+            write_stru(STRU_FNAME_MAPPING[software_lower],
+                       cur_stru,
+                       stru_format=STRU_FORMAT_MAPPING[software_lower],
+                       extras=None)
             if prepare_input_only:
                 return {
                     'run_dir': str(Path.cwd()),
@@ -145,9 +146,10 @@ def qdyn_nvt(
                 temp_beg=temp_beg,
                 temp_end=temp_end,
             )
-            ase.io.write(STRU2_FNAME_MAPPING[software_lower],
-                         cur_stru,
-                         format=STRU_FORMAT_MAPPING[software_lower],)
+            write_stru(STRU2_FNAME_MAPPING[software_lower],
+                       cur_stru,
+                       stru_format=STRU2_FORMAT_MAPPING[software_lower],
+                       extras=None)
             if check_convergence and not scf_converged:
                 raise RuntimeError("NVT calculation failed: "
                                    "SCF did not converge in ASE MD run.")
@@ -279,6 +281,7 @@ def _prepare_nvt_input(
         raise NotImplementedError(
             f"Software {software} is not supported for NVT input preparation yet."
         )
+    return dftinputs
 
 
 def check_nvt_convergence(

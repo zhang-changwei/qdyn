@@ -121,6 +121,7 @@ STRU2_FNAME_MAPPING = {
     'vasp': 'CONTCAR',
     'nequip': 'nequip_out.vasp',
     'mace': 'mace_out.vasp',
+    'openmx': 'qdyn.xyz',
 }
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
@@ -133,6 +134,12 @@ STRU_FORMAT_MAPPING = {
     'nequip': 'vasp',
     'mace': 'vasp',
     'openmx': 'openmx-dat',
+}
+STRU2_FORMAT_MAPPING = {
+    'vasp': 'vasp',
+    'nequip': 'vasp',
+    'mace': 'vasp',
+    'openmx': 'xyz',
 }
 # ASE format strings for reading/writing trajectory files per software.
 # Used by read_strus(), write_strus(), and upload validation.

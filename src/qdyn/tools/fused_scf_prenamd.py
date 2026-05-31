@@ -11,7 +11,7 @@ from jobflow.core.job import job, Job
 from ..calc_common import write_stru, read_strus, change_dir, parse_band_index
 from ..input import SCFInputT, PreNAMDInputT, DFTBaseInputT
 from ..input_prepare import DFTInputs
-from ..params import CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
+from ..params import CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..output_postprocess import extract_band_edges, read_scfout, calc_openmx_HK_SK_gamma
 from .scf import TrajInfo, SCFLogger, SCFSolverStub
 from .scf import _prepare_scf_input, _validate_scf_output
@@ -254,7 +254,12 @@ def qdyn_fused_scf_prenamd_task(
             subdir.mkdir(exist_ok=True)
             for fname in files_to_copy:
                 os.symlink(task_dir / fname, subdir / fname)
-            write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
+            write_stru(
+                subdir / STRU_FNAME_MAPPING[software_dft], 
+                stru,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
 
             # Move CHGCAR from previous successful calculation for faster convergence
             if prev_chgcar and prev_chgcar.is_file():
@@ -323,9 +328,9 @@ def qdyn_fused_scf_prenamd_task(
                 for fname in files_to_copy:
                     os.symlink(subdir / fname, olapdir / fname)
                 write_stru(
-                    software_dft, 
-                    atoms, 
-                    olapdir, 
+                    olapdir / STRU_FNAME_MAPPING[software_dft],
+                    atoms,
+                    stru_format=STRU_FORMAT_MAPPING[software_dft],
                     extras=dftinputs_olap.stru_extras, # type: ignore
                 )
 
