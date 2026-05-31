@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
+from ..calc_common import read_stru
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
@@ -543,11 +544,9 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         """
         import io
 
-        import ase.io
-
         try:
-            # Attempt to parse the structure with ASE
-            atoms = ase.io.read(io.StringIO(payload.content), format="vasp")
+            # Attempt to parse the structure through the shared format router
+            atoms = read_stru("vasp", io.StringIO(payload.content))
 
             # Basic validation checks
             if atoms is None:
@@ -625,8 +624,6 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         """
         import io
 
-        import ase.io
-
         from ..input import SelDynInputT
         from ..tools.seldyn import add_constraints, extract_constraint_mask
 
@@ -635,9 +632,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         if req.stru_content:
             # Path A: Parse structure from raw file content
             try:
-                atoms = ase.io.read(
-                    io.StringIO(req.stru_content), format=req.stru_format,
-                )
+                atoms = read_stru(req.stru_format, io.StringIO(req.stru_content))
             except Exception as exc:
                 raise HTTPException(
                     status_code=422,
