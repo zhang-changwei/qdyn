@@ -87,8 +87,8 @@ class DFTBaseInputT(BaseModel):
         default=1e-6,
         ge=1e-12,
         le=1.0,
-        description=("Electronic convergence criterion (eV). "
-        " Hint: The unit is Hartree when using OPENMX."),
+        description=("Electronic convergence criterion. "
+                     "Unit: eV (VASP), Hartree (OpenMX), unitless (ABACUS)."),
         json_schema_extra={"widget": "log-step"},
     )
 
@@ -108,8 +108,14 @@ class NequipInputT(BaseModel):
     use_pretrained_model: bool = False
     model_name: NEQUIP_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: MD5HashStr = ''
-    energy_unit: Literal['eV', 'Ry', 'Ha'] = 'eV'
-    length_unit: Literal['Ang', 'Bohr'] = 'Ang'
+    energy_unit: Literal['eV', 'Ry', 'Ha'] = Field(
+        default='eV',
+        description='Energy unit of the training dataset'
+    )
+    length_unit: Literal['Ang', 'Bohr'] = Field(
+        default='Ang',
+        description='Length unit of the training dataset'
+    )
     dispersion: DispersionInputT | None = None
 
 class MACEInputT(BaseModel):
@@ -118,7 +124,10 @@ class MACEInputT(BaseModel):
     use_pretrained_model: bool = True
     model_name: MACE_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: MD5HashStr = ''
-    default_dtype: Literal['float32', 'float64'] = 'float32'
+    default_dtype: Literal['float32', 'float64'] = Field(
+        default='float32',
+        description='numeric precision of the MACE model',
+    )
     dispersion: DispersionInputT | None = None
 
 class _HamGNNInputAdvT(BaseModel):
@@ -147,10 +156,17 @@ class HamGNNInputT(BaseModel):
     model_name: HAMGNN_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: str = ''
     ham_type: Literal['abacus', 'openmx'] = 'openmx'
-    nao_max: int = 26
+    nao_max: Literal[13, 14, 19, 20, 26] = Field(
+        default=26,
+        description="Maximum number of NAOs per atom in the Hamiltonian."
+    )
     add_H0: bool = False
-    batch_size: int = 32
-
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        description="Number of structures per batch for HamGNN inference.",
+        json_schema_extra={"step": 8},
+    )
     cutoff: float = 24.0
     irreps_edge_sh: str = "0e + 1o + 2e + 3o + 4e"
     irreps_node_features: str = "64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e"

@@ -63,6 +63,8 @@ def _load_config(config: HamGNNInputT) -> dict[str, Any]:
             rep['radius_scale'] = 1.01
             rep['build_internal_graph'] = False
             rep['legacy_edge_update'] = True
+
+            config.add_H0 = True
         else:
             raise ValueError(f"Unsupported HamGNN pretrained model: {config.model_name}")
         
