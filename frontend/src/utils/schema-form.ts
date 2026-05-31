@@ -308,30 +308,70 @@ export function resolveDiscriminatorBranch(options: {
   // Build mapping: enum value → ref branch
   const enumStrings = enumValues.map(String)
   const branchByEnum = new Map<string, JsonSchemaObject>()
-  const unmatchedBranches: JsonSchemaObject[] = []
 
-  for (const { ref, schema } of refBranches) {
-    const defName = ref.startsWith('#/$defs/') ? ref.slice('#/$defs/'.length) : ''
-    const title = (schema.title ?? defName).replace(/InputT?$/i, '').toLowerCase()
-    const matched = enumStrings.find(
-      (ev) => title === ev.toLowerCase() || title.includes(ev.toLowerCase())
-    )
-    if (matched && !branchByEnum.has(matched)) {
-      branchByEnum.set(matched, schema)
-    } else {
-      unmatchedBranches.push(schema)
+  // Priority 1: use explicit discriminator.mapping from backend if available
+  const mapping = (prop.discriminator as Record<string, unknown> | undefined)?.mapping as
+    | Record<string, string>
+    | undefined
+  if (mapping) {
+    for (const [enumVal, refStr] of Object.entries(mapping)) {
+      const resolved = resolveLocalRef(rootSchema, refStr)
+      if (resolved?.properties) {
+        branchByEnum.set(enumVal, resolved)
+      }
     }
   }
 
-  // Assign unmatched branches to remaining enum values in order
+  // Priority 2: title heuristic for branches not yet matched
+  const unmatchedBranches: JsonSchemaObject[] = []
+  if (!mapping) {
+    for (const { ref, schema } of refBranches) {
+      const defName = ref.startsWith('#/$defs/') ? ref.slice('#/$defs/'.length) : ''
+      const title = (schema.title ?? defName).replace(/InputT?$/i, '').toLowerCase()
+      const matched = enumStrings.find(
+        (ev) => title === ev.toLowerCase() || title.includes(ev.toLowerCase())
+      )
+      if (matched && !branchByEnum.has(matched)) {
+        branchByEnum.set(matched, schema)
+      } else {
+        unmatchedBranches.push(schema)
+      }
+    }
+  }
+
+  // Assign unmatched branches to remaining enum values
+  // If only one unmatched branch but multiple unmatched enums, let it cover all
   const unmatchedEnums = enumStrings.filter((ev) => !branchByEnum.has(ev))
-  for (let i = 0; i < Math.min(unmatchedBranches.length, unmatchedEnums.length); i++) {
-    branchByEnum.set(unmatchedEnums[i], unmatchedBranches[i])
+  if (unmatchedBranches.length === 1 && unmatchedEnums.length > 0) {
+    for (const ev of unmatchedEnums) {
+      branchByEnum.set(ev, unmatchedBranches[0])
+    }
+  } else {
+    for (let i = 0; i < Math.min(unmatchedBranches.length, unmatchedEnums.length); i++) {
+      branchByEnum.set(unmatchedEnums[i], unmatchedBranches[i])
+    }
   }
 
   // Look up the target value; return undefined if no match (caller decides fallback)
   const targetValue = String(value ?? enumStrings[0])
   return branchByEnum.get(targetValue)
+}
+
+/**
+ * Retrieve per-discriminator default overrides from the property schema.
+ *
+ * Backend can annotate a discriminated union field with
+ * `json_schema_extra={"discriminator": {..., "x-defaultOverrides": {...}}}`.
+ * This function extracts the overrides for a specific discriminator value.
+ */
+export function getDiscriminatorOverrides(
+  prop: JsonSchemaObject,
+  discriminatorValue: string,
+): Record<string, unknown> | undefined {
+  const overrides =
+    (prop.discriminator as Record<string, unknown> | undefined)?.['x-defaultOverrides'] ??
+    (prop['x-discriminator'] as Record<string, unknown> | undefined)?.['x-defaultOverrides']
+  return (overrides as Record<string, Record<string, unknown>> | undefined)?.[discriminatorValue]
 }
 
 /**

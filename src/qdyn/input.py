@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, Field, field_validator, PositiveInt, AfterValidator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, PositiveInt, AfterValidator
 from typing import Literal, List, Any, Annotated
 
 import numpy as np
@@ -44,8 +44,14 @@ class SchedulerConfigT(BaseModel):
 
 
 class DispersionInputT(BaseModel):
-    algo: Literal['dftd2', 'dftd3'] = 'dftd3'
-    damping: Literal['zero', 'bj', 'zerom', 'bjm'] = 'bj'
+    algo: Literal['dftd2', 'dftd3'] = Field(
+        default='dftd3',
+        description='Dispersion correction algorithm',
+    )
+    damping: Literal['zero', 'bj', 'zerom', 'bjm'] = Field(
+        default='bj',
+        description='Damping function for dispersion correction',
+    )
     xc: str = 'pbe'
     cutoff: float = Field(
         default=40.0,
@@ -144,11 +150,17 @@ class _HamGNNInputAdvT(BaseModel):
     use_kan: bool = False
     radius_scale: float = 1.01
     build_internal_graph: bool = False
-    eigen_dtype: Literal['float32', 'float64'] = 'float64'
+    eigen_dtype: Literal['float32', 'float64'] = Field(
+        default='float64',
+        description='Numeric precision for eigenvalue solver',
+    )
 
 class HamGNNInputT(BaseModel):
     """Input parameters for HamGNN tight-binding Hamiltonian construction."""
-    version: Literal['v2.1'] = 'v2.1'
+    version: Literal['v2.1'] = Field(
+        default='v2.1',
+        description='HamGNN model version',
+    )
     use_gpu: bool = False
     use_pretrained_model: bool = False
     model_name: HAMGNN_PRETRAINED_MODELS_TYPE | Literal[''] = ''
@@ -426,17 +438,19 @@ class ThermostatsInputT(BaseModel):
 
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
-    _comment: str = (
-        "NVT simulations can be run for multiple rounds.\n"
-        "Different thermostats and step counts can be set per round.\n"
-        "- 1st round (Warmup): Recommend 'rescale_v' or 'bussi' thermostat\n"
-        "    with a larger step count to steadily reach equilibrium.\n"
-        "- Subsequent rounds (Production): Temperature fixed at 'temp_end'. \n"
-        "    Recommend 'bussi' or 'nhc' thermostats with fewer steps \n"
-        "    for correct ensemble sampling.\n"
-        "- Convergence check enabled in Production rounds.\n"
-        "    NVT completes once convergence is reached or round count is exhausted.\n"
-    )
+    model_config = ConfigDict(json_schema_extra={
+        "x-ui-note": (
+            "NVT simulations can be run for multiple rounds.\n"
+            "Different thermostats and step counts can be set per round.\n"
+            "- 1st round (Warmup): Recommend 'rescale_v' or 'bussi' thermostat\n"
+            "    with a larger step count to steadily reach equilibrium.\n"
+            "- Subsequent rounds (Production): Temperature fixed at 'temp_end'.\n"
+            "    Recommend 'bussi' or 'nhc' thermostats with fewer steps\n"
+            "    for correct ensemble sampling.\n"
+            "- Convergence check enabled in Production rounds.\n"
+            "    NVT completes once convergence is reached or round count is exhausted."
+        )
+    })
 
     thermostats_algo: list[Literal['rescale_v', 'bussi', 'nhc']] = Field(
         default=['rescale_v']*4,
@@ -480,6 +494,16 @@ class NVTInputT(BaseModel):
 
     calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "nequip": "#/$defs/NequipInputT",
+                    "mace": "#/$defs/MACEInputT",
+                },
+            }
+        },
     )
 
 
@@ -512,6 +536,16 @@ class NVEInputT(BaseModel):
 
     calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "nequip": "#/$defs/NequipInputT",
+                    "mace": "#/$defs/MACEInputT",
+                },
+            }
+        },
     )
 
 
@@ -541,6 +575,19 @@ class SCFInputT(BaseModel):
 
     calculator: DFTBaseInputT | HamGNNInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "openmx": "#/$defs/DFTBaseInputT",
+                    "hamgnn": "#/$defs/HamGNNInputT",
+                },
+                "x-defaultOverrides": {
+                    "openmx": {"scf_thr": 1e-8},
+                },
+            }
+        },
     )
 
 
@@ -583,4 +630,3 @@ class InputT(BaseModel):
                     'and Chinese characters'
                 )
         return v
-

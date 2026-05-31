@@ -293,7 +293,7 @@ import TrajectoryUploader from '@/components/TrajectoryUploader.vue'
 import { validatePoscar, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
-import { buildDefaultsFromSchema, resolveDiscriminatorBranch } from '@/utils/schema-form'
+import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
@@ -567,36 +567,6 @@ watch(
     }
   },
   { deep: true }
-)
-
-// Watch NVE software discriminator: when it changes, reset calculator defaults
-// to the matching branch (DFTBaseInputT for vasp, NequipInputT for nequip, etc.)
-watch(
-  () => (formData.nve_input as Record<string, unknown>)?.software,
-  (newSoftware, oldSoftware) => {
-    if (!newSoftware || newSoftware === oldSoftware) return
-    if (!schemas.value) return
-    const nveSchema = schemas.value.nve
-    if (!nveSchema?.properties?.calculator?.anyOf) return
-
-    // Use shared discriminator branch resolver
-    const softwareEnum = ['vasp', 'nequip', 'mace']
-    const targetSchema = resolveDiscriminatorBranch({
-      prop: nveSchema.properties.calculator,
-      rootSchema: nveSchema,
-      enumValues: softwareEnum,
-      value: newSoftware,
-    })
-
-    if (targetSchema) {
-      const defaults = buildDefaultsFromSchema(
-        targetSchema as Parameters<typeof buildDefaultsFromSchema>[0],
-        nveSchema,
-      )
-      const nveInput = formData.nve_input as Record<string, unknown>
-      nveInput.calculator = defaults
-    }
-  },
 )
 
 watch(selectedPool, (newPool, oldPool) => {

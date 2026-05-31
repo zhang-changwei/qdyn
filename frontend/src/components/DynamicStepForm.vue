@@ -1,5 +1,15 @@
 <template>
   <div class="dynamic-step-form">
+    <el-alert
+      v-if="schema?.['x-ui-note']"
+      :title="''"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px; white-space: pre-line;"
+    >
+      {{ schema['x-ui-note'] }}
+    </el-alert>
     <!-- Regular fields (grouped layout) -->
     <template v-for="item in regularFieldsGrouped" :key="item.key">
       <!-- Row of ungrouped fields (multi-column grid) -->
@@ -24,7 +34,7 @@
       <div v-else class="field-group-section">
         <div class="field-group-label">
           {{ item.titleBase }}
-          <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+          <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="handleDiscriminatorChange(item, $event)" size="small" class="inline-discriminator-select">
             <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
           </el-select>
         </div>
@@ -76,7 +86,7 @@
           <div v-else class="field-group-section">
             <div class="field-group-label">
               {{ item.titleBase }}
-              <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="setFieldValue(item.discriminatorPath!, $event)" size="small" class="inline-discriminator-select">
+              <el-select v-if="item.discriminatorPath" :model-value="getFieldValue(item.discriminatorPath)" @update:model-value="handleDiscriminatorChange(item, $event)" size="small" class="inline-discriminator-select">
                 <el-option v-for="opt in item.discriminatorEnum" :key="String(opt)" :label="isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="isDisabledEnumOption(opt)" />
               </el-select>
             </div>
@@ -114,6 +124,7 @@ import {
   normalizeNullableSchema,
   buildDefaultsFromSchema,
   resolveDiscriminatorBranch,
+  getDiscriminatorOverrides,
   parseCommaSeparatedIntegers,
   parseCommaSeparatedStrings,
   FIELD_WIDGET_CONTEXT_KEY,
@@ -367,6 +378,8 @@ function buildFieldDescriptors(
             _parentDiscriminatorKey: discriminatorKey,
             _parentDiscriminatorPath: discriminatorPath,
             _parentDiscriminatorEnum: discriminatorEnum,
+            _parentAnyOfPath: fullPath,
+            _parentAnyOfProp: prop,
           }
           if (parentGroup && !f.group) f.group = parentGroup
         }
@@ -527,6 +540,10 @@ interface GroupItem {
   discriminatorPath?: string
   /** Enum options for the discriminator */
   discriminatorEnum?: unknown[]
+  /** Full path of the sibling anyOf field (e.g. "calculator") for rebuilding on switch */
+  anyOfPath?: string
+  /** Original property schema of the sibling anyOf field (contains discriminator metadata) */
+  anyOfProp?: JsonSchemaObject
 }
 
 type FieldOrGroup = FieldRowItem | GroupItem
@@ -568,6 +585,8 @@ function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
         const discPath = f.schema._parentDiscriminatorPath as string | undefined
         const discEnum = f.schema._parentDiscriminatorEnum as unknown[] | undefined
         const titleBase = f.schema._parentTitleBase as string | undefined
+        const aoPath = f.schema._parentAnyOfPath as string | undefined
+        const aoProp = f.schema._parentAnyOfProp as JsonSchemaObject | undefined
         currentGroup = {
           type: 'group',
           title: parent,
@@ -576,6 +595,8 @@ function groupFields(fields: FieldDescriptor[]): FieldOrGroup[] {
           fields: [f],
           discriminatorPath: discPath,
           discriminatorEnum: discEnum,
+          anyOfPath: aoPath,
+          anyOfProp: aoProp,
         }
       } else {
         // Start a new row batch
@@ -779,6 +800,43 @@ function getFieldValue(path: string): unknown {
 
 function setFieldValue(path: string, value: unknown): void {
   emitFieldValues([{ path, value }])
+}
+
+/**
+ * Handle discriminator select changes: resolve the new branch, rebuild defaults,
+ * merge per-discriminator overrides, and emit both the discriminator value and
+ * the rebuilt sibling anyOf object in one update.
+ */
+function handleDiscriminatorChange(item: GroupItem, newValue: unknown): void {
+  if (!item.anyOfPath || !item.anyOfProp) {
+    setFieldValue(item.discriminatorPath!, newValue)
+    return
+  }
+
+  const branch = resolveDiscriminatorBranch({
+    prop: item.anyOfProp,
+    rootSchema: props.schema,
+    enumValues: item.discriminatorEnum!,
+    value: newValue,
+  })
+
+  if (branch) {
+    const defaults = buildDefaultsFromSchema(
+      branch as Parameters<typeof buildDefaultsFromSchema>[0],
+      props.schema,
+    )
+    // Merge per-discriminator default overrides
+    const overrides = getDiscriminatorOverrides(item.anyOfProp, String(newValue))
+    const merged = overrides ? { ...defaults, ...overrides } : defaults
+
+    // Emit both discriminator value and rebuilt calculator in one update
+    emitFieldValues([
+      { path: item.discriminatorPath!, value: newValue },
+      { path: item.anyOfPath, value: merged },
+    ])
+  } else {
+    setFieldValue(item.discriminatorPath!, newValue)
+  }
 }
 
 function emitFieldValues(updates: { path: string; value: unknown }[]): void {
