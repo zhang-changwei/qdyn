@@ -207,7 +207,10 @@ def run_software(
         
     if software == 'openmx':
         stru = read_stru(stru_format='xyz', stru_file=STRU2_FNAME_MAPPING[software])
-        stru.set_cell(kwargs['cell'])
+        if 'cell' in kwargs and kwargs['cell'] is not None:
+            stru.set_cell(kwargs['cell'])
+        else:
+            raise ValueError("Cell information is required for converting xyz to extxyz.")
         stru.set_pbc([True, True, True])
         write_stru(STRU2_FNAME_MAPPING[software], stru, STRU2_FORMAT_MAPPING[software])
         

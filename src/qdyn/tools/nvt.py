@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 from jobflow.core.job import job
 
-from ..calc_common import read_stru, write_stru
+from ..calc_common import read_stru, write_stru, xc_mapping
 from ..input import NVTInputT, DFTBaseInputT
 from ..params import PARAMS_DEFAULT, BAK_FNAMES
 from ..params import STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
@@ -248,6 +248,7 @@ def _prepare_nvt_input(
 
     input = deepcopy(PARAMS_DEFAULT['nvt'][software])
     if software == 'vasp':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         # Handle predefined parameters in InputT
         if thermostats == 'nhc':
             input['MDALGO'] = 4
@@ -277,14 +278,15 @@ def _prepare_nvt_input(
         )
         dftinputs.write()
     elif software == 'openmx':
-        input['scf.xctype'] = parameters.calculator.xc #TODO: dict mapping?
+        input = xc_mapping(software, parameters.calculator.xc, input)
         input['md.timestep'] = parameters.md_dt
         input['md.maxiter'] = md_step
         input['scf.criterion'] = parameters.calculator.scf_thr
         if thermostats == 'nhc':
             input['md.type'] = 'NVT_NH' # openmx only has nh
             input['nh.mass.heatbath'] = (2.97e-6*structure.get_number_of_degrees_of_freedom()
-                *((temp_beg + temp_end)/2)*parameters.md_thermostats.nhc_tdamp**2) #TODO: ai, need check
+                *((temp_beg + temp_end)/2)*parameters.md_thermostats.nhc_tdamp**2) 
+            # mass Q = g*k_B*T*tdamp^2 , unit: amu*bohr^2, g is dof, tdamp's unit is fs here
             input['md.tempcontrol'] = ['2', f'{1:<5} {temp_beg}', f'{md_step:<5} {temp_end}']
         elif thermostats == 'rescale_v':
             input['md.type'] = 'NVT_VS'

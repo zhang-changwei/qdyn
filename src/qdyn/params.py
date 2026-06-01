@@ -135,6 +135,16 @@ INPUT_FNAMES = {
     'openmx': {'qdyn.dat'}
 }
 
+XC_MAPPING = {
+    'vasp':{
+        'PBE': '',
+        'PBEsol': 'PS',
+        'PW91': '91',
+    },
+    'openmx': {
+        'PBE': 'GGA-PBE',
+    }
+}
 STRU_FNAME_MAPPING = {
     'vasp': 'POSCAR',
     'nequip': 'nequip_in.vasp',

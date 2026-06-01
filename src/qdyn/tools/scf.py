@@ -19,7 +19,7 @@ from jobflow.core.job import job, Job
 import numpy as np
 from pydantic import BaseModel
 
-from ..calc_common import write_stru, read_strus, change_dir
+from ..calc_common import write_stru, read_strus, change_dir, xc_mapping
 from ..input import SCFInputT, DFTBaseInputT
 from ..params import PARAMS_DEFAULT, CHG_FNAME, INPUT_FNAMES
 from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
@@ -399,8 +399,10 @@ def _prepare_scf_input(
     if isinstance(parameters.calculator, DFTBaseInputT):
         input = deepcopy(PARAMS_DEFAULT['scf'][software_dft])
         if software_dft == 'vasp':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['EDIFF'] = parameters.calculator.scf_thr
         elif software_dft == 'openmx':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['scf.criterion'] = parameters.calculator.scf_thr
         else:
             raise NotImplementedError(

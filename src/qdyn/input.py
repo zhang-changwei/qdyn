@@ -382,7 +382,7 @@ class SelDynInputT(BaseModel):
         },
     )
     layer_direction: (
-        Literal['000', '001', '010', '011', '100', '101', '110', '111'] | None
+        Literal['001', '010', '011', '100', '101', '110', '111'] | None
     ) = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",

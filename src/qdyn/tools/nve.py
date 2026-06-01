@@ -6,7 +6,7 @@ from ase import Atoms
 from jobflow.core.job import job
 import numpy as np
 
-from ..calc_common import write_stru
+from ..calc_common import write_stru, xc_mapping
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
     PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, 
@@ -155,6 +155,7 @@ def _prepare_nve_input(
 
     input = deepcopy(PARAMS_DEFAULT['nve'][software])
     if software == 'vasp':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         input['POTIM'] = parameters.md_dt
         input['NSW'] = parameters.md_step
         input['EDIFF'] = parameters.calculator.scf_thr
@@ -170,6 +171,7 @@ def _prepare_nve_input(
         )
         dftinputs.write()
     elif software == 'openmx':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         input['md.timestep'] = parameters.md_dt
         input['md.maxiter'] = parameters.md_step
         input['scf.criterion'] = parameters.calculator.scf_thr
