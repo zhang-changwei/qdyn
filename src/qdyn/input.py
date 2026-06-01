@@ -92,6 +92,11 @@ class DFTBaseInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
+    xc: Literal['PBE', 'PBEsol', 'PW91', 'HSE06', 'Not above'] = Field(
+        default='PBE',
+        description="Exchange-correlation functional type."
+    )
+    
     parameters: str = Field(
         default='',
         description="Additional INCAR parameters string",

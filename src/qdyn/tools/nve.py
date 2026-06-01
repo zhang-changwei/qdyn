@@ -9,7 +9,7 @@ import numpy as np
 from ..calc_common import write_stru
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
-    params_default, TRAJ_FNAME_MAPPING, 
+    PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, 
     STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
 )
 from ..input_prepare import DFTInputs
@@ -96,8 +96,7 @@ def qdyn_nve(
             log_every=1,
             check_convergence='rigorous'
         ) as m:
-            run_software(software_lower, nprocs, monitor=m)
-    
+            run_software(software_lower, nprocs, monitor=m, cell=cstru.get_cell())
     else:
         write_stru(STRU_FNAME_MAPPING[software_lower],
                    cstru,
@@ -154,7 +153,7 @@ def _prepare_nve_input(
     """
     assert isinstance(parameters.calculator, DFTBaseInputT)
 
-    input = deepcopy(params_default['nve'][software])
+    input = deepcopy(PARAMS_DEFAULT['nve'][software])
     if software == 'vasp':
         input['POTIM'] = parameters.md_dt
         input['NSW'] = parameters.md_step
@@ -162,6 +161,21 @@ def _prepare_nve_input(
 
         dftinputs = DFTInputs(
             software='vasp',
+            structure=structure,
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=parameters.calculator.kspacing,
+            inputs_dict=input,
+            inputs_params=parameters.calculator.parameters,
+        )
+        dftinputs.write()
+    elif software == 'openmx':
+        input['md.timestep'] = parameters.md_dt
+        input['md.maxiter'] = parameters.md_step
+        input['scf.criterion'] = parameters.calculator.scf_thr
+        
+        dftinputs = DFTInputs(
+            software='openmx',
             structure=structure,
             pp_path=pp_path,
             orb_path=orb_path,

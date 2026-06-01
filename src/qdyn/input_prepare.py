@@ -179,6 +179,8 @@ class DFTInputs:
                     inputs_append = parse_openmx_dat(s)
                 inputs_base.update(inputs_append)
             # Standardize default fields and stru fields
+            assert self._pp_path == self._orb_path
+            inputs_base['data.path'] = self._pp_path
             inputs_base.pop('system.currentdirectory', None)
             inputs_base['system.name'] = 'qdyn'
             kx, ky, kz = self.kpoints
@@ -192,6 +194,7 @@ class DFTInputs:
             inputs_base.pop('atoms.unitvectors', None)
             inputs_base.pop('md.init.velocity', None)
             inputs_base.pop('md.fixed.xyz', None)
+            inputs_base.pop('md.tempcontrol', None)
             
             self._inputs = inputs_base
         else:

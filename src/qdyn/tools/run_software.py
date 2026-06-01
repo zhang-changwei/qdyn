@@ -8,6 +8,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from ..calc_common import read_stru, write_stru
+from ..params import STRU2_FNAME_MAPPING, STRU2_FORMAT_MAPPING
+
 class DFTStatus(Enum):
     NORMAL = 0
     NOT_CONVERGED_ERROR = 1
@@ -201,7 +204,13 @@ def run_software(
             f"{software} exited with code {returncode}. "
             f"Last queue.err lines: {err_hint or '(empty)'}"
         )
-
+        
+    if software == 'openmx':
+        stru = read_stru(stru_format='xyz', stru_file=STRU2_FNAME_MAPPING[software])
+        stru.set_cell(kwargs['cell'])
+        stru.set_pbc([True, True, True])
+        write_stru(STRU2_FNAME_MAPPING[software], stru, STRU2_FORMAT_MAPPING[software])
+        
 
 def run_vasp(
     nprocs: int, 

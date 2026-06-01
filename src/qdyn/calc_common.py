@@ -220,7 +220,7 @@ def write_stru(
             f.write("".join(stru_lines))
             f.flush()
     else:
-        raise NotImplementedError(f"Unsupported software: {software}")
+        raise NotImplementedError(f"Unsupported software: {stru_format}")
 
 
 def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.') -> str:
@@ -244,7 +244,7 @@ def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.
     track_file = os.path.join(out_dir, traj_name)
     ase.io.write(track_file, structures, format=ase_format)
     return track_file
-
+ 
 
 class TrajWriter:
     def __init__(self, dyn, atoms, fname='qdyn.extxyz', format='extxyz'):
