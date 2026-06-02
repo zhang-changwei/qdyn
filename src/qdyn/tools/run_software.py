@@ -10,6 +10,9 @@ from typing import Any, Callable, Literal
 from ..calc_common import read_stru, write_stru
 from ..params import STRU2_FNAME_MAPPING, STRU2_FORMAT_MAPPING
 
+HARTREE_TO_EV = 27.211386245988
+
+
 class DFTStatus(Enum):
     NORMAL = 0
     NOT_CONVERGED_ERROR = 1
@@ -20,11 +23,11 @@ class MDProgressMonitor:
 
     MONITOR_FNAME_MAPPING = {
         'vasp': 'OSZICAR',
-        'openmx': 'qdyn.out',
+        'openmx': 'qdyn.ene',
     }
 
     def __init__(self, 
-                 software: Literal['vasp'], 
+                 software: Literal['vasp', 'openmx'],
                  nstep: int, 
                  scf_thr: float = 1e-6,
                  md_dt: float = 1.0,
@@ -55,6 +58,10 @@ class MDProgressMonitor:
             self.monitor_file = open(m_fname, 'r')
         
         if not self.log_file:
+            if self.check_convergence in (True, 'rigorous') and self.software == 'openmx':
+                logging.warning("SCF convergence check disabled for OpenMX, "
+                                    "please check SCF convergence manually.\n")
+           
             self.log_file = open('qdyn_md.log', 'w')
             # Write header
             self.log_file.write(
@@ -141,8 +148,45 @@ class MDProgressMonitor:
         return DFTStatus.NORMAL
 
     def monitor_openmx(self, monitor_file: io.TextIOWrapper, log_file: io.TextIOWrapper):
-        pass
-        # TODO
+        while True:
+            cur_pos = monitor_file.tell()
+            line = monitor_file.readline()
+            if not line:
+                break
+            if not line.endswith('\n'):
+                monitor_file.seek(cur_pos)
+                break
+
+            if not line.strip():
+                continue
+
+            try:
+                parts = line.split()
+
+                step = int(parts[0])
+                Epot = float(parts[14]) * HARTREE_TO_EV
+                Ekin = float(parts[13]) * HARTREE_TO_EV
+                Etot = float(parts[15]) * HARTREE_TO_EV
+                T = float(parts[18])
+
+                # skip logging if not at the specified interval
+                if step % self.log_every != 0:
+                    continue
+
+                log_file.write(
+                    "{:<10.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f}\n".format(
+                        self.cur_time, Etot, Epot, Ekin, T
+                    )
+                )
+                log_file.flush()
+                # update
+                self.cur_time += self.md_dt * self.log_every * 1e-3
+            except Exception as e:
+                logging.error("Error occurred while processing OpenMX output."
+                              f"Line: {line.strip()}, Error: {e}")
+                return DFTStatus.UNKNOWN_ERROR
+
+        return DFTStatus.NORMAL
         
 def run_software(
     software: str,
