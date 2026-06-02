@@ -7,10 +7,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+import ase.units
 from ..calc_common import read_stru, write_stru
 from ..params import STRU2_FNAME_MAPPING, STRU2_FORMAT_MAPPING
-
-HARTREE_TO_EV = 27.211386245988
 
 
 class DFTStatus(Enum):
@@ -164,9 +163,9 @@ class MDProgressMonitor:
                 parts = line.split()
 
                 step = int(parts[0])
-                Epot = float(parts[14]) * HARTREE_TO_EV
-                Ekin = float(parts[13]) * HARTREE_TO_EV
-                Etot = float(parts[15]) * HARTREE_TO_EV
+                Epot = float(parts[14]) * ase.units.Hartree
+                Ekin = float(parts[13]) * ase.units.Hartree
+                Etot = float(parts[15]) * ase.units.Hartree
                 T = float(parts[18])
 
                 # skip logging if not at the specified interval

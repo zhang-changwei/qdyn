@@ -330,26 +330,46 @@ def check_nvt_convergence(
     last_nsteps: int | None = None,
     thres_avg: float = 0.004,
     thres_std: float = 1.1,
+    thres_potential_slope: float = 0.01,
+    thres_potential_drift: float = 0.005, # very loose threshold
 ) -> tuple[bool, float, float]:
-    """Check temperature convergence from MD data (universal for all software).
+    """Check NVT convergence from MD data (universal for all software).
 
-    This function checks if temperature converged to the target value.
+    This function checks if temperature converged to the target value and
+    potential energy reached a plateau.
 
     Args:
         md_data: MD data dictionary with 'temperatures' field.
         target_temp: Target temperature for NVT simulation.
         thres_avg: Maximum allowed average deviation.
         thres_std: Maximum allowed standard deviation.
+        thres_potential_slope: Maximum allowed potential energy slope in eV/atom/ps.
+        thres_potential_drift: Maximum allowed difference between first-half
+            and second-half mean potential energy in eV/atom.
 
     Returns:
         tuple:
-        - converged: True if temperature converged to target
+        - converged: True if temperature and potential energy converged
         - temp_avg: Average temperature of last n_last steps
         - temp_std: Standard deviation of temperature of last n_last steps
     """
-    temps = np.array(md_data['temperatures'])
+    temps = np.asarray(md_data['temperatures'], dtype=float)
+    potential_energies = np.asarray(
+        md_data['potential_energies'],
+        dtype=float,
+    )
+    if len(potential_energies) != len(temps):
+        raise ValueError("Temperature and potential energy data lengths differ; "
+                        "cannot check NVT convergence.")
+    time_ps = np.asarray(md_data['time_ps'], dtype=float)
+    if len(time_ps) != len(temps):
+        raise ValueError("Temperature and time_ps data lengths differ; "
+                        "cannot check NVT convergence.")
+
     if last_nsteps is not None:
         temps = temps[-last_nsteps:]
+        potential_energies = potential_energies[-last_nsteps:]
+        time_ps = time_ps[-last_nsteps:]
 
     if len(temps) == 0:
         raise ValueError("No temperature data available to check convergence.")
@@ -365,6 +385,20 @@ def check_nvt_convergence(
     if abs(temp_avg - target_avg) > thres_avg * target_avg:
         converged = False
     if temp_std > thres_std * target_std:
+        converged = False
+
+    natoms = len(structure)
+    potential_per_atom = potential_energies / natoms
+    
+    energy_slope = np.polyfit(time_ps - time_ps[0], potential_per_atom, 1)[0]
+    if abs(energy_slope) > thres_potential_slope:
+        converged = False
+    
+    half_index = len(potential_per_atom) // 2
+    first_half_mean = potential_per_atom[:half_index].mean()
+    second_half_mean = potential_per_atom[half_index:].mean()
+    potential_drift = second_half_mean - first_half_mean
+    if abs(potential_drift) > thres_potential_drift:
         converged = False
 
     return converged, temp_avg, temp_std

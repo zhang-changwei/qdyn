@@ -420,7 +420,7 @@ class SelDynInputT(BaseModel):
 
 class ThermostatsInputT(BaseModel):
     rescale_v_nraise: int = Field(
-        default=5,
+        default=4,
         ge=1,
     )
     bussi_taut: float = Field(

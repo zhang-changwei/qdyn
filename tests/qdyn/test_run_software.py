@@ -3,10 +3,11 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import ase.units
+
 from qdyn.pool import WorkerPool
 from qdyn.tools.run_software import (
     DFTStatus,
-    HARTREE_TO_EV,
     MDProgressMonitor,
     run_software,
     run_vasp,
@@ -85,9 +86,9 @@ def test_md_progress_monitor_openmx_reads_qdyn_ene_fields():
 
     fields = log_file.getvalue().split()
     assert fields[0] == "0.0040"
-    assert float(fields[1]) == round(3.75 * HARTREE_TO_EV, 4)
-    assert float(fields[2]) == round(3.0 * HARTREE_TO_EV, 4)
-    assert float(fields[3]) == round(0.75 * HARTREE_TO_EV, 4)
+    assert float(fields[1]) == round(3.75 * ase.units.Hartree, 4)
+    assert float(fields[2]) == round(3.0 * ase.units.Hartree, 4)
+    assert float(fields[3]) == round(0.75 * ase.units.Hartree, 4)
     assert fields[4] == "400.0000"
 
 
