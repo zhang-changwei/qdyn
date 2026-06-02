@@ -463,10 +463,12 @@ class MainWorkflow:
             ncpus = active_worker_cfg['cpus_per_node']
             processes_per_node = min(8, ncpus)
             threads_per_process = max(1, ncpus // processes_per_node)
-            pp_path = ''
-            orb_path = ''
+            # HamGNN needs DFT postprocess which requires pp/orb path
+            dft_backend = calculator.ham_type
+            pp_path = active_worker_cfg["pp_path"][dft_backend]
+            orb_path = active_worker_cfg["orb_path"][dft_backend]
             model_path = resolve_model_path(self.active_pool, calculator)
-            res_software = calculator.ham_type
+            res_software = dft_backend
             use_gpu = False # calculator.use_gpu
 
         jobs_scf = qdyn_scf(
@@ -568,10 +570,11 @@ class MainWorkflow:
             ncpus = active_worker_cfg['cpus_per_node']
             processes_per_node = min(8, ncpus)
             threads_per_process = max(1, ncpus // processes_per_node)
-            pp_path = ''
-            orb_path = ''
+            dft_backend = calculator.ham_type
+            pp_path = active_worker_cfg["pp_path"][dft_backend]
+            orb_path = active_worker_cfg["orb_path"][dft_backend]
             model_path = resolve_model_path(self.active_pool, calculator)
-            res_software = calculator.ham_type
+            res_software = dft_backend
             use_gpu = False # calculator.use_gpu
         nprocs_dft = processes_per_node
         nprocs_py = max(1, min(8, ncpus))

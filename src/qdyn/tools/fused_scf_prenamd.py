@@ -164,7 +164,7 @@ def qdyn_fused_scf_prenamd_task(
         if software_dft == 'openmx':
             ORBITAL_BASIS.clear()
             ORBITAL_BASIS.update(select_orbitals(software_dft, calc.nao_max))
-        
+
         inputs_dict = _prepare_scf_input(software_dft, scf_input)
         if software_dft == 'openmx':
             inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)

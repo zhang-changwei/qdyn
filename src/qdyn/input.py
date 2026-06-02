@@ -244,7 +244,7 @@ class HamGNNInputT(BaseModel):
         json_schema_extra={"step": 0.001, "precision": 4},
     )
     ecut: float = Field(
-        default=150.0,
+        default=220.0,
         ge=1.0,
         description="Energy cutoff (in Ry) for two-center integrals in LCAO.",
     )
