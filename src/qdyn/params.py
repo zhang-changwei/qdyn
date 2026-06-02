@@ -16,18 +16,18 @@ _INCAR = {
     'ENCUT': 500,
 }
 _OPENMX = {
-    "system.currentdirectory":  "./",
+    "system.currentdirectory":   "./",
     "system.name":               "qdyn",
     "data.path":                 "../../DFT_DATA19",
     "scf.xctype":                "GGA-PBE",
     "scf.spinpolarization":      "off",
-    "scf.electronictemperature": "300.0",
-    "scf.energycutoff":          "220.0",
-    "scf.maxiter":               "90",
+    "scf.electronictemperature":  300.0,
+    "scf.energycutoff":           220.0,
+    "scf.maxiter":                90,
     "scf.eigenvaluesolver":      "band",
     "scf.proexpn.vna":           "on",
     "md.type":                   "nomd",
-    "md.maxiter":                "1"
+    "md.maxiter":                 1,
 }
 
 PARAMS_DEFAULT = {
@@ -118,11 +118,23 @@ PARAMS_DEFAULT = {
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 
+XC_MAPPING = {
+    'vasp':{
+        'PBE': '',
+        'PBEsol': 'PS',
+        'PW91': '91',
+    },
+    'openmx': {
+        'PBE': 'GGA-PBE',
+    }
+}
+
 BAK_FNAMES = {
     'vasp': [
         'POSCAR', 'CONTCAR', 'XDATCAR', 
         'OSZICAR', 'OUTCAR', 'INCAR', 'KPOINTS', 'POTCAR',
     ],
+    'openmx': ['qdyn.dat', 'qdyn.extxyz'],
     'nequip': ['nequip_in.vasp', 'nequip_out.vasp'],
     'mace': ['mace_in.vasp', 'mace_out.vasp'],
 }
@@ -135,16 +147,6 @@ INPUT_FNAMES = {
     'openmx': {'qdyn.dat'}
 }
 
-XC_MAPPING = {
-    'vasp':{
-        'PBE': '',
-        'PBEsol': 'PS',
-        'PW91': '91',
-    },
-    'openmx': {
-        'PBE': 'GGA-PBE',
-    }
-}
 STRU_FNAME_MAPPING = {
     'vasp': 'POSCAR',
     'nequip': 'nequip_in.vasp',
@@ -155,12 +157,13 @@ STRU2_FNAME_MAPPING = {
     'vasp': 'CONTCAR',
     'nequip': 'nequip_out.vasp',
     'mace': 'mace_out.vasp',
-    'openmx': 'qdyn.xyz',
+    'openmx': 'qdyn.extxyz',
 }
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
     'nequip': 'qdyn.extxyz',
     'mace': 'qdyn.extxyz',
+    'openmx': 'qdyn.md',
 }
 
 STRU_FORMAT_MAPPING = {

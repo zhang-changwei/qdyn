@@ -3,12 +3,8 @@ from pathlib import Path
 import shutil
 from typing import List, Dict, Tuple, Any
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
-from jobflow import job # type: ignore
+from jobflow.core.job import job
 
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
@@ -178,6 +174,9 @@ def plot_ksen_weight(
     Returns:
         Path to the saved plot.
     """
+    import matplotlib
+    matplotlib.use('agg')
+    import matplotlib.pyplot as plt
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Extract parameters

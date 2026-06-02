@@ -1,7 +1,6 @@
 from enum import Enum
 import io
 import logging
-import math
 import os
 import subprocess
 import time
@@ -21,6 +20,7 @@ class MDProgressMonitor:
 
     MONITOR_FNAME_MAPPING = {
         'vasp': 'OSZICAR',
+        'openmx': 'qdyn.out',
     }
 
     def __init__(self, 
@@ -205,14 +205,14 @@ def run_software(
             f"Last queue.err lines: {err_hint or '(empty)'}"
         )
         
+    # post software running
     if software == 'openmx':
-        stru = read_stru(stru_format='xyz', stru_file=STRU2_FNAME_MAPPING[software])
         if 'cell' in kwargs and kwargs['cell'] is not None:
+            fname = STRU2_FNAME_MAPPING[software]
+            stru = read_stru(stru_format='xyz', stru_file=fname.split('.')[0] + '.xyz')
             stru.set_cell(kwargs['cell'])
-        else:
-            raise ValueError("Cell information is required for converting xyz to extxyz.")
-        stru.set_pbc([True, True, True])
-        write_stru(STRU2_FNAME_MAPPING[software], stru, STRU2_FORMAT_MAPPING[software])
+            stru.set_pbc([True, True, True])
+            write_stru(fname, stru, STRU2_FORMAT_MAPPING[software])
         
 
 def run_vasp(
