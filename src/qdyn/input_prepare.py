@@ -179,6 +179,9 @@ class DFTInputs:
                     inputs_append = parse_openmx_dat(s)
                 inputs_base.update(inputs_append)
             # Standardize default fields and stru fields
+            if self._pp_path != self._orb_path:
+                raise ValueError("Orbital path and pp path must be the same for OpenMX.")
+            inputs_base['data.path'] = self._pp_path
             inputs_base.pop('system.currentdirectory', None)
             inputs_base['system.name'] = 'qdyn'
             kx, ky, kz = self.kpoints

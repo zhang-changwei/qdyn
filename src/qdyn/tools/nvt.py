@@ -10,9 +10,9 @@ import numpy as np
 from ase import Atoms
 from jobflow.core.job import job
 
-from ..calc_common import read_stru, write_stru
+from ..calc_common import read_stru, write_stru, xc_mapping
 from ..input import NVTInputT, DFTBaseInputT
-from ..params import params_default, BAK_FNAMES
+from ..params import PARAMS_DEFAULT, BAK_FNAMES
 from ..params import STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
@@ -123,7 +123,7 @@ def qdyn_nvt(
                 log_every=parameters.log_every,
                 check_convergence=check_convergence
             ) as m:
-                run_software(software_lower, nprocs, monitor=m)
+                run_software(software_lower, nprocs, monitor=m, cell=cur_stru.get_cell())
             # update structure
             cur_stru = read_stru(STRU2_FORMAT_MAPPING[software_lower],
                                  STRU2_FNAME_MAPPING[software_lower])
@@ -246,10 +246,10 @@ def _prepare_nvt_input(
     """
     assert isinstance(parameters.calculator, DFTBaseInputT)
 
-    input = deepcopy(params_default['nvt'][software])
+    input = deepcopy(PARAMS_DEFAULT['nvt'][software])
     if software == 'vasp':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         # Handle predefined parameters in InputT
-        # 检查这些参数！！！！！
         if thermostats == 'nhc':
             input['MDALGO'] = 4
             input['NHC_NCHAINS'] = parameters.md_thermostats.nhc_tchain
@@ -269,6 +269,36 @@ def _prepare_nvt_input(
         input['EDIFF'] = parameters.calculator.scf_thr
         dftinputs = DFTInputs(
             software='vasp',
+            structure=structure,
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=parameters.calculator.kspacing,
+            inputs_dict=input,
+            inputs_params=parameters.calculator.parameters,
+        )
+        dftinputs.write()
+    elif software == 'openmx':
+        input = xc_mapping(software, parameters.calculator.xc, input)
+        input['md.timestep'] = parameters.md_dt
+        input['md.maxiter'] = md_step
+        input['scf.criterion'] = parameters.calculator.scf_thr
+        if thermostats == 'nhc':
+            input['md.type'] = 'NVT_NH' # openmx only has nh
+            input['nh.mass.heatbath'] = (2.97e-6*structure.get_number_of_degrees_of_freedom()
+                *((temp_beg + temp_end)/2)*parameters.md_thermostats.nhc_tdamp**2) 
+            # mass Q = g*k_B*T*tdamp^2 , unit: amu*bohr^2, g is dof, tdamp's unit is fs here
+            input['md.tempcontrol'] = ['2', f'{1:<5} {temp_beg}', f'{md_step:<5} {temp_end}']
+        elif thermostats == 'rescale_v':
+            input['md.type'] = 'NVT_VS'
+            input['md.tempcontrol'] = [
+                '2', 
+                f'{1:<5} {parameters.md_thermostats.rescale_v_nraise} {temp_beg} 0.0', 
+                f'{md_step:<5} {parameters.md_thermostats.rescale_v_nraise} {temp_end} 0.0'
+            ]
+        else:
+            raise NotImplementedError()
+        dftinputs = DFTInputs(
+            software='openmx',
             structure=structure,
             pp_path=pp_path,
             orb_path=orb_path,

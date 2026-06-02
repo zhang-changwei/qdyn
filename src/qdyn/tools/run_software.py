@@ -1,12 +1,14 @@
 from enum import Enum
 import io
 import logging
-import math
 import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Literal
+
+from ..calc_common import read_stru, write_stru
+from ..params import STRU2_FNAME_MAPPING, STRU2_FORMAT_MAPPING
 
 class DFTStatus(Enum):
     NORMAL = 0
@@ -18,6 +20,7 @@ class MDProgressMonitor:
 
     MONITOR_FNAME_MAPPING = {
         'vasp': 'OSZICAR',
+        'openmx': 'qdyn.out',
     }
 
     def __init__(self, 
@@ -201,7 +204,16 @@ def run_software(
             f"{software} exited with code {returncode}. "
             f"Last queue.err lines: {err_hint or '(empty)'}"
         )
-
+        
+    # post software running
+    if software == 'openmx':
+        if 'cell' in kwargs and kwargs['cell'] is not None:
+            fname = STRU2_FNAME_MAPPING[software]
+            stru = read_stru(stru_format='xyz', stru_file=fname.split('.')[0] + '.xyz')
+            stru.set_cell(kwargs['cell'])
+            stru.set_pbc([True, True, True])
+            write_stru(fname, stru, STRU2_FORMAT_MAPPING[software])
+        
 
 def run_vasp(
     nprocs: int, 

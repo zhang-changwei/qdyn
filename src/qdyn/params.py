@@ -1,7 +1,7 @@
 import re
 from typing import Literal
 
-_incar = {
+_INCAR = {
     'ISTART': 0,
     'ISPIN': 1,
     'LREAL': 'Auto',
@@ -15,25 +15,25 @@ _incar = {
     'SIGMA': 0.1,
     'ENCUT': 500,
 }
-_openmx = {
-    "system.currentdirectory":  "./",
+_OPENMX = {
+    "system.currentdirectory":   "./",
     "system.name":               "qdyn",
     "data.path":                 "../../DFT_DATA19",
     "scf.xctype":                "GGA-PBE",
     "scf.spinpolarization":      "off",
-    "scf.electronictemperature": "300.0",
-    "scf.energycutoff":          "150.0",
-    "scf.maxiter":               "90",
+    "scf.electronictemperature":  300.0,
+    "scf.energycutoff":           220.0,
+    "scf.maxiter":                90,
     "scf.eigenvaluesolver":      "band",
     "scf.proexpn.vna":           "on",
     "md.type":                   "nomd",
-    "md.maxiter":                "1"
+    "md.maxiter":                 1,
 }
 
-params_default = {
+PARAMS_DEFAULT = {
     'sr': {
         'vasp': {
-            **_incar,
+            **_INCAR,
             'NELM': 90,
             'NELMIN': 6,
             'EDIFF': 1e-8,
@@ -45,7 +45,7 @@ params_default = {
     },
     'nvt': {
         'vasp': {
-            **_incar,
+            **_INCAR,
             'ALGO': 'Normal',
             'NELMIN': 4,
             'NELM': 120,
@@ -58,11 +58,20 @@ params_default = {
             'NBLOCK': 4,
             'TEBEG': 300,
             'TEEND': 300,
-        }
+        },
+        'openmx': {
+            **_OPENMX,
+            'scf.maxiter': 120,
+            'scf.criterion': 1e-6,
+            'md.timestep': 1.0,
+            'md.maxiter': 1000,
+            'md.type': 'NVT_VS',
+            'md.tempcontrol': ['2', '1    4 300 0.0', '1000 4 300 0.0']
+        } #TODO: add other parameters for MD
     },
     'nve': {
         'vasp': {
-            **_incar,
+            **_INCAR,
             'ALGO': 'Normal',
             'NELMIN': 4,
             'NELM': 120,
@@ -73,11 +82,19 @@ params_default = {
             'POTIM': 1,
             'SMASS': -3,
             'NBLOCK': 1,
+        },
+        'openmx': {
+            **_OPENMX,
+            'scf.maxiter': 120,
+            'scf.criterion': 1e-6,
+            'md.type': 'NVE',
+            'md.timestep': 1.0,
+            'md.maxiter': 5000
         }
     },
     'scf': {
         'vasp': {
-            **_incar,
+            **_INCAR,
             'LORBIT': 11,
             # 'NEDOS': 2001,
             'NELM': 120,
@@ -85,7 +102,14 @@ params_default = {
             'LWAVE': True,
             'LCHARG': True,
             'ICHARG': 1,
-        }
+        },
+        'openmx': {
+            **_OPENMX,
+            'scf.maxiter': 120,
+            'scf.criterion': 1e-6,
+            'md.type': 'Nomd',
+            'md.maxiter': 1
+        } # TODO: add charge density and wavefunction output parameters for openmx
     },
 }
 
@@ -94,11 +118,23 @@ params_default = {
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 
+XC_MAPPING = {
+    'vasp':{
+        'PBE': '',
+        'PBEsol': 'PS',
+        'PW91': '91',
+    },
+    'openmx': {
+        'PBE': 'GGA-PBE',
+    }
+}
+
 BAK_FNAMES = {
     'vasp': [
         'POSCAR', 'CONTCAR', 'XDATCAR', 
         'OSZICAR', 'OUTCAR', 'INCAR', 'KPOINTS', 'POTCAR',
     ],
+    'openmx': ['qdyn.dat', 'qdyn.extxyz'],
     'nequip': ['nequip_in.vasp', 'nequip_out.vasp'],
     'mace': ['mace_in.vasp', 'mace_out.vasp'],
 }
@@ -121,12 +157,13 @@ STRU2_FNAME_MAPPING = {
     'vasp': 'CONTCAR',
     'nequip': 'nequip_out.vasp',
     'mace': 'mace_out.vasp',
-    'openmx': 'qdyn.xyz',
+    'openmx': 'qdyn.extxyz',
 }
 TRAJ_FNAME_MAPPING = {
     'vasp': 'XDATCAR',
     'nequip': 'qdyn.extxyz',
     'mace': 'qdyn.extxyz',
+    'openmx': 'qdyn.md',
 }
 
 STRU_FORMAT_MAPPING = {
@@ -139,7 +176,7 @@ STRU2_FORMAT_MAPPING = {
     'vasp': 'vasp',
     'nequip': 'vasp',
     'mace': 'vasp',
-    'openmx': 'xyz',
+    'openmx': 'extxyz',
 }
 # ASE format strings for reading/writing trajectory files per software.
 # Used by read_strus(), write_strus(), and upload validation.

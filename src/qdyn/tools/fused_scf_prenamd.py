@@ -274,7 +274,7 @@ def qdyn_fused_scf_prenamd_task(
                     postprocess=postprocess,
                     omp=omp_dft,
                 )
-                _validate_scf_output(software)
+                _validate_scf_output(software, software_dft, dftinputs.inputs)
 
             # run scf solver
             scf_solver.add(scf_idx, subdir, stru)

@@ -19,9 +19,9 @@ from jobflow.core.job import job, Job
 import numpy as np
 from pydantic import BaseModel
 
-from ..calc_common import write_stru, read_strus, change_dir
+from ..calc_common import write_stru, read_strus, change_dir, xc_mapping
 from ..input import SCFInputT, DFTBaseInputT
-from ..params import params_default, CHG_FNAME, INPUT_FNAMES
+from ..params import PARAMS_DEFAULT, CHG_FNAME, INPUT_FNAMES
 from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
 from ..input_prepare import DFTInputs
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
@@ -397,17 +397,19 @@ def _prepare_scf_input(
     """
     input = {}
     if isinstance(parameters.calculator, DFTBaseInputT):
-        input = deepcopy(params_default['scf'][software_dft])
+        input = deepcopy(PARAMS_DEFAULT['scf'][software_dft])
         if software_dft == 'vasp':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['EDIFF'] = parameters.calculator.scf_thr
         elif software_dft == 'openmx':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['scf.criterion'] = parameters.calculator.scf_thr
         else:
             raise NotImplementedError(
                 f"Software {software_dft} is not supported for SCF input preparation yet."
             )
     else:
-        input = deepcopy(params_default['scf'][software_dft])
+        input = deepcopy(PARAMS_DEFAULT['scf'][software_dft])
         if software_dft == 'openmx':
             input['scf.energycutoff'] = parameters.calculator.ecut
         else:

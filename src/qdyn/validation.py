@@ -579,6 +579,9 @@ def validate_workflow_input(
         if software == "vasp" and input.scf_input.is_alle:
             software = "vasp_ae"
         validate_software_installation(software, installed)
+        if isinstance(input.scf_input.calculator, HamGNNInputT):
+            software = input.scf_input.calculator.ham_type
+            validate_software_installation(software, installed)
 
         validate_step_input(input.scf_input, active_pool, worker_cfg, check_list)
 

@@ -19,9 +19,28 @@ from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
-from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
+from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS, XC_MAPPING
 
 logger = logging.getLogger(__name__)
+
+def xc_mapping(software: str, xc: str, input: dict) -> dict:
+    if software == 'vasp':
+        if xc in ['PBE', 'Not above']:
+            pass
+        elif xc is 'HSE06':
+            input['LHFCALC'] = True
+            input['GGA'] = 'PE'
+            input['HFSCREEN'] = 0.2
+        else:
+            input['GGA'] = XC_MAPPING[software][xc]
+    elif software == 'openmx':
+        if xc is 'Not above':
+            pass
+        else:
+            input['scf.xctype'] = XC_MAPPING[software][xc]
+    else:
+        raise NotImplementedError(f"Unsupported software: {software}")
+    return input
 
 def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
     """Read a single structure from a file."""
@@ -220,7 +239,7 @@ def write_stru(
             f.write("".join(stru_lines))
             f.flush()
     else:
-        raise NotImplementedError(f"Unsupported software: {software}")
+        raise NotImplementedError(f"Unsupported software: {stru_format}")
 
 
 def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.') -> str:
@@ -244,7 +263,7 @@ def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.
     track_file = os.path.join(out_dir, traj_name)
     ase.io.write(track_file, structures, format=ase_format)
     return track_file
-
+ 
 
 class TrajWriter:
     def __init__(self, dyn, atoms, fname='qdyn.extxyz', format='extxyz'):

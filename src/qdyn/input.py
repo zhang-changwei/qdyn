@@ -92,6 +92,11 @@ class DFTBaseInputT(BaseModel):
         json_schema_extra={"widget": "log-step"},
     )
 
+    xc: Literal['PBE', 'PBEsol', 'PW91', 'HSE06', 'Not above'] = Field(
+        default='PBE',
+        description="Exchange-correlation functional type."
+    )
+    
     parameters: str = Field(
         default='',
         description="Additional INCAR parameters string",
@@ -377,7 +382,7 @@ class SelDynInputT(BaseModel):
         },
     )
     layer_direction: (
-        Literal['000', '001', '010', '011', '100', '101', '110', '111'] | None
+        Literal['001', '010', '011', '100', '101', '110', '111'] | None
     ) = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
