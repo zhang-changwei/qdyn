@@ -6,11 +6,13 @@ from ase import Atoms
 from jobflow.core.job import job
 import numpy as np
 
-from ..calc_common import write_stru, xc_mapping
+from ..calc_common import write_stru, xc_mapping, select_orbitals
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
     PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, 
-    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING
+    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, 
+    STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING,
+    ORBITAL_BASIS,
 )
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
@@ -65,6 +67,11 @@ def qdyn_nve(
 
     software_lower = software.lower()
     nprocs = nodes * processes_per_node
+
+    # select orbitals
+    if software_lower == 'openmx':
+        ORBITAL_BASIS.clear()
+        ORBITAL_BASIS.update(select_orbitals(software_lower, 'Quick'))
 
     structure['momenta'] = np.array(structure['momenta'])
     cstru = Atoms.fromdict(structure)

@@ -19,10 +19,16 @@ from jobflow.core.job import job, Job
 import numpy as np
 from pydantic import BaseModel
 
-from ..calc_common import write_stru, read_strus, change_dir, xc_mapping
+from ..calc_common import (
+    write_stru, read_strus, 
+    change_dir, xc_mapping, select_orbitals
+)
 from ..input import SCFInputT, DFTBaseInputT
-from ..params import PARAMS_DEFAULT, CHG_FNAME, INPUT_FNAMES
-from ..params import STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
+from ..params import (
+    PARAMS_DEFAULT, CHG_FNAME, INPUT_FNAMES,
+    STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING,
+    ORBITAL_BASIS,
+)
 from ..input_prepare import DFTInputs
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
 from .run_software import run_software
@@ -219,6 +225,11 @@ def qdyn_scf_cpu(
     # Prepare common input files once (these will be copied to each subdir)
     if isinstance(calc, DFTBaseInputT):
         software_dft = software
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, 'Standard'))
+        
         inputs_dict = _prepare_scf_input(software_dft, parameters)
         dftinputs = DFTInputs(
             software=software_dft,
@@ -239,6 +250,11 @@ def qdyn_scf_cpu(
         scf_solver = SCFSolverStub()
     else:
         software_dft = calc.ham_type
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, calc.nao_max))
+        
         inputs_dict = _prepare_scf_input(software_dft, parameters)
         if software_dft == 'openmx':
             inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)

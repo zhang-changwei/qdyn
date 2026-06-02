@@ -329,7 +329,7 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
     symbol = stru.symbols.indices()
     naos = {}
     for sym in symbol:
-        basis = ORBITAL_BASIS[software_dft][sym]
+        basis = ORBITAL_BASIS[sym]
         orbitals = basis.partition('-')[2]
         numbers = re.findall(r'[spdf](\d+)', orbitals)
         naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])

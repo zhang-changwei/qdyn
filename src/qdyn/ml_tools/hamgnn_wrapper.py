@@ -1,4 +1,5 @@
 from copy import deepcopy
+from functools import wraps
 import multiprocessing
 from multiprocessing.pool import AsyncResult
 import queue
@@ -21,8 +22,10 @@ import pytorch_lightning as pl
 from hamgnn.main import build_hamgnn_model
 from hamgnn.config.config_parsing import config_default
 from hamgnn.models.Model import Model
+from hamgnn.models.hamgnn_output import HamGNNPlusPlusOut
 import numpy.typing as npt
 
+from ..calc_common import select_orbitals
 from ..input import HamGNNInputT
 from ..params import ORBITAL_BASIS
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
@@ -30,7 +33,9 @@ from ..tools.scf import SCFLogger
 
 NAO_MAX_SPDF = {
     13: (2, 2, 1),
+    14: (3, 2, 1),
     19: (3, 2, 2),
+    20: (4, 2, 2),
     26: (3, 2, 2, 1),
 }
 
@@ -103,19 +108,20 @@ def get_basis_def(software: str, stru: Atoms, nao_max: int = 26) -> dict[int, np
     for zi in z:
         if zi in basis_def:
             continue
-        orb = ORBITAL_BASIS[software][Element.from_Z(zi).symbol]
+        orb = ORBITAL_BASIS[Element.from_Z(zi).symbol]
         spdf = [int(x) for x in orb.split('-')[-1][1::2]]
+        # shape (nao_max,)
+        # equal to 1 if the corresponding orbital is included in the basis, 0 otherwise
         basis = np.zeros(nao_max, dtype=np.int32)
         left = 0
-        for idx, l in enumerate(spdf):
-            if l > nao_max_spdf[idx]:
-                raise ValueError()
-            width = (2*idx+1) * l
-            basis[l:l+width] = 1
-            left += (2*idx+1) * nao_max_spdf[idx]
+        for idx, mul in enumerate(spdf):
+            if mul > nao_max_spdf[idx]:
+                raise ValueError(f"Multiplicity {mul} exceeds maximum for orbital {idx}")
+            width = (2*idx+1)
+            basis[left: left+width*mul] = 1
+            left += width * nao_max_spdf[idx]
         basis_def[zi] = basis
     return basis_def
-
 
 def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data]:
     if software == 'openmx':
@@ -146,7 +152,6 @@ def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data
     else:
         raise NotImplementedError()
     return num_mat, graph
-
 
 def calc_hamgnn_HK_gamma(
     HR: npt.NDArray, 
@@ -199,6 +204,35 @@ def calc_hamgnn_HK_gamma(
 
     return HK
 
+
+def overwrite_hamgnn_basis(cls):
+    def get_basis_for_element(nao_max: int, spdf: list[int]) -> list[int]:
+        basis = []
+        left = 0
+        for idx, mul in enumerate(spdf):
+            width = (2*idx+1)
+            basis.extend(range(left, left+width*mul))
+            left += width * NAO_MAX_SPDF[nao_max][idx]
+        return basis
+
+    original_initialize_openmx_basis = cls._initialize_openmx_basis
+
+    @wraps(original_initialize_openmx_basis)
+    def new_initialize_openmx_basis(self, *args, **kwargs):
+        original_initialize_openmx_basis(self, *args, **kwargs)
+        
+        basis_def = {}
+        orbitals = select_orbitals('openmx', self.nao_max)
+
+        for element, orb in orbitals.items():
+            spdf = [int(x) for x in orb.split('-')[-1][1::2]]
+            basis_def[Element(element).Z] = get_basis_for_element(self.nao_max, spdf)
+
+        self.basis_def = basis_def
+
+    cls._initialize_openmx_basis = new_initialize_openmx_basis
+
+overwrite_hamgnn_basis(HamGNNPlusPlusOut)
 
 class LMDBDataset(Dataset):
     pass

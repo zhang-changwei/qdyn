@@ -19,7 +19,8 @@ from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
-from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS, XC_MAPPING
+from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
+from .params import XC_MAPPING, ALL_ORBITALS
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,15 @@ def xc_mapping(software: str, xc: str, input: dict) -> dict:
     else:
         raise NotImplementedError(f"Unsupported software: {software}")
     return input
+
+
+def select_orbitals(software: str, category: str | int) -> dict[str, str]:
+    orbital_basis = {}
+    for element, orbs in ALL_ORBITALS[software].items():
+        for orb, cats in orbs.items():
+            if category in cats:
+                orbital_basis[element] = orb
+    return orbital_basis
 
 def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
     """Read a single structure from a file."""
@@ -185,7 +195,7 @@ def write_stru(
             for s in syms:
                 stru_lines.append(
                     " {:3s} {:18s} {:10s}\n".format(
-                        s, ORBITAL_BASIS['openmx'][s], PSEUDO_POTENTIAL['openmx'][s]
+                        s, ORBITAL_BASIS[s], PSEUDO_POTENTIAL['openmx'][s]
                     )
                 )
             stru_lines.append("Definition.of.Atomic.Species>\n\n")
