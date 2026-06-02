@@ -70,8 +70,10 @@
     </div>
     <el-progress v-if="ctx.modelUploadProgress[field.path] != null && ctx.modelUploadProgress[field.path] < 100" :percentage="ctx.modelUploadProgress[field.path]" :stroke-width="4" style="margin-top: 4px;" />
   </div>
-  <!-- ADVANCED: textarea for free string fields (resolvedType === 'string' && !enum) -->
-  <el-input v-else-if="mode === 'advanced' && field.resolvedType === 'string' && !field.resolvedSchema.enum" type="textarea" :rows="4" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
+  <!-- ADVANCED: textarea only for explicitly marked fields -->
+  <el-input v-else-if="mode === 'advanced' && field.widget === 'textarea'" type="textarea" :rows="4" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
+  <!-- ADVANCED: regular text input for other string fields -->
+  <el-input v-else-if="mode === 'advanced' && field.resolvedType === 'string' && !field.resolvedSchema.enum" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
   <!-- ADVANCED: enum select -->
   <el-select v-else-if="mode === 'advanced' && field.resolvedSchema.enum" :model-value="ctx.getFieldValue(field.path)" @update:model-value="ctx.setFieldValue(field.path, $event)">
     <el-option v-for="opt in field.resolvedSchema.enum" :key="String(opt)" :label="ctx.isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="ctx.isDisabledEnumOption(opt)" />

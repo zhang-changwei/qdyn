@@ -943,6 +943,11 @@ function handleDiscriminatorChange(item: GroupItem, newValue: unknown): void {
     const overrides = getDiscriminatorOverrides(item.anyOfProp, String(newValue))
     const merged = overrides ? { ...defaults, ...overrides } : defaults
 
+    // Clear config import tracking when switching calculator type
+    for (const key of Object.keys(importedFieldValues)) {
+      delete importedFieldValues[key]
+    }
+
     // Emit both discriminator value and rebuilt calculator in one update
     emitFieldValues([
       { path: item.discriminatorPath!, value: newValue },
