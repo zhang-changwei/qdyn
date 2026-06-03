@@ -51,7 +51,15 @@ class TestParseBandIndex:
             parse_band_index(expr, 120, 200)
 
 
-def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path):
+def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path, monkeypatch):
+    from qdyn.params import ORBITAL_BASIS, PSEUDO_POTENTIAL, VALENCE_ELECTRONS
+    monkeypatch.setitem(ORBITAL_BASIS, "Si", "Si7.0-s2p2d1")
+    monkeypatch.setitem(ORBITAL_BASIS, "O", "O6.0-s2p2d1")
+    monkeypatch.setitem(PSEUDO_POTENTIAL.setdefault('openmx', {}), "Si", "Si_PBE19")
+    monkeypatch.setitem(PSEUDO_POTENTIAL.setdefault('openmx', {}), "O", "O_PBE19")
+    monkeypatch.setitem(VALENCE_ELECTRONS.setdefault('openmx', {}), "Si", 4.0)
+    monkeypatch.setitem(VALENCE_ELECTRONS.setdefault('openmx', {}), "O", 6.0)
+
     stru = Atoms(
         "SiOSi",
         positions=[
@@ -59,6 +67,8 @@ def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path):
             [0.0, 0.0, 1.0],
             [0.0, 0.0, 2.0],
         ],
+        cell=[5.0, 5.0, 5.0],
+        pbc=True,
     )
 
     out_path = tmp_path / "qdyn.dat"

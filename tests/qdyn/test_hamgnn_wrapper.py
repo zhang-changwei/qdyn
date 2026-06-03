@@ -54,6 +54,15 @@ def hamgnn_wrapper_module(monkeypatch):
         load_from_checkpoint=lambda **kwargs: None
     )
 
+    hamgnn_output = ModuleType("hamgnn.models.hamgnn_output")
+    class DummyHamGNNPlusPlusOut:
+        def _initialize_openmx_basis(self, *args, **kwargs):
+            self.basis_def = {}
+    hamgnn_output.HamGNNPlusPlusOut = DummyHamGNNPlusPlusOut
+
+    hamgnn_models = ModuleType("hamgnn.models")
+    hamgnn_models.__path__ = []
+
     monkeypatch.setitem(
         sys.modules,
         "hamgnn",
@@ -62,8 +71,9 @@ def hamgnn_wrapper_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "hamgnn.main", hamgnn_main)
     monkeypatch.setitem(sys.modules, "hamgnn.config", ModuleType("hamgnn.config"))
     monkeypatch.setitem(sys.modules, "hamgnn.config.config_parsing", hamgnn_cfg)
-    monkeypatch.setitem(sys.modules, "hamgnn.models", ModuleType("hamgnn.models"))
+    monkeypatch.setitem(sys.modules, "hamgnn.models", hamgnn_models)
     monkeypatch.setitem(sys.modules, "hamgnn.models.Model", hamgnn_model)
+    monkeypatch.setitem(sys.modules, "hamgnn.models.hamgnn_output", hamgnn_output)
 
     module = importlib.import_module("qdyn.ml_tools.hamgnn_wrapper")
     return module
