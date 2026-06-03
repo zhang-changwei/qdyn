@@ -91,8 +91,8 @@ def get_basis_def(software: str, stru: Atoms, nao_max: int = 26) -> dict[int, np
         for idx, mul in enumerate(spdf):
             if mul > nao_max_spdf[idx]:
                 raise ValueError(f"Multiplicity {mul} exceeds maximum for orbital {idx}")
-            width = (2*idx+1)
-            basis[left: left+width*mul] = 1
+            width = (2 * idx + 1)
+            basis[left:left + width * mul] = 1
             left += width * nao_max_spdf[idx]
         basis_def[zi] = basis
     return basis_def

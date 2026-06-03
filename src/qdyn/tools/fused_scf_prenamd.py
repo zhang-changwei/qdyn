@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from collections.abc import Generator
 from typing import Any, Sequence
@@ -193,19 +194,20 @@ def qdyn_fused_scf_prenamd_task(
         batch_size = calc.batch_size
     dftinputs.write(stru=False)
 
-    # for overlap
+    # for overlap (use a copy to avoid mutating the SCF inputs_dict)
     if software_dft in {'abacus', 'openmx'}:
+        inputs_dict_olap = deepcopy(inputs_dict)
         if software_dft == 'openmx':
-            inputs_dict['postprocess.output.level'] = 1
+            inputs_dict_olap['postprocess.output.level'] = 1
         elif software_dft == 'abacus':
-            inputs_dict['calculation'] = 'get_s'
+            inputs_dict_olap['calculation'] = 'get_s'
         dftinputs_olap = DFTInputs(
             software=software_dft,
             structure=strus[0],
             pp_path=pp_path,
             orb_path=orb_path,
             kspacing=calc.kspacing,
-            inputs_dict=inputs_dict,
+            inputs_dict=inputs_dict_olap,
         )
     
 

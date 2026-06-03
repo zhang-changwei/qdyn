@@ -713,18 +713,18 @@ def calc_openmx_HK_SK_gamma(
         for i in range(natoms):
             nao_i = nao_per_atom[i]
             off_i = nao_idx_offset[i]
-            tmp = Son[i][:nao_i**2] 
-            SK[off_i:off_i+nao_i, off_i:off_i+nao_i] = tmp.reshape(nao_i, nao_i)
-        # off-site
+            tmp = Son[i][:nao_i**2]
+            SK[off_i:off_i+nao_i, off_i:off_i+nao_i] += tmp.reshape(nao_i, nao_i)
+        # off-site (periodic images contribute to the same atom pair)
         for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
             nao_i = nao_per_atom[i]
             nao_j = nao_per_atom[j]
             off_i = nao_idx_offset[i]
             off_j = nao_idx_offset[j]
-            tmp = Soff[idx][:nao_i*nao_j] 
-            SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+            tmp = Soff[idx][:nao_i*nao_j]
+            SK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp.reshape(nao_i, nao_j)
     else:
-        # no on-site
+        # no on-site, cross-frame overlap
         for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
             if i < natoms and j >= natoms:
                 j -= natoms
@@ -732,8 +732,8 @@ def calc_openmx_HK_SK_gamma(
                 nao_j = nao_per_atom[j]
                 off_i = nao_idx_offset[i]
                 off_j = nao_idx_offset[j]
-                tmp = Soff[idx][:nao_i*nao_j] 
-                SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+                tmp = Soff[idx][:nao_i*nao_j]
+                SK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp.reshape(nao_i, nao_j)
 
     return SK
 
