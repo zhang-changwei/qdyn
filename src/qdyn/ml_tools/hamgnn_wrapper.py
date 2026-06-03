@@ -337,9 +337,9 @@ def n2amd_workflow(
         for idx, (stru, task_dir) in enumerate(zip(strus, task_dirs)):
             # 1. parse scfout
             scfout_data = read_scfout(os.path.join(task_dir, 'qdyn.scfout'))
-            if not nao_per_atoms:
+            if nao_per_atoms is None:
                 nao_per_atoms = scfout_data['nao_per_atom']
-            if not basis_def:
+            if basis_def is None:
                 basis_def = get_basis_def(software, stru, worker_model.nao_max)
             # 2. calc SK and HK
             SK = calc_openmx_HK_SK_gamma(scfout_data)
