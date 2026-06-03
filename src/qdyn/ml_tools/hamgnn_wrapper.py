@@ -5,7 +5,6 @@ from multiprocessing.pool import AsyncResult
 import queue
 import os
 from pathlib import Path
-import sys
 import time
 import warnings
 from typing import Any
@@ -257,25 +256,78 @@ class HamGNNWrapper:
 
 
 
-model: HamGNNWrapper | None = None
+_worker_model: HamGNNWrapper | None = None
+_worker_software: str | None = None
+_worker_add_H0: bool | None = None
+_worker_eigen_dtype: np.float32 | np.float64 | None = None
+_worker_predict_batch_size = 1
 
-def init_worker(omp: int):
-    torch.set_num_threads(omp)
+_THREAD_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def _set_thread_env(threads_per_proc: int):
+    threads = str(threads_per_proc)
+    for env_name in _THREAD_ENV_VARS:
+        os.environ[env_name] = threads
+
+
+def init_spawn_worker(
+    software: str,
+    mlh_input: HamGNNInputT,
+    model_path: str,
+    threads_per_proc: int,
+    predict_batch_size: int,
+    eigen_dtype: np.float32 | np.float64,
+):
+    _set_thread_env(threads_per_proc)
+
+    import torch as torch_module
+
+    torch_module.set_num_threads(threads_per_proc)
+    torch_module.set_num_interop_threads(1)
+
+    global _worker_model
+    global _worker_software
+    global _worker_add_H0
+    global _worker_eigen_dtype
+    global _worker_predict_batch_size
+
+    _worker_software = software
+    _worker_add_H0 = mlh_input.add_H0
+    _worker_eigen_dtype = eigen_dtype
+    _worker_predict_batch_size = max(1, predict_batch_size)
+    _worker_model = HamGNNWrapper(mlh_input, model_path=model_path, device='cpu')
+
 
 def n2amd_workflow(
-    software: str,
-    add_H0: bool,
-    dtype: np.float32 | np.float64,
     steps: list[int],
     strus: list[Atoms],
     task_dirs: list[str],
     progress_queue: Any,
 ):
-    global model
-    assert model is not None, (
+    global _worker_model
+    assert _worker_model is not None, (
         "HamGNN model is not initialized in worker process. "
-        "This workflow requires Linux fork-based workers inheriting a preloaded model."
+        "This workflow requires spawn workers initialized with init_spawn_worker."
     )
+    assert _worker_software is not None, (
+        "HamGNN worker software configuration is not initialized."
+    )
+    assert _worker_add_H0 is not None, (
+        "HamGNN worker add_H0 configuration is not initialized."
+    )
+    assert _worker_eigen_dtype is not None, (
+        "HamGNN worker eigen dtype configuration is not initialized."
+    )
+    worker_model = _worker_model
+    software = _worker_software
+    add_H0 = _worker_add_H0
+    dtype = _worker_eigen_dtype
 
     SKs, H0Ks, graphs, num_mats = [], [], [], []
     nao_per_atoms = None
@@ -288,7 +340,7 @@ def n2amd_workflow(
             if not nao_per_atoms:
                 nao_per_atoms = scfout_data['nao_per_atom']
             if not basis_def:
-                basis_def = get_basis_def(software, stru, model.nao_max)
+                basis_def = get_basis_def(software, stru, worker_model.nao_max)
             # 2. calc SK and HK
             SK = calc_openmx_HK_SK_gamma(scfout_data)
             SKs.append(SK)
@@ -312,7 +364,8 @@ def n2amd_workflow(
         # 4. predict
         assert nao_per_atoms is not None, "NAO per atom information is missing."
         assert basis_def is not None, "Basis definition information is missing."
-        hamiltonians = model.predict(graphs, batch_size=len(graphs))
+        predict_batch_size = min(_worker_predict_batch_size, len(graphs))
+        hamiltonians = worker_model.predict(graphs, batch_size=predict_batch_size)
         # logging
         progress_queue.put(
             {
@@ -327,7 +380,7 @@ def n2amd_workflow(
             HR = hamiltonians[mat_offsets[idx]:mat_offsets[idx]+num_mats[idx]]
             HK = calc_hamgnn_HK_gamma(
                 HR, 
-                model.nao_max, 
+                worker_model.nao_max,
                 nao_per_atoms, 
                 basis_def, 
                 graphs[idx], 
@@ -387,28 +440,37 @@ class MLSCFSolver:
     ):
         self.software = software
         self.logger = logger
-        if sys.platform != 'linux':
-            raise RuntimeError(
-                f"HamGNN N2AMD multiprocessing with shared model only supports Linux/fork; "
-                f"got platform={sys.platform!r}."
+        if nproc < 1:
+            raise ValueError(f"nproc must be >= 1, got {nproc}.")
+        if threads_per_proc < 1:
+            raise ValueError(
+                f"threads_per_proc must be >= 1, got {threads_per_proc}."
             )
 
         model_path_ = Path(model_path).expanduser().resolve()
         if not model_path_.is_file():
             raise FileNotFoundError(f"Model file not found at {model_path_}")
 
-        mlh_input.batch_size = max(1, mlh_input.batch_size // nproc)
-        self.batch_size = mlh_input.batch_size * nproc
+        self.predict_batch_size = max(1, mlh_input.batch_size // nproc)
+        self.batch_size = self.predict_batch_size * nproc
         self.nproc = nproc
-        self._ctx = multiprocessing.get_context("fork")
-        global model
-        model = HamGNNWrapper(mlh_input, model_path=str(model_path_), device='cpu')
-        self._manager = multiprocessing.Manager()
+        self.threads_per_proc = threads_per_proc
+        self._ctx = multiprocessing.get_context("spawn")
+        _set_thread_env(threads_per_proc)
+        worker_mlh_input = deepcopy(mlh_input)
+        self._manager = self._ctx.Manager()
         self.progress_queue = self._manager.Queue()
         self.pool = self._ctx.Pool(
             processes=nproc,
-            initializer=init_worker,
-            initargs=(threads_per_proc,),
+            initializer=init_spawn_worker,
+            initargs=(
+                self.software,
+                worker_mlh_input,
+                str(model_path_),
+                threads_per_proc,
+                self.predict_batch_size,
+                (np.float64 if mlh_input.adv.eigen_dtype == 'float64' else np.float32),
+            ),
         )
         self._pool_terminated = False
         self.tasks = []
@@ -486,9 +548,6 @@ class MLSCFSolver:
             result = self.pool.apply_async(
                 n2amd_workflow, 
                 (
-                    self.software,
-                    self.add_H0,
-                    self.eigen_dtype,
                     steps,
                     strus,
                     task_dirs,
@@ -514,4 +573,3 @@ class MLSCFSolver:
         finally:
             self.tasks.clear()
             self.task_count = 0
-
