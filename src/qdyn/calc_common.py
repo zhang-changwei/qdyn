@@ -178,7 +178,7 @@ def write_stru(
                 if s not in syms_set:
                     syms.append(s)
                     syms_set.add(s)
-            valence = [VALENCE_ELECTRONS['openmx'][s] for s in syms]
+            valence = [VALENCE_ELECTRONS['openmx'][s] for s in raw_syms]
             pos = structure.get_positions()
             cell = structure.get_cell().array
 
@@ -202,7 +202,7 @@ def write_stru(
 
             # species and coordinates block
             stru_lines.append("<Atoms.SpeciesAndCoordinates\n")
-            for i, (s, v) in enumerate(zip(syms, valence)):
+            for i, (s, v) in enumerate(zip(raw_syms, valence)):
                 stru_lines.append(
                     " {:5d} {:3s} {:12.8f} {:12.8f} {:12.8f} {:4.1f} {:4.1f}\n".format(
                         i+1, s, pos[i,0], pos[i,1], pos[i,2], v/2, v/2

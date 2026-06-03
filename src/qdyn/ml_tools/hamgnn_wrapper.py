@@ -72,7 +72,8 @@ def _load_config(config: HamGNNInputT) -> dict[str, Any]:
     rep['build_internal_graph'] = config.adv.build_internal_graph
     rep['legacy_edge_update'] = config.adv.legacy_edge_update
 
-    return default
+    from easydict import EasyDict
+    return EasyDict(default)
 
 def get_basis_def(software: str, stru: Atoms, nao_max: int = 26) -> dict[int, npt.NDArray[np.int32]]:
     z = set(stru.numbers)
@@ -226,6 +227,7 @@ class HamGNNWrapper:
         self.output_module.to(torch.float32)
 
         self.model = Model.load_from_checkpoint(checkpoint_path=model_path,
+            strict=False,
             representation=self.graph_representation,
             output=self.output_module,
             post_processing=self.post_utility,
@@ -401,7 +403,8 @@ class MLSCFSolver:
         self._ctx = multiprocessing.get_context("fork")
         global model
         model = HamGNNWrapper(mlh_input, model_path=str(model_path_), device='cpu')
-        self.progress_queue = self._ctx.Queue()
+        self._manager = multiprocessing.Manager()
+        self.progress_queue = self._manager.Queue()
         self.pool = self._ctx.Pool(
             processes=nproc,
             initializer=init_worker,
@@ -430,9 +433,10 @@ class MLSCFSolver:
     def close(self):
         if self._pool_terminated:
             self.pool.join()
-            return
-        self.pool.close()
-        self.pool.join()
+        else:
+            self.pool.close()
+            self.pool.join()
+        self._manager.shutdown()
 
     def _terminate_pool(self):
         if not self._pool_terminated:
