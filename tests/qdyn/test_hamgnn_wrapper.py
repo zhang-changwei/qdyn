@@ -24,10 +24,19 @@ def hamgnn_wrapper_module(monkeypatch):
         if (
             name == "qdyn.ml_tools.hamgnn_wrapper"
             or name.startswith("hamgnn")
+            or name == "torch"
             or name.startswith("torch_geometric")
             or name.startswith("pytorch_lightning")
         ):
             sys.modules.pop(name, None)
+
+    torch_module = ModuleType("torch")
+    torch_module.Tensor = type("Tensor", (), {})
+    torch_module.float32 = object()
+    torch_module.long = object()
+    torch_module.set_num_threads = lambda threads: None
+    torch_module.set_num_interop_threads = lambda threads: None
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
 
     tg_data = ModuleType("torch_geometric.data")
     tg_data.Dataset = object
@@ -141,6 +150,32 @@ def test_mlscfsolver_uses_spawn_and_preserves_input_batch_size(
     assert dummy_ctx.pool_kwargs["initargs"][1].batch_size == 5
     assert dummy_ctx.pool_kwargs["initargs"][3] == 3
     assert dummy_ctx.pool_kwargs["initargs"][4] == 2
+
+
+def test_init_spawn_worker_populates_orbital_basis(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.HamGNNWrapper",
+        lambda config, model_path, device="cpu": SimpleNamespace(nao_max=config.nao_max),
+    )
+    hamgnn_wrapper_module.ORBITAL_BASIS.clear()
+
+    mlh_input = _make_hamgnn_input(batch_size=4)
+    hamgnn_wrapper_module.init_spawn_worker(
+        software="openmx",
+        mlh_input=mlh_input,
+        model_path=str(model_path),
+        threads_per_proc=1,
+        predict_batch_size=2,
+        eigen_dtype=hamgnn_wrapper_module.np.float32,
+    )
+
+    assert hamgnn_wrapper_module.ORBITAL_BASIS
+    assert "S" in hamgnn_wrapper_module.ORBITAL_BASIS
 
 
 def test_mlscfsolver_run_chunks_tasks_and_logs_progress(

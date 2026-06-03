@@ -301,6 +301,8 @@ def init_spawn_worker(
     _worker_add_H0 = mlh_input.add_H0
     _worker_eigen_dtype = eigen_dtype
     _worker_predict_batch_size = max(1, predict_batch_size)
+    ORBITAL_BASIS.clear()
+    ORBITAL_BASIS.update(select_orbitals(software, mlh_input.nao_max))
     _worker_model = HamGNNWrapper(mlh_input, model_path=model_path, device='cpu')
 
 
