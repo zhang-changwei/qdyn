@@ -1,15 +1,8 @@
 <template>
   <div class="dynamic-step-form">
-    <el-alert
-      v-if="schema?.['x-ui-note']"
-      :title="''"
-      type="info"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 16px; white-space: pre-line;"
-    >
-      {{ schema['x-ui-note'] }}
-    </el-alert>
+    <ul v-if="Array.isArray(schema?.['x-ui-note'])" class="step-note">
+      <li v-for="(line, idx) in schema['x-ui-note']" :key="idx" v-html="line" />
+    </ul>
     <!-- Regular fields (grouped layout) -->
     <template v-for="item in regularFieldsGrouped" :key="item.key">
       <!-- Row of ungrouped fields (multi-column grid) -->
@@ -421,7 +414,7 @@ function buildFieldDescriptors(
     }
 
     // Normalize nullable / union schemas
-    let { schema: normalized, nullable } = normalizeNullableSchema(prop)
+    let { schema: normalized, nullable } = normalizeNullableSchema(prop, rootSchema)
 
     const group = prop.group ?? normalized.group
 
@@ -1216,6 +1209,18 @@ provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
 
 .inline-discriminator-select :deep(.el-input__wrapper) {
   padding: 1px 8px;
+}
+
+.step-note {
+  font: var(--text-small);
+  color: var(--fg-tertiary);
+  line-height: 1.6;
+  margin: 0 0 var(--space-3) 0;
+  padding-left: 20px;
+}
+
+.step-note li {
+  margin-bottom: 2px;
 }
 
 </style>

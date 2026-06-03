@@ -38,10 +38,10 @@
   <!-- REGULAR: model file upload -->
   <div v-else-if="mode === 'regular' && ctx.isModelHashField(field)" class="model-upload-field">
     <div v-if="!ctx.getFieldValue(field.path)" class="model-upload-dropzone" :class="{ 'is-dragover': ctx.modelUploadDragover[field.path] }" @dragenter.prevent="ctx.modelUploadDragover[field.path] = true" @dragover.prevent="ctx.modelUploadDragover[field.path] = true" @dragleave.prevent="ctx.modelUploadDragover[field.path] = false" @drop.prevent="ctx.handleModelDrop(field, $event)" @click="ctx.triggerModelFileInput(field.path)">
-      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2" hidden @change="ctx.handleModelFileInput(field, $event)" />
+      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2,.ckpt" hidden @change="ctx.handleModelFileInput(field, $event)" />
       <el-icon class="model-upload-icon"><Upload /></el-icon>
       <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
-      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP), .ckpt (HamGNN)</div>
     </div>
     <div v-else class="model-hash-display">
       <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
@@ -54,10 +54,10 @@
   <!-- ADVANCED: model file upload (must precede textarea to avoid model_hash being eaten) -->
   <div v-else-if="mode === 'advanced' && ctx.isModelHashField(field)" class="model-upload-field">
     <div v-if="!ctx.getFieldValue(field.path)" class="model-upload-dropzone" :class="{ 'is-dragover': ctx.modelUploadDragover[field.path] }" @dragenter.prevent="ctx.modelUploadDragover[field.path] = true" @dragover.prevent="ctx.modelUploadDragover[field.path] = true" @dragleave.prevent="ctx.modelUploadDragover[field.path] = false" @drop.prevent="ctx.handleModelDrop(field, $event)" @click="ctx.triggerModelFileInput(field.path)">
-      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2" hidden @change="ctx.handleModelFileInput(field, $event)" />
+      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2,.ckpt" hidden @change="ctx.handleModelFileInput(field, $event)" />
       <el-icon class="model-upload-icon"><Upload /></el-icon>
       <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
-      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP), .ckpt (HamGNN)</div>
     </div>
     <div v-else class="model-hash-display">
       <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>

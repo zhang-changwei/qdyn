@@ -197,7 +197,7 @@
               <el-radio-group v-model="formData.method">
                 <el-radio value="namd">NAMD (Standard)</el-radio>
                 <el-tooltip
-                  content="Not yet supported, coming soon"
+                  content="Reserved for future workflow methods"
                   placement="top"
                 >
                   <span class="disabled-radio-wrapper">

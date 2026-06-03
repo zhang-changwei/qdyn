@@ -51,7 +51,7 @@ export function resolveLocalRef(
  *   with `widget: "band-input"`).
  * - Returns the original schema unchanged if no anyOf is present.
  */
-export function normalizeNullableSchema(schema: JsonSchemaObject): {
+export function normalizeNullableSchema(schema: JsonSchemaObject, rootSchema?: JsonSchemaObject): {
   schema: JsonSchemaObject
   nullable: boolean
 } {
@@ -75,6 +75,29 @@ export function normalizeNullableSchema(schema: JsonSchemaObject): {
     if (schema.placeholder) merged.placeholder = schema.placeholder
     if (schema.group) merged.group = schema.group
     return { schema: merged, nullable: hasNull }
+  }
+
+  // Collect const/enum values from anyOf branches into a single enum.
+  // Handles Pydantic's Literal[single_value] | Literal[""] → {const: "x"} | {const: ""}
+  const enumValues: unknown[] = []
+  for (const branch of nonNull) {
+    const resolved = branch.$ref && rootSchema
+      ? resolveLocalRef(rootSchema, branch.$ref) ?? branch
+      : branch
+    if (resolved.const !== undefined) enumValues.push(resolved.const)
+    if (resolved.enum) enumValues.push(...resolved.enum)
+  }
+  if (enumValues.length > 0) {
+    return {
+      schema: {
+        type: 'string',
+        title: schema.title,
+        description: schema.description,
+        default: schema.default,
+        enum: enumValues.filter((v) => v !== ''),
+      },
+      nullable: hasNull,
+    }
   }
 
   // Multi-type union (e.g. int | str) — if widget is set, treat as string input
@@ -157,7 +180,7 @@ export function buildDefaultsFromSchema(
     }
 
     // Normalize nullable schemas
-    const { schema: normalized } = normalizeNullableSchema(prop)
+    const { schema: normalized } = normalizeNullableSchema(prop, root)
 
     if (prop.default !== undefined) {
       result[key] = prop.default

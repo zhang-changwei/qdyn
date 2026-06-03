@@ -439,17 +439,12 @@ class ThermostatsInputT(BaseModel):
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
     model_config = ConfigDict(json_schema_extra={
-        "x-ui-note": (
-            "NVT simulations can be run for multiple rounds.\n"
-            "Different thermostats and step counts can be set per round.\n"
-            "- 1st round (Warmup): Recommend 'rescale_v' or 'bussi' thermostat\n"
-            "    with a larger step count to steadily reach equilibrium.\n"
-            "- Subsequent rounds (Production): Temperature fixed at 'temp_end'.\n"
-            "    Recommend 'bussi' or 'nhc' thermostats with fewer steps\n"
-            "    for correct ensemble sampling.\n"
-            "- Convergence check enabled in Production rounds.\n"
-            "    NVT completes once convergence is reached or round count is exhausted."
-        )
+        "x-ui-note": [
+            "NVT simulations can be run for multiple rounds with different thermostats and step counts per round.",
+            "<b>1st round (Warmup)</b>: Recommend <code>rescale_v</code> or <code>bussi</code> thermostat with a larger step count to steadily reach equilibrium.",
+            "<b>Subsequent rounds (Production)</b>: Temperature fixed at <code>temp_end</code>. Recommend <code>bussi</code> or <code>nhc</code> thermostats with fewer steps for correct ensemble sampling.",
+            "Convergence check is enabled in production rounds. NVT completes once convergence is reached or the round count is exhausted.",
+        ]
     })
 
     thermostats_algo: list[Literal['rescale_v', 'bussi', 'nhc']] = Field(
