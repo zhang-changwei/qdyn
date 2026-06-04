@@ -1,4 +1,5 @@
 from copy import deepcopy
+from contextlib import contextmanager
 from functools import wraps
 import multiprocessing
 from multiprocessing.pool import AsyncResult
@@ -260,7 +261,7 @@ _worker_model: HamGNNWrapper | None = None
 _worker_software: str | None = None
 _worker_add_H0: bool | None = None
 _worker_eigen_dtype: np.float32 | np.float64 | None = None
-_worker_predict_batch_size = 1
+_worker_batch_size = 1
 
 _THREAD_ENV_VARS = (
     "OMP_NUM_THREADS",
@@ -269,38 +270,76 @@ _THREAD_ENV_VARS = (
     "NUMEXPR_NUM_THREADS",
 )
 
-
-def _set_thread_env(threads_per_proc: int):
+@contextmanager
+def _thread_env_context(threads_per_proc: int):
+    previous = {
+        env_name: os.environ.get(env_name)
+        for env_name in _THREAD_ENV_VARS
+    }
     threads = str(threads_per_proc)
     for env_name in _THREAD_ENV_VARS:
         os.environ[env_name] = threads
+    try:
+        yield
+    finally:
+        for env_name, value in previous.items():
+            if value is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = value
+
+
+def _set_spawn_worker_cpu_affinity(nproc: int, threads_per_proc: int):
+    import psutil
+
+    worker_identity = multiprocessing.current_process()._identity
+    if not worker_identity:
+        raise RuntimeError(
+            "Unable to determine spawn worker identity for CPU affinity."
+        )
+
+    worker_index = worker_identity[0] % nproc
+    start_cpu = worker_index * threads_per_proc
+    # This binds consecutive logical CPUs only; with SMT/Hyper-Threading
+    # enabled, these IDs may not map to consecutive physical cores.
+    cpu_ids = list(range(start_cpu, start_cpu + threads_per_proc))
+
+    process = psutil.Process()
+    available_cpu_ids = sorted(process.cpu_affinity())
+    if not set(cpu_ids).issubset(available_cpu_ids):
+        raise RuntimeError(
+            "Failed to bind HamGNN spawn worker "
+            f"{worker_index + 1} to CPUs {cpu_ids}. "
+            f"Available CPUs: {available_cpu_ids}. "
+            f"threads_per_proc={threads_per_proc}."
+        )
+
+    process.cpu_affinity(cpu_ids)
 
 
 def init_spawn_worker(
     software: str,
     mlh_input: HamGNNInputT,
     model_path: str,
+    nproc: int,
     threads_per_proc: int,
-    predict_batch_size: int,
+    batch_per_proc: int,
     eigen_dtype: np.float32 | np.float64,
 ):
-    _set_thread_env(threads_per_proc)
-
-    import torch as torch_module
-
-    torch_module.set_num_threads(threads_per_proc)
-    torch_module.set_num_interop_threads(1)
+    _set_spawn_worker_cpu_affinity(nproc, threads_per_proc)
+    torch.set_num_threads(threads_per_proc)
+    torch.set_num_interop_threads(1)
 
     global _worker_model
     global _worker_software
     global _worker_add_H0
     global _worker_eigen_dtype
-    global _worker_predict_batch_size
+    global _worker_batch_size
 
     _worker_software = software
     _worker_add_H0 = mlh_input.add_H0
     _worker_eigen_dtype = eigen_dtype
-    _worker_predict_batch_size = max(1, predict_batch_size)
+    _worker_batch_size = max(1, batch_per_proc)
     ORBITAL_BASIS.clear()
     ORBITAL_BASIS.update(select_orbitals(software, mlh_input.nao_max))
     _worker_model = HamGNNWrapper(mlh_input, model_path=model_path, device='cpu')
@@ -332,15 +371,15 @@ def n2amd_workflow(
     dtype = _worker_eigen_dtype
 
     SKs, H0Ks, graphs, num_mats = [], [], [], []
-    nao_per_atoms = None
+    nao_per_atom = None
     basis_def = None
     idx = -1
     try:
         for idx, (stru, task_dir) in enumerate(zip(strus, task_dirs)):
             # 1. parse scfout
             scfout_data = read_scfout(os.path.join(task_dir, 'qdyn.scfout'))
-            if nao_per_atoms is None:
-                nao_per_atoms = scfout_data['nao_per_atom']
+            if nao_per_atom is None:
+                nao_per_atom = scfout_data['nao_per_atom']
             if basis_def is None:
                 basis_def = get_basis_def(software, stru, worker_model.nao_max)
             # 2. calc SK and HK
@@ -364,10 +403,10 @@ def n2amd_workflow(
         mat_offsets = np.zeros_like(num_mats)
         mat_offsets[1:] = np.cumsum(num_mats[:-1])
         # 4. predict
-        assert nao_per_atoms is not None, "NAO per atom information is missing."
+        assert nao_per_atom is not None, "NAO per atom information is missing."
         assert basis_def is not None, "Basis definition information is missing."
-        predict_batch_size = min(_worker_predict_batch_size, len(graphs))
-        hamiltonians = worker_model.predict(graphs, batch_size=predict_batch_size)
+        batch_size = min(_worker_batch_size, len(graphs))
+        hamiltonians = worker_model.predict(graphs, batch_size=batch_size)
         # logging
         progress_queue.put(
             {
@@ -383,7 +422,7 @@ def n2amd_workflow(
             HK = calc_hamgnn_HK_gamma(
                 HR, 
                 worker_model.nao_max,
-                nao_per_atoms, 
+                nao_per_atom, 
                 basis_def, 
                 graphs[idx], 
                 dtype=dtype
@@ -442,38 +481,36 @@ class MLSCFSolver:
     ):
         self.software = software
         self.logger = logger
-        if nproc < 1:
-            raise ValueError(f"nproc must be >= 1, got {nproc}.")
-        if threads_per_proc < 1:
-            raise ValueError(
-                f"threads_per_proc must be >= 1, got {threads_per_proc}."
-            )
 
         model_path_ = Path(model_path).expanduser().resolve()
         if not model_path_.is_file():
             raise FileNotFoundError(f"Model file not found at {model_path_}")
 
-        self.predict_batch_size = max(1, mlh_input.batch_size // nproc)
-        self.batch_size = self.predict_batch_size * nproc
+        batch_per_proc = max(1, mlh_input.batch_size // nproc)
+        self.batch_size = batch_per_proc * nproc
+        mlh_input.batch_size = self.batch_size
         self.nproc = nproc
         self.threads_per_proc = threads_per_proc
+
         self._ctx = multiprocessing.get_context("spawn")
-        _set_thread_env(threads_per_proc)
         worker_mlh_input = deepcopy(mlh_input)
-        self._manager = self._ctx.Manager()
-        self.progress_queue = self._manager.Queue()
-        self.pool = self._ctx.Pool(
-            processes=nproc,
-            initializer=init_spawn_worker,
-            initargs=(
-                self.software,
-                worker_mlh_input,
-                str(model_path_),
-                threads_per_proc,
-                self.predict_batch_size,
-                (np.float64 if mlh_input.adv.eigen_dtype == 'float64' else np.float32),
-            ),
-        )
+        with _thread_env_context(threads_per_proc):
+            self._manager = self._ctx.Manager()
+            self.progress_queue = self._manager.Queue()
+            self.pool = self._ctx.Pool(
+                processes=nproc,
+                initializer=init_spawn_worker,
+                initargs=(
+                    self.software,
+                    worker_mlh_input,
+                    str(model_path_),
+                    nproc,
+                    threads_per_proc,
+                    batch_per_proc,
+                    (np.float64 if mlh_input.adv.eigen_dtype == 'float64' 
+                                else np.float32),
+                ),
+            )
         self._pool_terminated = False
         self.tasks = []
         self.task_count = 0

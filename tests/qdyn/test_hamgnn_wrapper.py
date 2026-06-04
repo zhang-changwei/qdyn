@@ -72,6 +72,18 @@ def hamgnn_wrapper_module(monkeypatch):
     hamgnn_models = ModuleType("hamgnn.models")
     hamgnn_models.__path__ = []
 
+    class DummyPsutilProcess:
+        def __init__(self):
+            self._affinity = list(range(64))
+
+        def cpu_affinity(self, cpus=None):
+            if cpus is None:
+                return list(self._affinity)
+            self._affinity = list(cpus)
+
+    psutil_module = ModuleType("psutil")
+    psutil_module.Process = DummyPsutilProcess
+
     monkeypatch.setitem(
         sys.modules,
         "hamgnn",
@@ -83,6 +95,7 @@ def hamgnn_wrapper_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "hamgnn.models", hamgnn_models)
     monkeypatch.setitem(sys.modules, "hamgnn.models.Model", hamgnn_model)
     monkeypatch.setitem(sys.modules, "hamgnn.models.hamgnn_output", hamgnn_output)
+    monkeypatch.setitem(sys.modules, "psutil", psutil_module)
 
     module = importlib.import_module("qdyn.ml_tools.hamgnn_wrapper")
     return module
@@ -141,7 +154,6 @@ def test_mlscfsolver_uses_spawn_and_preserves_input_batch_size(
 
     assert context_calls == ["spawn"]
     assert mlh_input.batch_size == 5
-    assert solver.predict_batch_size == 2
     assert solver.batch_size == 4
     assert dummy_ctx.pool_kwargs["processes"] == 2
     assert dummy_ctx.pool_kwargs["initializer"] is hamgnn_wrapper_module.init_spawn_worker
@@ -162,6 +174,10 @@ def test_init_spawn_worker_populates_orbital_basis(
         "qdyn.ml_tools.hamgnn_wrapper.HamGNNWrapper",
         lambda config, model_path, device="cpu": SimpleNamespace(nao_max=config.nao_max),
     )
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.current_process",
+        lambda: SimpleNamespace(_identity=(1,)),
+    )
     hamgnn_wrapper_module.ORBITAL_BASIS.clear()
 
     mlh_input = _make_hamgnn_input(batch_size=4)
@@ -170,12 +186,57 @@ def test_init_spawn_worker_populates_orbital_basis(
         mlh_input=mlh_input,
         model_path=str(model_path),
         threads_per_proc=1,
-        predict_batch_size=2,
+        batch_per_proc=2,
         eigen_dtype=hamgnn_wrapper_module.np.float32,
     )
 
     assert hamgnn_wrapper_module.ORBITAL_BASIS
     assert "S" in hamgnn_wrapper_module.ORBITAL_BASIS
+
+
+def test_set_spawn_worker_cpu_affinity_uses_pool_worker_index(
+    monkeypatch, hamgnn_wrapper_module
+):
+    affinity_calls = []
+
+    class DummyPsutilProcess:
+        def cpu_affinity(self, cpus=None):
+            if cpus is None:
+                return list(range(8))
+            affinity_calls.append(list(cpus))
+
+    psutil_module = ModuleType("psutil")
+    psutil_module.Process = DummyPsutilProcess
+    monkeypatch.setitem(sys.modules, "psutil", psutil_module)
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.current_process",
+        lambda: SimpleNamespace(_identity=(2,)),
+    )
+
+    hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(threads_per_proc=2)
+
+    assert affinity_calls == [[2, 3]]
+
+
+def test_set_spawn_worker_cpu_affinity_raises_when_cpu_range_exceeds_available(
+    monkeypatch, hamgnn_wrapper_module
+):
+    class DummyPsutilProcess:
+        def cpu_affinity(self, cpus=None):
+            if cpus is None:
+                return [0, 1, 2]
+            raise AssertionError("cpu_affinity setter should not be called")
+
+    psutil_module = ModuleType("psutil")
+    psutil_module.Process = DummyPsutilProcess
+    monkeypatch.setitem(sys.modules, "psutil", psutil_module)
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.current_process",
+        lambda: SimpleNamespace(_identity=(2,)),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to bind HamGNN spawn worker 2"):
+        hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(threads_per_proc=2)
 
 
 def test_mlscfsolver_run_chunks_tasks_and_logs_progress(
