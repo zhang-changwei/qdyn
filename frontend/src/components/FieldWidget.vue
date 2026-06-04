@@ -1,6 +1,10 @@
 <template>
+  <div v-if="disabled" class="field-disabled-overlay" :title="String(ctx.getFieldValue(field.path) ?? field.schema.default ?? '')">
+    <span v-if="field.resolvedType === 'boolean'">{{ ctx.getFieldValue(field.path) ? 'Yes' : 'No' }}</span>
+    <span v-else class="field-disabled-text">{{ ctx.getFieldValue(field.path) ?? field.schema.default ?? '—' }}</span>
+  </div>
   <!-- log-step -->
-  <div v-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
+  <div v-else-if="field.widget === 'log-step'" style="display: flex; align-items: center; gap: 6px;">
     <el-button size="small" @click="ctx.logStep(field.path, 0.1)">÷10</el-button>
     <input type="text" class="log-step-input" :class="{ 'log-step-input--invalid': ctx.invalidLogInputs[field.path] }" :value="ctx.formatExp(ctx.getFieldValue(field.path))" placeholder="e.g. 1e-6" @change="($event: Event) => ctx.parseExp(field.path, ($event.target as HTMLInputElement).value, $event.target as HTMLInputElement)" />
     <el-button size="small" @click="ctx.logStep(field.path, 10)">×10</el-button>
@@ -38,10 +42,10 @@
   <!-- REGULAR: model file upload -->
   <div v-else-if="mode === 'regular' && ctx.isModelHashField(field)" class="model-upload-field">
     <div v-if="!ctx.getFieldValue(field.path)" class="model-upload-dropzone" :class="{ 'is-dragover': ctx.modelUploadDragover[field.path] }" @dragenter.prevent="ctx.modelUploadDragover[field.path] = true" @dragover.prevent="ctx.modelUploadDragover[field.path] = true" @dragleave.prevent="ctx.modelUploadDragover[field.path] = false" @drop.prevent="ctx.handleModelDrop(field, $event)" @click="ctx.triggerModelFileInput(field.path)">
-      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2" hidden @change="ctx.handleModelFileInput(field, $event)" />
+      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2,.ckpt" hidden @change="ctx.handleModelFileInput(field, $event)" />
       <el-icon class="model-upload-icon"><Upload /></el-icon>
       <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
-      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP), .ckpt (HamGNN)</div>
     </div>
     <div v-else class="model-hash-display">
       <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
@@ -54,10 +58,10 @@
   <!-- ADVANCED: model file upload (must precede textarea to avoid model_hash being eaten) -->
   <div v-else-if="mode === 'advanced' && ctx.isModelHashField(field)" class="model-upload-field">
     <div v-if="!ctx.getFieldValue(field.path)" class="model-upload-dropzone" :class="{ 'is-dragover': ctx.modelUploadDragover[field.path] }" @dragenter.prevent="ctx.modelUploadDragover[field.path] = true" @dragover.prevent="ctx.modelUploadDragover[field.path] = true" @dragleave.prevent="ctx.modelUploadDragover[field.path] = false" @drop.prevent="ctx.handleModelDrop(field, $event)" @click="ctx.triggerModelFileInput(field.path)">
-      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2" hidden @change="ctx.handleModelFileInput(field, $event)" />
+      <input :ref="ctx.setModelFileInputRef(field.path)" type="file" accept=".model,.pt2,.ckpt" hidden @change="ctx.handleModelFileInput(field, $event)" />
       <el-icon class="model-upload-icon"><Upload /></el-icon>
       <div class="model-upload-text"><span>Drop model file here or </span><el-button type="primary" link>click to upload</el-button></div>
-      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP compiled)</div>
+      <div class="model-upload-hint">Supports .model (MACE), .pt2 (NequIP), .ckpt (HamGNN)</div>
     </div>
     <div v-else class="model-hash-display">
       <el-icon class="model-hash-icon"><SuccessFilled /></el-icon>
@@ -66,8 +70,10 @@
     </div>
     <el-progress v-if="ctx.modelUploadProgress[field.path] != null && ctx.modelUploadProgress[field.path] < 100" :percentage="ctx.modelUploadProgress[field.path]" :stroke-width="4" style="margin-top: 4px;" />
   </div>
-  <!-- ADVANCED: textarea for free string fields (resolvedType === 'string' && !enum) -->
-  <el-input v-else-if="mode === 'advanced' && field.resolvedType === 'string' && !field.resolvedSchema.enum" type="textarea" :rows="4" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
+  <!-- ADVANCED: textarea only for explicitly marked fields -->
+  <el-input v-else-if="mode === 'advanced' && field.widget === 'textarea'" type="textarea" :rows="4" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
+  <!-- ADVANCED: regular text input for other string fields -->
+  <el-input v-else-if="mode === 'advanced' && field.resolvedType === 'string' && !field.resolvedSchema.enum" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event)" />
   <!-- ADVANCED: enum select -->
   <el-select v-else-if="mode === 'advanced' && field.resolvedSchema.enum" :model-value="ctx.getFieldValue(field.path)" @update:model-value="ctx.setFieldValue(field.path, $event)">
     <el-option v-for="opt in field.resolvedSchema.enum" :key="String(opt)" :label="ctx.isDisabledEnumOption(opt) ? `${opt} (maintenance)` : String(opt)" :value="opt" :disabled="ctx.isDisabledEnumOption(opt)" />
@@ -95,12 +101,34 @@ import { FIELD_WIDGET_CONTEXT_KEY, type FieldDescriptor } from '@/utils/schema-f
 defineProps<{
   field: FieldDescriptor
   mode: 'regular' | 'advanced'
+  disabled?: boolean
 }>()
 
 const ctx = inject(FIELD_WIDGET_CONTEXT_KEY)!
 </script>
 
 <style scoped>
+.field-disabled-overlay {
+  color: var(--fg-tertiary, #909399);
+  font-size: 13px;
+  padding: 5px 11px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border-radius: 4px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  cursor: not-allowed;
+  overflow: hidden;
+  width: 100%;
+}
+
+.field-disabled-text {
+  overflow-wrap: break-word;
+  word-break: break-all;
+  width: 100%;
+}
+
 :deep(.el-input-number) {
   width: 100%;
 }

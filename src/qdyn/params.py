@@ -1,5 +1,5 @@
 import re
-from typing import Literal
+from typing import Any, Literal
 
 _INCAR = {
     'ISTART': 0,
@@ -249,6 +249,32 @@ HAMGNN_PRETRAINED_MODELS = (
 type HAMGNN_PRETRAINED_MODELS_TYPE = Literal[
     'universal2.0',
 ]
+
+HAMGNN_PRETRAINED_CONFIGS: dict[str, Any] = {
+    'universal2.0': {
+        'ham_type': 'openmx',
+        'nao_max': 26,
+        'add_H0': True,
+        'cutoff': 26.0,
+        'irreps_edge_sh': '0e + 1o + 2e + 3o + 4e + 5o + 6e',
+        'irreps_node_features': '128x0e+32x1o+32x1e+32x2o+32x2e+32x3o+32x3e+16x4o+16x4e+16x5o+8x5e+8x6e',
+        'num_layers': 3,
+        'adv': {
+            'legacy_edge_update': True,
+            'cutoff_func': 'cos',
+            'num_radial': 128,
+            'num_types': 128,
+            'rbf_func': 'bessel',
+            'set_features': True,
+            'radial_MLP': [128, 128],
+            'use_corr_prod': True,
+            'num_hidden_features': 32,
+            'use_kan': False,
+            'radius_scale': 1.01,
+            'build_internal_graph': False,
+        },
+    },
+}
 
 
 # PBE

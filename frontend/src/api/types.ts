@@ -612,15 +612,9 @@ export interface NAMDInput {
   inibands: number[]
 }
 
-/** Basic input */
-export interface BasicInput {
-  software: 'vasp' | 'cp2k' | 'siesta' | 'abacus' | 'openmx'
-  plot: boolean
-}
-
 /** Top-level InputT payload for /submit */
 export interface InputT {
-  basic_input: BasicInput
+  plot: boolean
   scheduler_config: Record<string, never>
   nvt_input?: NVTInput | null
   nve_input?: NVEInput | null

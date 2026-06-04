@@ -2815,15 +2815,15 @@ def _preview_from_traj_hash(
 def _resolve_software_for_task(task_id: str, manager: MainWorkflow) -> str:
     """Determine the software used by a task.
 
-    Checks step-specific software first (nvt_input/nve_input may differ
-    from basic_input when using MLFF), then basic_input, then 'vasp'.
+    Scans step-specific inputs (nvt_input, nve_input, scf_input) for a
+    ``software`` field.  Falls back to ``'vasp'`` when none is found.
     """
     payload_json = qdyndb.get_queued_payload(task_id)
     if payload_json:
         try:
             payload = json.loads(payload_json)
             input_data = payload.get("input", {})
-            for section in ("nvt_input", "nve_input", "basic_input"):
+            for section in ("nvt_input", "nve_input", "scf_input"):
                 data = input_data.get(section)
                 if isinstance(data, dict):
                     sw = data.get("software")

@@ -7,7 +7,6 @@ from qtoolkit import QResources
 
 from qdyn.errors import QueryError, ValidationError
 from qdyn.input import (
-    BasicInputT,
     DFTBaseInputT,
     InputT,
     MACEInputT,
@@ -235,7 +234,6 @@ def test_submit_uses_active_pool_context(monkeypatch):
     manager.main_workflow = MethodType(fake_main_workflow, manager)
 
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         steps=["nvt"],
     )
@@ -269,7 +267,6 @@ def test_submit_rejects_non_active_pool(monkeypatch):
     )
 
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         steps=["nvt"],
     )
@@ -347,7 +344,6 @@ def test_load_config_rejects_mismatched_jf_config_hash(tmp_path: Path):
 
 def test_validate_workflow_input_requires_fused_inputs(tmp_path: Path):
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         scf_input=SCFInputT(),
         steps=["fused_scf_prenamd"],
@@ -394,7 +390,6 @@ def test_validate_workflow_input_requires_fused_inputs(tmp_path: Path):
 
 def test_validate_workflow_input_rejects_hash_when_stru_format_mismatches(monkeypatch):
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         scf_input=SCFInputT(),
         steps=["scf"],
@@ -463,7 +458,6 @@ def test_step_scf_uses_active_pool_user_data_path(monkeypatch):
     monkeypatch.setattr("qdyn.main_workflow.set_run_config", lambda job, **_: job)
 
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         scf_input=SCFInputT(),
         steps=["scf"],
@@ -537,7 +531,6 @@ def test_step_nve_uses_calculator_nodes(monkeypatch):
     }
 
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         nve_input=NVEInputT(calculator=DFTBaseInputT(nodes=7)),
         steps=["nve"],
@@ -598,7 +591,6 @@ def test_step_nve_uses_mace_software_and_model_path(monkeypatch):
     }
 
     payload = InputT(
-        basic_input=BasicInputT(),
         scheduler_config=SchedulerConfigT(),
         nve_input=NVEInputT(
             software="mace",

@@ -492,7 +492,7 @@ def validate_workflow_input(
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
 
-    # step contiguity check (for namd)
+    # step contiguity check (namd only; other methods reserved for future use)
     if method == "namd":
         key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
         expanded_steps = _expand_steps_for_validation(input.steps)
