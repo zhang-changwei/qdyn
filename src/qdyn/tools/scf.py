@@ -385,7 +385,7 @@ def qdyn_scf_cpu(
             # save overlap matrix
             scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
             SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
-            np.save(olapdir / "overlap.npy", SK)
+            np.save(subdir / "overlap.npy", SK)
 
             # logging
             scf_logger(step=idx, global_idx=subdir.name, category='overlap')
@@ -513,23 +513,6 @@ def _validate_scf_output(software: str, software_dft: str, inputs: dict):
                 "SCF calculation failed: qdyn.out does not contain 'Elapsed.Time.' marker. "
                 "The calculation may not have completed successfully."
             )
-        
-        # Check SCF convergence
-        # scf_max_iter = 40
-        # scf_criterion = 1.0e-6
-        
-        # max_iter_match = re.search(r"scf\.maxIter\s+([0-9]+)", text)
-        # if max_iter_match:
-        #     try:
-        #         scf_max_iter = int(max_iter_match.group(1))
-        #     except ValueError:
-        #         scf_max_iter = 40
-        # criterion_match = re.search(r"scf\.criterion\s+([0-9eE\.+\-]+)", text)
-        # if criterion_match:
-        #     try:
-        #         scf_criterion = float(criterion_match.group(1))
-        #     except ValueError:
-        #         scf_criterion = 1.0e-6
         
         scf_max_iter = inputs.get('scf.maxIter', 40)
         scf_criterion = inputs.get('scf.criterion', 1.0e-6)

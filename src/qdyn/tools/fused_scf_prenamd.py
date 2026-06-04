@@ -368,7 +368,7 @@ def qdyn_fused_scf_prenamd_task(
                 # save overlap matrix
                 scfout_data = read_scfout(str(olapdir / "qdyn.scfout")) # type: ignore
                 SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
-                np.save(olapdir / "overlap.npy", SK) # type: ignore
+                np.save(subdir / "overlap.npy", SK) # type: ignore
 
                 # logging
                 scf_logger(step=canac_idx, global_idx=subdir.name, category='overlap')
