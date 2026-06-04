@@ -214,7 +214,7 @@ class HamGNNInputT(BaseModel):
         json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
     )
     batch_size: int = Field(
-        default=32,
+        default=16,
         ge=1,
         description="Number of structures per batch for HamGNN inference.",
         json_schema_extra={"step": 8},

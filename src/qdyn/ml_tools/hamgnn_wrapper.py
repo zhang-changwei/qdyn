@@ -25,10 +25,11 @@ from hamgnn.models.Model import Model
 from hamgnn.models.hamgnn_output import HamGNNPlusPlusOut
 import numpy.typing as npt
 
-from ..calc_common import select_orbitals
+from ..calc_common import select_orbitals, change_dir
 from ..input import HamGNNInputT
 from ..params import ORBITAL_BASIS
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
+from ..tools.run_software import run_software
 from ..tools.scf import SCFLogger
 
 NAO_MAX_SPDF = {
@@ -375,7 +376,19 @@ def n2amd_workflow(
     basis_def = None
     idx = -1
     try:
+        threads = torch.get_num_threads()
         for idx, (stru, task_dir) in enumerate(zip(strus, task_dirs)):
+            # 0. openmx postprocess
+            if software == 'openmx':
+                with change_dir(task_dir):
+                    run_software(
+                        software=software, 
+                        nprocs=threads, 
+                        postprocess=True,
+                        omp=1,
+                    )
+            else:
+                raise NotImplementedError
             # 1. parse scfout
             scfout_data = read_scfout(os.path.join(task_dir, 'qdyn.scfout'))
             if nao_per_atom is None:

@@ -568,8 +568,8 @@ class MainWorkflow:
         else:
             nodes = 1
             ncpus = active_worker_cfg['cpus_per_node']
-            processes_per_node = min(8, ncpus)
-            threads_per_process = max(1, ncpus // processes_per_node)
+            processes_per_node = ncpus
+            threads_per_process = 1
             dft_backend = calculator.ham_type
             pp_path = active_worker_cfg["pp_path"][dft_backend]
             orb_path = active_worker_cfg["orb_path"][dft_backend]

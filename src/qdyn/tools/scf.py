@@ -328,15 +328,16 @@ def qdyn_scf_cpu(
             shutil.copy2(prev_chgcar, subdir / chgcar)
 
         # Change to subdirectory and run
-        with change_dir(subdir):
-            run_software(
-                software=software_dft, 
-                nprocs=nprocs, 
-                is_alle=parameters.is_alle,
-                postprocess=postprocess,
-                omp=omp,
-            )
-            _validate_scf_output(software, software_dft, dftinputs.inputs)
+        if software != 'hamgnn':
+            with change_dir(subdir):
+                run_software(
+                    software=software_dft, 
+                    nprocs=nprocs, 
+                    is_alle=parameters.is_alle,
+                    postprocess=postprocess,
+                    omp=omp,
+                )
+                _validate_scf_output(software, software_dft, dftinputs.inputs)
 
         # run scf solver
         scf_solver.add(idx, subdir, stru)
@@ -348,6 +349,7 @@ def qdyn_scf_cpu(
     # run solver for tail frames
     scf_solver.run()
     scf_solver.close()
+    del scf_solver
 
 
     # tdoverlap calculation
@@ -356,39 +358,55 @@ def qdyn_scf_cpu(
         dftinputs.update_stru_extras()
 
     if software_dft in {'abacus', 'openmx'}:
-        for idx in range(nstep):
-            global_idx = frame_start + idx + 1
-            subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
 
-            olapdir = subdir / "overlap"
-            olapdir.mkdir(exist_ok=True)
-
-            atoms = strus[idx].copy()
-            atoms.extend(strus[idx + 1])
-            for fname in files_to_copy:
-                shutil.copy2(subdir / fname, olapdir / fname)
-            write_stru(
-                olapdir / STRU_FNAME_MAPPING[software_dft],
-                atoms,
-                stru_format=STRU_FORMAT_MAPPING[software_dft],
-                extras=dftinputs.stru_extras
-            )
-
+        def run_software_wrapper(subdir, olapdir):
             with change_dir(olapdir):
                 run_software(
                     software=software_dft,
-                    nprocs=nprocs,
+                    nprocs=threads_per_process,
                     postprocess=True,
-                    omp=omp,
+                    omp=1,
                 )
-
             # save overlap matrix
             scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
             SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
             np.save(subdir / "overlap.npy", SK)
 
+        import multiprocessing
+        from multiprocessing.pool import AsyncResult
+        results: list[AsyncResult] = []
+        with multiprocessing.Pool(processes=processes_per_node) as pool:
+            for idx in range(nstep):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+
+                olapdir = subdir / "overlap"
+                olapdir.mkdir(exist_ok=True)
+
+                atoms = strus[idx].copy()
+                atoms.extend(strus[idx + 1])
+                for fname in files_to_copy:
+                    shutil.copy2(subdir / fname, olapdir / fname)
+                write_stru(
+                    olapdir / STRU_FNAME_MAPPING[software_dft],
+                    atoms,
+                    stru_format=STRU_FORMAT_MAPPING[software_dft],
+                    extras=dftinputs.stru_extras
+                )
+                results.append(
+                    pool.apply_async(
+                        run_software_wrapper, 
+                        args=(subdir, olapdir)
+                    )
+                )
+
             # logging
-            scf_logger(step=idx, global_idx=subdir.name, category='overlap')
+            for idx, result in enumerate(results):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+                result.get()
+
+                scf_logger(step=idx, global_idx=subdir.name, category='overlap')
     
     scf_logger.close()
 
