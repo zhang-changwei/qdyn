@@ -323,23 +323,16 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
         software_dft = 'openmx'
+        hamgnn_out = np.load(os.path.join(dir_path, 'wfz.npz'), mmap_mode='r')
+        nbands = hamgnn_out['wfc'].shape[1]
     except Exception as e:
         raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
-    
-    symbol = stru.symbols.indices()
-    naos = {}
-    for sym in symbol:
-        basis = ORBITAL_BASIS[sym]
-        orbitals = basis.partition('-')[2]
-        numbers = re.findall(r'[spdf](\d+)', orbitals)
-        naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
 
     syms = stru.get_chemical_symbols()
     nele = 0
     nbands = 0
     for sym in syms:
         nele += VALENCE_ELECTRONS[software_dft][sym]
-        nbands += naos[sym]
     vbm = (nele + 1) // 2
     cbm = vbm + 1
     return vbm, cbm, nbands

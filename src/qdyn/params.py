@@ -22,7 +22,7 @@ _OPENMX = {
     "scf.xctype":                "GGA-PBE",
     "scf.spinpolarization":      "off",
     "scf.electronictemperature":  300.0,
-    "scf.energycutoff":           220.0,
+    "scf.energycutoff":           150.0,
     "scf.maxiter":                90,
     "scf.eigenvaluesolver":      "band",
     "scf.proexpn.vna":           "on",
