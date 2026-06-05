@@ -461,7 +461,7 @@ class MainWorkflow:
         else:
             nodes = 1
             ncpus = active_worker_cfg['cpus_per_node']
-            processes_per_node = min(8, ncpus)
+            processes_per_node = min(calculator.nprocs, ncpus)
             threads_per_process = max(1, ncpus // processes_per_node)
             # HamGNN needs DFT postprocess which requires pp/orb path
             dft_backend = calculator.ham_type
@@ -560,6 +560,7 @@ class MainWorkflow:
             processes_per_node = active_worker_cfg['scf'][software]['processes_per_node']
             threads_per_process = active_worker_cfg['scf'][software]['threads_per_process']
             ncpus = processes_per_node * threads_per_process
+            default_nprocs_py = 8
             pp_path = active_worker_cfg["pp_path"][software]
             orb_path = active_worker_cfg["orb_path"][software]
             model_path = ''
@@ -570,6 +571,7 @@ class MainWorkflow:
             ncpus = active_worker_cfg['cpus_per_node']
             processes_per_node = ncpus
             threads_per_process = 1
+            default_nprocs_py = calculator.nprocs
             dft_backend = calculator.ham_type
             pp_path = active_worker_cfg["pp_path"][dft_backend]
             orb_path = active_worker_cfg["orb_path"][dft_backend]
@@ -577,7 +579,7 @@ class MainWorkflow:
             res_software = dft_backend
             use_gpu = False # calculator.use_gpu
         nprocs_dft = processes_per_node
-        nprocs_py = max(1, min(8, ncpus))
+        nprocs_py = max(1, min(default_nprocs_py, ncpus))
         omp_py = max(1, ncpus // nprocs_py)
 
         jobs_fused = qdyn_fused_scf_prenamd(

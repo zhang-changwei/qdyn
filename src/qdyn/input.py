@@ -216,8 +216,9 @@ class HamGNNInputT(BaseModel):
     batch_size: int = Field(
         default=16,
         ge=1,
+        le=16,
         description="Number of structures per batch for HamGNN inference.",
-        json_schema_extra={"step": 8},
+        json_schema_extra={"step": 4},
     )
     cutoff: float = Field(
         default=24.0,
@@ -248,6 +249,10 @@ class HamGNNInputT(BaseModel):
         ge=1.0,
         description="Energy cutoff (in Ry) for two-center integrals in LCAO.",
     )
+    nprocs: Literal[1, 2, 4, 8] = Field(
+        default=8,
+        description="Concurrent processes for HamGNN inference.",
+    )
 
     adv: _HamGNNInputAdvT = Field(
         default_factory=_HamGNNInputAdvT,
@@ -266,6 +271,7 @@ class HamGNNInputT(BaseModel):
                 self.adv = _HamGNNInputAdvT(**value)
             else:
                 setattr(self, key, value)
+        self.batch_size = max(self.batch_size // self.nprocs * self.nprocs, self.nprocs)
         return self
 
 
