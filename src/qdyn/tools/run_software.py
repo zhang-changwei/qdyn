@@ -195,6 +195,10 @@ def run_software(
 ) -> None:
     """Run the specified software with appropriate settings.
 
+    Notes: 
+        Do not use logging in this function unless you know exactly what you are doing.
+        It may be called in subprocesses.
+
     Args:
         software: Name of the software to run (e.g., 'vasp').
         nprocs: Number of MPI processes to use.

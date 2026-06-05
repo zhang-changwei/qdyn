@@ -11,7 +11,7 @@ from jobflow.core.job import job, Job
 
 from ..calc_common import (
     write_stru, read_strus, 
-    change_dir, parse_band_index, select_orbitals
+    parse_band_index, select_orbitals
 )
 from ..input import SCFInputT, PreNAMDInputT, DFTBaseInputT
 from ..input_prepare import DFTInputs
@@ -20,16 +20,11 @@ from ..params import (
     STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING, 
     ORBITAL_BASIS
 )
-from ..output_postprocess import (
-    extract_band_edges, 
-    read_scfout, 
-    calc_openmx_HK_SK_gamma
-)
-from .scf import TrajInfo, SCFLogger, SCFSolverStub
-from .scf import _prepare_scf_input, _validate_scf_output
+from ..output_postprocess import extract_band_edges
+from .scf import TrajInfo, SCFLogger, DFTSCFSolver
+from .scf import _prepare_scf_input, overlap_run_software
 from .canac import extract_tdolaps, extract_nacs
 from .dephase import calculate_dephasing_time
-from .run_software import run_software
 
 def qdyn_fused_scf_prenamd(
     software: str,
@@ -124,10 +119,10 @@ def qdyn_fused_scf_prenamd_task(
 
     software = software.lower()
     calc = scf_input.calculator
-    nprocs_dft *= nodes
     omp_dft = max(1, ncpus // nprocs_dft)
     omp_py = max(1, ncpus // nprocs_py)
     nprocs_dft = max(1, ncpus // omp_dft) * nodes
+    nprocs_py = max(1, ncpus // omp_py)
     scf_step = scf_input.scf_step
 
     strus = read_strus(traj.format, traj_path=traj.path)
@@ -157,7 +152,14 @@ def qdyn_fused_scf_prenamd_task(
         postprocess = False
         # logger and solver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
-        scf_solver = SCFSolverStub()
+        scf_solver = DFTSCFSolver(
+            software=software_dft,
+            scf_input=scf_input,
+            inputs_dict=dftinputs.inputs,
+            logger=scf_logger,
+            nproc=nprocs_dft,
+            threads_per_proc=omp_dft,
+        )
         batch_size = nprocs_py
     else:
         software_dft = calc.ham_type
@@ -195,7 +197,7 @@ def qdyn_fused_scf_prenamd_task(
     dftinputs.write(stru=False)
 
     # for overlap (use a copy to avoid mutating the SCF inputs_dict)
-    if software_dft in {'abacus', 'openmx'}:
+    if software_dft in ('abacus', 'openmx'):
         inputs_dict_olap = deepcopy(inputs_dict)
         if software_dft == 'openmx':
             inputs_dict_olap['postprocess.output.level'] = 1
@@ -209,7 +211,8 @@ def qdyn_fused_scf_prenamd_task(
             kspacing=calc.kspacing,
             inputs_dict=inputs_dict_olap,
         )
-    
+        import multiprocessing
+        pool_olap = multiprocessing.Pool(processes=nprocs_py)
 
     if prepare_input_only:
         return {
@@ -234,17 +237,25 @@ def qdyn_fused_scf_prenamd_task(
         subdir_path = task_dir / subdir_name
         subdirs.append(str(subdir_path))
 
-    LARGE_FNAMES = {
+    LARGE_FNAMES: dict[str, set] = {
         'vasp': {
             'WAVECAR', 'CHG', 'CHGCAR', 'OUTCAR', 
             'vasprun.xml', 'vaspout.h5'
         },
         'openmx': {
-            'qdyn.scfout'
+            'qdyn.scfout', 'qdyn.out'
+        },
+        'hamgnn': {
+            'wfc.npz', 'overlap.npy', 'overlap.npz'
         }
     }
-    def remove_large_outputs(folders: Sequence[str | Path]) -> None:
-        fnames = LARGE_FNAMES[software_dft]
+    def remove_large_outputs(
+        softwares: Sequence[str],
+        folders: Sequence[str | Path]
+    ) -> None:
+        fnames = set()
+        for s in softwares:
+            fnames = fnames.union(LARGE_FNAMES.get(s, set()))
 
         for folder in folders:
             for fname in fnames:
@@ -288,23 +299,11 @@ def qdyn_fused_scf_prenamd_task(
             if prev_chgcar and prev_chgcar.is_file():
                 shutil.move(prev_chgcar, subdir / chgcar)
 
-            # Change to subdirectory and run
-            with change_dir(subdir):
-                run_software(
-                    software=software_dft, 
-                    nprocs=nprocs_dft, 
-                    is_alle=scf_input.is_alle,
-                    postprocess=postprocess,
-                    omp=omp_dft,
-                )
-                _validate_scf_output(software, software_dft, dftinputs.inputs)
-
             # run scf solver
             scf_solver.add(scf_idx, subdir, stru)
 
-            # Updates and logging
+            # Update CHGCAR
             prev_chgcar = subdir / chgcar
-            scf_logger(step=scf_idx, global_idx=subdir.name, category='normal')
 
         # ensure the solver is runned, normal frames auto satisfied
         # useful for head / tail frames
@@ -331,6 +330,7 @@ def qdyn_fused_scf_prenamd_task(
                 ikpt=prenamd_input.adv.ikpt,
                 ispin=prenamd_input.adv.ispin,
                 nproc=nprocs_py,
+                batch_size=batch_size,
                 dirs_sorted=True,
                 generator=True,
             )
@@ -339,7 +339,9 @@ def qdyn_fused_scf_prenamd_task(
 
 
         # overlap block (normal frames)
-        if software_dft in {'abacus', 'openmx'}:
+        if software_dft in ('abacus', 'openmx'):
+            results = []
+
             for canac_idx in range(canac_start, canac_end):
                 subdir = Path(subdirs[canac_idx])
 
@@ -357,20 +359,18 @@ def qdyn_fused_scf_prenamd_task(
                     extras=dftinputs_olap.stru_extras, # type: ignore
                 )
 
-                with change_dir(olapdir):
-                    run_software(
-                        software=software_dft, 
-                        nprocs=nprocs_dft, 
-                        postprocess=True,
-                        omp=omp_dft,
+                results.append(
+                    pool_olap.apply_async( # pyright: ignore[reportPossiblyUnboundVariable]
+                        overlap_run_software,
+                        args=(subdir, olapdir, software_dft, omp_py)
                     )
+                )
 
-                # save overlap matrix
-                scfout_data = read_scfout(str(olapdir / "qdyn.scfout")) # type: ignore
-                SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
-                np.save(subdir / "overlap.npy", SK) # type: ignore
+            # logging
+            for canac_idx, result in zip(range(canac_start, canac_end), results):
+                subdir = Path(subdirs[canac_idx])
+                result.get()
 
-                # logging
                 scf_logger(step=canac_idx, global_idx=subdir.name, category='overlap')
   
 
@@ -379,9 +379,10 @@ def qdyn_fused_scf_prenamd_task(
 
         # Remove frames that cannot be needed by later CA-NAC pairs.
         # Keep frame canac_end — it is the left endpoint of the next group.
-        remove_large_outputs(subdirs[canac_start: canac_end])
-        if software_dft in {'abacus', 'openmx'}:
+        remove_large_outputs((software, software_dft), subdirs[canac_start: canac_end])
+        if software_dft in ('abacus', 'openmx'):
             remove_large_outputs(
+                (software_dft),
                 [os.path.join(f, 'overlap') 
                  for f in subdirs[canac_start: canac_end]]
             )
@@ -398,6 +399,9 @@ def qdyn_fused_scf_prenamd_task(
     # close the logger and solver
     scf_logger.close()
     scf_solver.close()
+    if software_dft in ('abacus', 'openmx'):
+        pool_olap.close() # pyright: ignore[reportPossiblyUnboundVariable]
+        pool_olap.join() # pyright: ignore[reportPossiblyUnboundVariable]
 
     return {
         "run_dir": str(Path.cwd()),

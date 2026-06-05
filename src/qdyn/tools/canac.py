@@ -35,11 +35,14 @@ def extract_tdolaps(
     ispin: int = 1,
     soc: bool = False,
     nproc: int = 1,
+    batch_size: int = 0,
     dirs_sorted: bool = False,
     generator: bool = False,
 ) -> Generator[dict[str, Any] | None, None, None]:
     # input validation
     nbasis = bmax - bmin + 1
+    if not batch_size:
+        batch_size = nproc
     
     if not dirs_sorted:
         import natsort
@@ -91,8 +94,8 @@ def extract_tdolaps(
 
         # tdolap
         if generator:
-            for idx_start in indices[::nproc]:
-                for idx in indices[idx_start : idx_start + nproc]:
+            for idx_start in indices[::batch_size]:
+                for idx in indices[idx_start : idx_start + batch_size]:
                     # skip if already processed
                     if check_list[idx]:
                         continue

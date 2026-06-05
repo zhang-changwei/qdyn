@@ -69,16 +69,53 @@ class SCFLogger:
     def close(self):
         self.log_file.close()
 
-class SCFSolverStub:
+class DFTSCFSolver:
+
+    def __init__(
+        self, 
+        software: str, 
+        scf_input: SCFInputT, 
+        inputs_dict: dict,
+        logger: SCFLogger,
+        nproc: int = 1,
+        threads_per_proc: int = 1
+    ):
+        self.software = software
+        self.nproc = nproc
+        self.omp = threads_per_proc
+        self.scf_input = scf_input
+        self.inputs = inputs_dict
+        self.logger = logger
+
+        self.tasks: list[tuple[int, Path, Atoms]] = []
+        self.task_count = 0
+        pass
 
     def add(self, step: int, job_dir: Path, stru: Atoms):
-        pass
+        self.tasks.append((step, job_dir, stru))
+        self.task_count += 1
+        self.run()
 
     def close(self):
         pass
 
     def run(self):
-        pass
+        if not self.task_count:
+            return
+        
+        for step, subdir, stru in self.tasks:
+            with change_dir(subdir):
+                run_software(
+                    software=self.software, 
+                    nprocs=self.nproc,
+                    is_alle=self.scf_input.is_alle,
+                    omp=self.omp,
+                )
+                _validate_scf_output(self.software, self.inputs)
+            self.logger(step=step, global_idx=subdir.name, category='normal')
+
+        self.tasks.clear()
+        self.task_count = 0
 
 
 class TrajInfo(BaseModel):
@@ -88,7 +125,7 @@ class TrajInfo(BaseModel):
     stop: int
 
 
-def run_software_wrapper(
+def overlap_run_software(
     subdir: Path,
     olapdir: Path,
     software_dft: str,
@@ -260,13 +297,17 @@ def qdyn_scf_cpu(
             inputs_params=calc.parameters,
         )
         postprocess = False
-        # resources
-        nprocs = nodes * processes_per_node
-        omp = threads_per_process
         # logger and solver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
         last_step = scf_logger.cur_step
-        scf_solver = SCFSolverStub()
+        scf_solver = DFTSCFSolver(
+            software=software_dft,
+            scf_input=parameters,
+            inputs_dict=dftinputs.inputs,
+            logger=scf_logger,
+            nproc=nodes * processes_per_node,
+            threads_per_proc=threads_per_process,
+        )
     else:
         software_dft = calc.ham_type
         # select orbitals
@@ -288,9 +329,6 @@ def qdyn_scf_cpu(
             inputs_dict=inputs_dict,
         )
         postprocess = True
-        # resources
-        nprocs = processes_per_node * threads_per_process # nodes = 1
-        omp = 1
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
@@ -346,24 +384,11 @@ def qdyn_scf_cpu(
         if prev_chgcar and prev_chgcar.is_file():
             shutil.copy2(prev_chgcar, subdir / chgcar)
 
-        # Change to subdirectory and run
-        if software != 'hamgnn':
-            with change_dir(subdir):
-                run_software(
-                    software=software_dft, 
-                    nprocs=nprocs, 
-                    is_alle=parameters.is_alle,
-                    postprocess=postprocess,
-                    omp=omp,
-                )
-                _validate_scf_output(software, software_dft, dftinputs.inputs)
-
         # run scf solver
         scf_solver.add(idx, subdir, stru)
 
-        # Updates and logging
+        # Update CHGCAR
         prev_chgcar = subdir / chgcar
-        scf_logger(step=idx, global_idx=subdir.name, category='normal')
     
     # run solver for tail frames
     scf_solver.run()
@@ -400,7 +425,7 @@ def qdyn_scf_cpu(
                 )
                 results.append(
                     pool.apply_async(
-                        run_software_wrapper, 
+                        overlap_run_software, 
                         args=(subdir, olapdir, software_dft, threads_per_process)
                     )
                 )
@@ -473,7 +498,7 @@ def _clean_all_files(subdir: str, stru: str):
             os.remove(fpath)
 
 
-def _validate_scf_output(software: str, software_dft: str, inputs: dict):
+def _validate_scf_output(software: str, inputs: dict):
     """Validate SCF calculation completed successfully.
 
     Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
@@ -537,7 +562,7 @@ def _validate_scf_output(software: str, software_dft: str, inputs: dict):
                 "The calculation may not have completed successfully."
             )
         
-        scf_max_iter = inputs.get('scf.maxIter', 40)
+        scf_max_iter = inputs.get('scf.maxiter', 40)
         scf_criterion = inputs.get('scf.criterion', 1.0e-6)
 
         scf_lines = re.findall(
@@ -561,18 +586,6 @@ def _validate_scf_output(software: str, software_dft: str, inputs: dict):
             raise RuntimeError(
                 "SCF calculation failed: SCF did not converge. "
                 "qdyn.out last-step Uele change exceeds scf.criterion."
-            )
-            
-    elif software == 'hamgnn':
-        if software_dft == 'openmx':
-            if not os.path.isfile('qdyn.scfout'):
-                raise FileNotFoundError("Overlap matrix calculation failed: qdyn.scfout not found.")
-        elif software_dft == 'abacus':
-            if not os.path.isfile('placeholder'): # align with 3.11lts
-                raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
-        else:
-            raise NotImplementedError(
-                f"Hamgnn does not support '{software_dft}' yet."
             )
     else:
         raise NotImplementedError(

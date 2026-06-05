@@ -307,6 +307,9 @@ def _set_spawn_worker_cpu_affinity(nproc: int, threads_per_proc: int):
 
     process = psutil.Process()
     available_cpu_ids = sorted(process.cpu_affinity())
+    # rule out the superthreading case
+    if nproc * threads_per_proc * 2 <= len(available_cpu_ids):
+        return
     if not set(cpu_ids).issubset(available_cpu_ids):
         raise RuntimeError(
             "Failed to bind HamGNN spawn worker "
