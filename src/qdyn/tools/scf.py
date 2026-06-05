@@ -88,6 +88,25 @@ class TrajInfo(BaseModel):
     stop: int
 
 
+def run_software_wrapper(
+    subdir: Path,
+    olapdir: Path,
+    software_dft: str,
+    threads_per_process: int,
+):
+    """Run overlap postprocess and save the overlap matrix."""
+    with change_dir(olapdir):
+        run_software(
+            software=software_dft,
+            nprocs=threads_per_process,
+            postprocess=True,
+            omp=1,
+        )
+    # save overlap matrix
+    scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
+    SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
+    np.save(subdir / "overlap.npy", SK)
+
 
 def qdyn_scf(
     software: str,
@@ -358,20 +377,6 @@ def qdyn_scf_cpu(
         dftinputs.update_stru_extras()
 
     if software_dft in {'abacus', 'openmx'}:
-
-        def run_software_wrapper(subdir, olapdir):
-            with change_dir(olapdir):
-                run_software(
-                    software=software_dft,
-                    nprocs=threads_per_process,
-                    postprocess=True,
-                    omp=1,
-                )
-            # save overlap matrix
-            scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
-            SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
-            np.save(subdir / "overlap.npy", SK)
-
         import multiprocessing
         from multiprocessing.pool import AsyncResult
         results: list[AsyncResult] = []
@@ -396,7 +401,7 @@ def qdyn_scf_cpu(
                 results.append(
                     pool.apply_async(
                         run_software_wrapper, 
-                        args=(subdir, olapdir)
+                        args=(subdir, olapdir, software_dft, threads_per_process)
                     )
                 )
 
