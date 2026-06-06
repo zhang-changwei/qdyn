@@ -12,6 +12,7 @@ from pymatgen.io.vasp import Incar
 
 from .calc_common import write_stru, read_stru
 from .params import PSEUDO_POTENTIAL, STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
+from .tools.pseuh import write_stru_pseuh
 
 
 class DFTInputs:
@@ -23,6 +24,7 @@ class DFTInputs:
         pp_path: str | Path | None = None,
         orb_path: str | Path | None = None,
         kspacing: float | None = None,
+        pseudo_h: bool = False,
         inputs_dict: dict | None = None,
         inputs_params: str = '',
     ):
@@ -35,6 +37,7 @@ class DFTInputs:
         self._orb_path = (Path(orb_path).expanduser().resolve() 
                           if orb_path is not None else None)
         self._kpoints: tuple[int, int, int] | None = None
+        self._pseudoh: bool = pseudo_h
         self._gamma: bool | None = None
         self._inputs: dict[str, Any] | None = None
         self._nbands: int | None = None
@@ -218,13 +221,22 @@ class DFTInputs:
             self.write_inputs(software, folder)
         if kpoints:
             self.write_kpoints(software, folder)
-        if stru:
-            write_stru(folder / STRU_FNAME_MAPPING[software], 
-                       self.stru,
-                       STRU_FORMAT_MAPPING[software], 
-                       self.stru_extras)
-        if pp:
-            self.write_pp(software, folder)
+        if self._pseudoh:
+            write_stru_pseuh(
+                software,
+                folder,
+                self.stru,
+                self.pp_path,
+                self.stru_extras
+            )
+        else:
+            if stru:
+                write_stru(folder / STRU_FNAME_MAPPING[software], 
+                        self.stru,
+                        STRU_FORMAT_MAPPING[software], 
+                        self.stru_extras)
+            if pp:
+                self.write_pp(software, folder)
 
     def write_inputs(self, software: str, folder: Path):
         if software == 'vasp':

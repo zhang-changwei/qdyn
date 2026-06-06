@@ -53,10 +53,13 @@ def select_orbitals(software: str, category: str | int) -> dict[str, str]:
                 orbital_basis[element] = orb
     return orbital_basis
 
-def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
+def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = False) -> Atoms:
     """Read a single structure from a file."""
+    if pseudo_h:
+        return read_stru_pseuh(stru_file, stru_format)
+
     if stru_format in ioformats:
-        return ase.io.read(stru_file, format=stru_format, index=0)
+        return ase.io.read(stru_file, format=stru_format, index=0) # type: ignore
     
     f = open(stru_file) if isinstance(stru_file, (str, Path)) else stru_file
 
@@ -66,7 +69,7 @@ def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
         pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.I | re.S)
         try:
             match = pattern.search(content)
-            lines = match.group(1).strip().splitlines()
+            lines = match.group(1).strip().splitlines() # type: ignore
             symbols, positions = [], []
             for line in lines:
                 parts = line.split()
@@ -79,7 +82,7 @@ def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
         pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.I | re.S)
         try:
             match = pattern.search(content)
-            lines = match.group(1).strip().splitlines()
+            lines = match.group(1).strip().splitlines() # type: ignore
             cell = [[float(x) for x in line.split()] for line in lines]
         except Exception as e:
             raise ValueError(f"Failed to parse unit vectors from {stru_file}: {e}")
@@ -275,35 +278,6 @@ def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.
     ase.io.write(track_file, structures, format=ase_format)
     return track_file
 
-# def read_stru(
-#     stru: str,
-#     stru_format: str = 'vasp',
-#     pseudo_h: bool = False,
-#     from_str: bool = False,
-# ) -> Atoms:
-#     """Read a single structure from a file path or string.
-
-#     Args:
-#         stru: Path to the structure file, or the structure content as a
-#             string when *from_str* is True.
-#         stru_format: ASE I/O format string (e.g. ``'vasp'`` for POSCAR).
-#         pseudo_h: If True, treat pseudo-hydrogen placeholder symbols
-#             (e.g. ``H050``) and apply FixAtoms.  Delegates to
-#             :func:`qdyn.tools.pseuh.read_stru_pseuh`.
-#         from_str: If True, *stru* is interpreted as structure text
-#             instead of a file path.
-
-#     Returns:
-#         ASE Atoms object.
-#     """
-#     if pseudo_h:
-#         return read_stru_pseuh(stru, stru_format=stru_format, from_str=from_str)
-
-#     if from_str:
-#         return ase.io.read(io.StringIO(stru), format=stru_format) # type: ignore
-#     else:
-#         return ase.io.read(stru, format=stru_format) # type: ignore
-
 
 class TrajWriter:
     def __init__(self, dyn, atoms, fname='qdyn.extxyz', format='extxyz'):
@@ -463,7 +437,7 @@ def read_trajectory_summary(
         try:
             atoms = ase.io.read(traj_path, format=fmt, index=0)
             summary = {
-                "formula": atoms.get_chemical_formula(),
+                "formula": atoms.get_chemical_formula(), # type: ignore
                 "num_atoms": len(atoms),
                 "num_frames": count_trajectory_frames(traj_path, fmt),
                 "format": fmt,
@@ -500,7 +474,7 @@ def extract_structure_metadata(
                 _io.StringIO(input.stru),
                 format=input.stru_format or "vasp",
             )
-            formula = atoms.get_chemical_formula()
+            formula = atoms.get_chemical_formula() # type: ignore
             num_atoms = len(atoms)
         except Exception:
             logging.warning("Failed to parse structure metadata from POSCAR")
