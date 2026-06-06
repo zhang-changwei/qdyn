@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 from jobflow.core.job import job
 
-from ..calc_common import read_stru, write_stru, xc_mapping, select_orbitals
+from ..calc_common import read_stru, write_stru, stru_todict, xc_mapping, select_orbitals
 from ..input import NVTInputT, DFTBaseInputT
 from ..params import (
     PARAMS_DEFAULT, BAK_FNAMES,
@@ -212,10 +212,7 @@ def qdyn_nvt(
     if images:
         images[-1] = str(Path.cwd() / 'qdyn_nvt.png')
 
-    stru_dict = cur_stru.todict() # type: ignore
-    if stru_dict.get('constraints') is not None:
-        stru_dict['constraints'] = [i.todict() for i in stru_dict['constraints']]  # type: ignore
-
+    stru_dict = stru_todict(cur_stru)
     return {
         'run_dir': str(Path.cwd()),
         'software': software,

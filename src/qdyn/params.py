@@ -187,6 +187,7 @@ TRAJ_FORMAT_MAPPING = {
     'xyz': 'xyz',
     'nequip': 'extxyz',
     'mace': 'extxyz',
+    'openmx': 'openmx-md',
 }
 
 # MLFFs

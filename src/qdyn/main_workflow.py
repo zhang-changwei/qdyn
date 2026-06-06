@@ -20,7 +20,7 @@ from .input import (
 )
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
-from .calc_common import TRAJ_FORMAT_MAPPING, read_stru
+from .calc_common import TRAJ_FORMAT_MAPPING, read_stru, stru_todict
 from .pool import WorkerPool
 
 from .tools.nvt import qdyn_nvt
@@ -244,9 +244,7 @@ class MainWorkflow:
                 ) from exc
         elif stru:
             with io.StringIO(stru) as s:
-                structure = read_stru(stru_format, s).todict()
-            if structure.get('constraints') is not None:
-                structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+                structure = stru_todict(read_stru(stru_format, s))
         else:
             raise ValidationError(
                 "No structure provided for the nvt step. \n"
@@ -336,9 +334,7 @@ class MainWorkflow:
                 ) from exc
         elif stru:
             with io.StringIO(stru) as s:
-                structure = read_stru(stru_format, s).todict()
-            if structure.get('constraints') is not None:
-                structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+                structure = stru_todict(read_stru(stru_format, s))
         else:
             raise ValidationError(
                 "No structure provided for NVE step. \n"

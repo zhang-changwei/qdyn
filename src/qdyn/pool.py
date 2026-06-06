@@ -382,19 +382,19 @@ class WorkerPool:
 
         return str(remote_path)
 
-    def _build_remote_python_command(self, python_code: str) -> str:
+    def _build_remote_python_command(self, python_code: str, use_sys_py: bool = False) -> str:
         commands: list[str] = []
 
-        if self.worker_cfg['installed']['python']:
-            for module_name in self.worker_cfg['modules']['python']:
-                commands.append(f"module load {shlex.quote(str(module_name))}")
-
-            for key, value in self.worker_cfg['export']['python'].items():
-                commands.append(f"export {key}={shlex.quote(str(value))}")
-
+        if not use_sys_py and self.worker_cfg['installed']['python']:
             pre_run = self.worker_cfg['pre_run']['python']
             if pre_run:
                 commands.append(pre_run)
 
-        commands.append("python -c " + shlex.quote(python_code))
+            for key, value in self.worker_cfg['export']['python'].items():
+                commands.append(f"export {key}={shlex.quote(str(value))}")
+
+            for module_name in self.worker_cfg['modules']['python']:
+                commands.append(f"module load {shlex.quote(str(module_name))}")
+
+        commands.append("python3 -c " + shlex.quote(python_code))
         return "\n".join(commands)
