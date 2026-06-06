@@ -79,8 +79,8 @@ def get_mlff_calculator(
         calculator = NequIPCalculator.from_compiled_model(
             compile_path=model_path_,
             device=device,
-            energy_unit=convert_energy[calc.energy_unit],
-            length_unit=convert_length[calc.length_unit],
+            energy_units_to_eV=convert_energy[calc.energy_unit],
+            length_unit_to_A=convert_length[calc.length_unit],
         )
 
     elif isinstance(calc, MACEInputT):

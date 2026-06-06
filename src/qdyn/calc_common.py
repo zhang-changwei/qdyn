@@ -8,11 +8,12 @@ import re
 from pathlib import Path
 from ase import Atoms
 import ase.io
-from typing import Any, Literal
+from typing import Any, Literal, IO
 import logging
 
 from ase import Atoms
 from ase.constraints import FixAtoms
+from ase.io.formats import ioformats
 import numpy as np
 from scipy.linalg import eigh as eigh_
 
@@ -20,75 +21,109 @@ from .input import InputT
 from .pool import WorkerPool
 from .tools.pseuh import read_stru_pseuh
 from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
+from .params import XC_MAPPING, ALL_ORBITALS
 
 logger = logging.getLogger(__name__)
 
-def read_stru(stru_format: str, stru_path: str) -> Atoms:
+def xc_mapping(software: str, xc: str, input: dict) -> dict:
+    if software == 'vasp':
+        if xc in ['PBE', 'Not above']:
+            pass
+        elif xc is 'HSE06':
+            input['LHFCALC'] = True
+            input['GGA'] = 'PE'
+            input['HFSCREEN'] = 0.2
+        else:
+            input['GGA'] = XC_MAPPING[software][xc]
+    elif software == 'openmx':
+        if xc is 'Not above':
+            pass
+        else:
+            input['scf.xctype'] = XC_MAPPING[software][xc]
+    else:
+        raise NotImplementedError(f"Unsupported software: {software}")
+    return input
+
+
+def select_orbitals(software: str, category: str | int) -> dict[str, str]:
+    orbital_basis = {}
+    for element, orbs in ALL_ORBITALS[software].items():
+        for orb, cats in orbs.items():
+            if category in cats:
+                orbital_basis[element] = orb
+    return orbital_basis
+
+def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
     """Read a single structure from a file."""
-    if stru_format == 'vasp':
-        return ase.io.read(stru_path, format='vasp')
-    elif stru_format == 'openmx-dat':
-        with open(stru_path) as f:
-            content = f.read()
-            # parse symbols, positions
-            pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.I | re.S)
+    if stru_format in ioformats:
+        return ase.io.read(stru_file, format=stru_format, index=0)
+    
+    f = open(stru_file) if isinstance(stru_file, (str, Path)) else stru_file
+
+    if stru_format == 'openmx-dat':
+        content = f.read()
+        # parse symbols, positions
+        pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.I | re.S)
+        try:
+            match = pattern.search(content)
+            lines = match.group(1).strip().splitlines()
+            symbols, positions = [], []
+            for line in lines:
+                parts = line.split()
+                symbols.append(parts[1])
+                positions.append([float(x) for x in parts[2:5]])
+        except Exception as e:
+            raise ValueError(f"Failed to parse structure from {stru_file}: {e}")
+        
+        # cell
+        pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.I | re.S)
+        try:
+            match = pattern.search(content)
+            lines = match.group(1).strip().splitlines()
+            cell = [[float(x) for x in line.split()] for line in lines]
+        except Exception as e:
+            raise ValueError(f"Failed to parse unit vectors from {stru_file}: {e}")
+        
+        # velocities
+        velocities = None
+        pattern = re.compile(r"<MD\.Init\.Velocity\s+(.*?)\s+MD\.Init\.Velocity>", re.I | re.S)
+        match = pattern.search(content)
+        if match:
             try:
-                match = pattern.search(content)
                 lines = match.group(1).strip().splitlines()
-                symbols, positions = [], []
+                velocities = []
                 for line in lines:
                     parts = line.split()
-                    symbols.append(parts[1])
-                    positions.append([float(x) for x in parts[2:5]])
+                    velocities.append([float(x) for x in parts[1:4]])
+                velocities = np.array(velocities) * 1e-5
             except Exception as e:
-                raise ValueError(f"Failed to parse structure from {stru_path}: {e}")
+                raise ValueError(f"Failed to parse velocities from {stru_file}: {e}")
             
-            # cell
-            pattern = re.compile(r"<Atoms\.UnitVectors\s+(.*?)\s+Atoms\.UnitVectors>", re.I | re.S)
+        # constraints (MD.Fixed.XYZ)
+        constraint_indices = []
+        pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.I | re.S)
+        match = pattern.search(content)
+        if match:
             try:
-                match = pattern.search(content)
                 lines = match.group(1).strip().splitlines()
-                cell = [[float(x) for x in line.split()] for line in lines]
+                for line in lines:
+                    parts = line.split()
+                    idx = int(parts[0]) - 1
+                    flags = [int(x) for x in parts[1:4]]
+                    if all(f == 1 for f in flags):
+                        constraint_indices.append(idx)
             except Exception as e:
-                raise ValueError(f"Failed to parse unit vectors from {stru_path}: {e}")
-            
-            # velocities
-            velocities = None
-            pattern = re.compile(r"<MD\.Init\.Velocity\s+(.*?)\s+MD\.Init\.Velocity>", re.I | re.S)
-            match = pattern.search(content)
-            if match:
-                try:
-                    lines = match.group(1).strip().splitlines()
-                    velocities = []
-                    for line in lines:
-                        parts = line.split()
-                        velocities.append([float(x) for x in parts[1:4]])
-                    velocities = np.array(velocities) * 1e-5
-                except Exception as e:
-                    raise ValueError(f"Failed to parse velocities from {stru_path}: {e}")
-                
-            # constraints (MD.Fixed.XYZ)
-            constraint_indices = []
-            pattern = re.compile(r"<MD\.Fixed\.XYZ\s+(.*?)\s+MD\.Fixed\.XYZ>", re.I | re.S)
-            match = pattern.search(content)
-            if match:
-                try:
-                    lines = match.group(1).strip().splitlines()
-                    for line in lines:
-                        parts = line.split()
-                        idx = int(parts[0]) - 1
-                        flags = [int(x) for x in parts[1:4]]
-                        if all(f == 1 for f in flags):
-                            constraint_indices.append(idx)
-                except Exception as e:
-                    raise ValueError(f"Failed to parse fixed atoms from {stru_path}: {e}")
+                raise ValueError(f"Failed to parse fixed atoms from {stru_file}: {e}")
 
-            structure = Atoms(symbols, positions, cell=cell, pbc=True, velocities=velocities)
-            if constraint_indices:
-                structure.set_constraint(FixAtoms(indices=constraint_indices))
+        structure = Atoms(symbols, positions, cell=cell, pbc=True, velocities=velocities)
+        if constraint_indices:
+            structure.set_constraint(FixAtoms(indices=constraint_indices))
     else:
         raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
     
+    if isinstance(stru_file, (str, Path)):
+        f.close()
+
     return structure
 
 
@@ -103,31 +138,37 @@ def read_strus(stru_format: str, traj_path: str) -> list[Atoms]:
     Returns:
         List of ASE Atoms objects representing the structures.
     """
-    return ase.io.read(traj_path, format=stru_format, index=':')
+    if stru_format in ioformats:
+        atoms = ase.io.read(traj_path, format=stru_format, index=':')
+        if not isinstance(atoms, list):
+            atoms = [atoms]
+        return atoms
+    else:
+        raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
 
 
 def write_stru(
-    software: str, 
+    stru_path: str | Path, 
     structure: Atoms, 
-    out_dir: str | Path, 
+    stru_format: str,
     extras: str | None = None
 ) -> None:
     """Write ASE Atoms object to a structure file.
 
     Args:
-        software: Software name ('vasp', 'cp2k', etc.).
+        stru_path: Path to write the structure file to.
         structure: ASE Atoms object to write.
-        out_dir: Path to output structure file.
+        stru_format: Structure format.
         extras: Additional information to include in the structure file.
     """
-    if software == 'vasp':
+    if stru_format in ioformats:
         ase.io.write(
-            os.path.join(out_dir, "POSCAR"), structure, vasp5=True, direct=True
+            stru_path, structure, format=stru_format
         )
-    elif software == 'openmx':
+    elif stru_format == 'openmx-dat':
         from .params import PSEUDO_POTENTIAL, ORBITAL_BASIS
-
-        with open(os.path.join(out_dir, "qdyn.dat"), "w") as f:
+    
+        with open(stru_path, "w") as f:
             f.write(extras or "")
             
             natoms = len(structure)
@@ -155,7 +196,7 @@ def write_stru(
             for s in syms:
                 stru_lines.append(
                     " {:3s} {:18s} {:10s}\n".format(
-                        s, ORBITAL_BASIS['openmx'][s], PSEUDO_POTENTIAL['openmx'][s]
+                        s, ORBITAL_BASIS[s], PSEUDO_POTENTIAL['openmx'][s]
                     )
                 )
             stru_lines.append("Definition.of.Atomic.Species>\n\n")
@@ -209,7 +250,7 @@ def write_stru(
             f.write("".join(stru_lines))
             f.flush()
     else:
-        raise NotImplementedError(f"Unsupported software: {software}")
+        raise NotImplementedError(f"Unsupported software: {stru_format}")
 
 
 def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.') -> str:

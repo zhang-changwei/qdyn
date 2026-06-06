@@ -329,7 +329,7 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
     symbol = stru.symbols.indices()
     naos = {}
     for sym in symbol:
-        basis = ORBITAL_BASIS[software_dft][sym]
+        basis = ORBITAL_BASIS[sym]
         orbitals = basis.partition('-')[2]
         numbers = re.findall(r'[spdf](\d+)', orbitals)
         naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
@@ -421,7 +421,8 @@ def WeightFromPro(
     Contribution of selected atoms to the each KS orbital
     """
 
-    assert os.path.isfile(infile), '%s cannot be found!' % infile
+    if not os.path.isfile(infile):
+        raise FileNotFoundError(f"{infile} cannot be found!")
     FileContents = [line for line in open(infile) if line.strip()]
 
     # when the band number is too large, there will be no space between ";" and

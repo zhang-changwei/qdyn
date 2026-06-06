@@ -53,8 +53,9 @@ class WorkerPool:
         Results are sorted lexicographically.
         """
         if not self._workers:
-            assert jf_config is not None, "jf_config is required to get pool workers"
-                
+            if jf_config is None:
+                raise ValidationError("jf_config is required to get pool workers")
+
             pattern = re.compile(rf"^{re.escape(self.name)}_\d{{3,}}$")
             workers = sorted(w for w in jf_config['workers'] if pattern.match(w))
 

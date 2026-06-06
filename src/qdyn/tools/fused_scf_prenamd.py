@@ -8,11 +8,22 @@ from typing import Any, Sequence
 import numpy as np
 from jobflow.core.job import job, Job
 
-from ..calc_common import write_stru, read_strus, change_dir, parse_band_index
+from ..calc_common import (
+    write_stru, read_strus, 
+    change_dir, parse_band_index, select_orbitals
+)
 from ..input import SCFInputT, PreNAMDInputT, DFTBaseInputT
 from ..input_prepare import DFTInputs
-from ..params import CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
-from ..output_postprocess import extract_band_edges, read_scfout, calc_openmx_HK_SK_gamma
+from ..params import (
+    CHG_FNAME, INPUT_FNAMES, 
+    STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING, 
+    ORBITAL_BASIS
+)
+from ..output_postprocess import (
+    extract_band_edges, 
+    read_scfout, 
+    calc_openmx_HK_SK_gamma
+)
 from .scf import TrajInfo, SCFLogger, SCFSolverStub
 from .scf import _prepare_scf_input, _validate_scf_output
 from .canac import extract_tdolaps, extract_nacs
@@ -127,7 +138,12 @@ def qdyn_fused_scf_prenamd_task(
     # Prepare common input files once (these will be copied to each subdir)
     if isinstance(calc, DFTBaseInputT):
         software_dft = software
-        inputs_dict = _prepare_scf_input(software, scf_input)
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, 'Standard'))
+        
+        inputs_dict = _prepare_scf_input(software_dft, scf_input)
         dftinputs = DFTInputs(
             software=software,
             structure=strus[0],
@@ -144,7 +160,12 @@ def qdyn_fused_scf_prenamd_task(
         batch_size = nprocs_py
     else:
         software_dft = calc.ham_type
-        inputs_dict = _prepare_scf_input(software, scf_input)
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, calc.nao_max))
+        
+        inputs_dict = _prepare_scf_input(software_dft, scf_input)
         if software_dft == 'openmx':
             inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
         elif software_dft == 'abacus':
@@ -254,7 +275,12 @@ def qdyn_fused_scf_prenamd_task(
             subdir.mkdir(exist_ok=True)
             for fname in files_to_copy:
                 os.symlink(task_dir / fname, subdir / fname)
-            write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
+            write_stru(
+                subdir / STRU_FNAME_MAPPING[software_dft], 
+                stru,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
 
             # Move CHGCAR from previous successful calculation for faster convergence
             if prev_chgcar and prev_chgcar.is_file():
@@ -269,7 +295,7 @@ def qdyn_fused_scf_prenamd_task(
                     postprocess=postprocess,
                     omp=omp_dft,
                 )
-                _validate_scf_output(software)
+                _validate_scf_output(software, software_dft, dftinputs.inputs)
 
             # run scf solver
             scf_solver.add(scf_idx, subdir, stru)
@@ -323,9 +349,9 @@ def qdyn_fused_scf_prenamd_task(
                 for fname in files_to_copy:
                     os.symlink(subdir / fname, olapdir / fname)
                 write_stru(
-                    software_dft, 
-                    atoms, 
-                    olapdir, 
+                    olapdir / STRU_FNAME_MAPPING[software_dft],
+                    atoms,
+                    stru_format=STRU_FORMAT_MAPPING[software_dft],
                     extras=dftinputs_olap.stru_extras, # type: ignore
                 )
 

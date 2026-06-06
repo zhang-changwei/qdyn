@@ -32,9 +32,9 @@ from .pool import WorkerPool
 from .params import HASH_PATTERN as _HASH_PATTERN
 from .validation import validate_and_fill_runtime_config
 
-# Maximum upload file size: 500 MB.
-# Trajectory files are typically a few tens of MB; 500 MB provides ample headroom.
-MAX_UPLOAD_SIZE = 500 * 1024 * 1024
+# Maximum upload file size: 1 GB.
+# Trajectory files are typically a few tens of MB; HamGNN checkpoints can be ~700 MB.
+MAX_UPLOAD_SIZE = 1024 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # FastAPI application

@@ -4,8 +4,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Collection
-
-import ase.io
 import yaml
 
 from .errors import ConfigError, ValidationError, ResumeError
@@ -16,6 +14,7 @@ from .ml_tools.mlff_wrapper import (
     nequip_pretrained_model_filename,
     hamgnn_pretrained_model_filename,
 )
+from .calc_common import read_stru
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -493,7 +492,7 @@ def validate_workflow_input(
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
 
-    # step contiguity check (for namd)
+    # step contiguity check (namd only; other methods reserved for future use)
     if method == "namd":
         key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
         expanded_steps = _expand_steps_for_validation(input.steps)
@@ -521,7 +520,8 @@ def validate_workflow_input(
     # stru / stru_hash check
     elif stru:
         try:
-            ase.io.read(io.StringIO(stru), format=stru_format, index=":")
+            with io.StringIO(stru) as s:
+                read_stru(stru_format, s)
         except Exception as exc:
             raise ValidationError(
                 f"Provided structure string could not be parsed "
@@ -579,6 +579,9 @@ def validate_workflow_input(
         if software == "vasp" and input.scf_input.is_alle:
             software = "vasp_ae"
         validate_software_installation(software, installed)
+        if isinstance(input.scf_input.calculator, HamGNNInputT):
+            software = input.scf_input.calculator.ham_type
+            validate_software_installation(software, installed)
 
         validate_step_input(input.scf_input, active_pool, worker_cfg, check_list)
 

@@ -3,8 +3,31 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import ase.units
+
 from qdyn.pool import WorkerPool
-from qdyn.tools.run_software import DFTStatus, MDProgressMonitor, run_software, run_vasp
+from qdyn.tools.run_software import (
+    DFTStatus,
+    MDProgressMonitor,
+    run_software,
+    run_vasp,
+)
+
+
+def _openmx_ene_line(
+    step: int,
+    epot: float,
+    ekin: float,
+    etot: float,
+    temperature: float,
+) -> str:
+    parts = ["0"] * 34
+    parts[0] = str(step)
+    parts[14] = str(epot)
+    parts[13] = str(ekin)
+    parts[15] = str(etot)
+    parts[18] = str(temperature)
+    return " ".join(parts) + "\n"
 
 
 def test_workerpool_check_file_exists_replaces_home_prefix():
@@ -45,6 +68,28 @@ def test_md_progress_monitor_uses_d_eps_not_ncg_for_convergence_check():
 
     assert monitor.monitor_vasp(monitor_file, log_file) == DFTStatus.NORMAL
     assert log_file.getvalue().startswith("0.0010")
+
+
+def test_md_progress_monitor_openmx_uses_qdyn_ene():
+    assert MDProgressMonitor.MONITOR_FNAME_MAPPING["openmx"] == "qdyn.ene"
+
+
+def test_md_progress_monitor_openmx_reads_qdyn_ene_fields():
+    monitor = MDProgressMonitor("openmx", nstep=10, md_dt=2.0, log_every=2)
+    monitor_file = io.StringIO(
+        _openmx_ene_line(1, epot=2.0, ekin=0.5, etot=2.5, temperature=350.0)
+        + _openmx_ene_line(2, epot=3.0, ekin=0.75, etot=3.75, temperature=400.0)
+    )
+    log_file = io.StringIO()
+
+    assert monitor.monitor_openmx(monitor_file, log_file) == DFTStatus.NORMAL
+
+    fields = log_file.getvalue().split()
+    assert fields[0] == "0.0040"
+    assert float(fields[1]) == round(3.75 * ase.units.Hartree, 4)
+    assert float(fields[2]) == round(3.0 * ase.units.Hartree, 4)
+    assert float(fields[3]) == round(0.75 * ase.units.Hartree, 4)
+    assert fields[4] == "400.0000"
 
 
 def test_run_software_calls_monitor_after_process_exit(monkeypatch, tmp_path: Path):

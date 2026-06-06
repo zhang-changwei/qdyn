@@ -3,12 +3,8 @@ from pathlib import Path
 import shutil
 from typing import List, Dict, Tuple, Any
 
-import matplotlib
-
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
-from jobflow import job # type: ignore
+from jobflow.core.job import job
 
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
@@ -178,6 +174,9 @@ def plot_ksen_weight(
     Returns:
         Path to the saved plot.
     """
+    import matplotlib
+    matplotlib.use('agg')
+    import matplotlib.pyplot as plt
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Extract parameters
@@ -225,8 +224,8 @@ def plot_ksen_weight(
     # Create a time grid with the exact same shape as Enr/Wht for scatter().
     T = np.broadcast_to((np.arange(nsw, dtype=float) * dt)[:, np.newaxis], (nsw, nband))
 
-    vbm_idx = _normalize_band_index(vbm, nband, 'vbm')
-    cbm_idx = _normalize_band_index(cbm, nband, 'cbm')
+    vbm_idx = vbm -1
+    cbm_idx = cbm -1
 
     # Create figure
     fig = plt.figure()
@@ -275,12 +274,3 @@ def plot_ksen_weight(
     plt.close()
 
     return os.path.abspath(filename)
-
-
-def _normalize_band_index(band_index: int, nband: int, name: str) -> int:
-    """Accept either 1-based or 0-based band indices and normalize to 0-based."""
-    if 1 <= band_index <= nband:
-        return band_index - 1
-    if 0 <= band_index < nband:
-        return band_index
-    raise IndexError(f"{name}={band_index} is out of range for nband={nband}.")

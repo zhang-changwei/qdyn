@@ -30,16 +30,16 @@ ml = [
     "easydict>=1.13",
     "lightning>=2.6.1",
     "nequip>=0.17.0",
-    "pyg-lib>=0.5.0",
     "scikit-learn>=1.7.2",
-    "torch==2.7.1",
-    "torch_geometric>=2.6.0",
-    "torch-cluster>=1.6.3",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    "torchvision==0.20.1",
     "torch-runstats>=0.2.0",
-    "torch-scatter>=2.1.2",
-    "torch-sparse>=0.6.18",
-    "torchaudio==2.7.1",
-    "torchvision==0.22.1",
+    "torch_geometric>=2.6.0",
+    "pyg-lib>=0.4.0 ; sys_platform == 'linux'",
+    "torch-cluster>=1.6.3 ; sys_platform == 'linux'",
+    "torch-scatter>=2.1.2 ; sys_platform == 'linux'",
+    "torch-sparse>=0.6.18 ; sys_platform == 'linux'",
     "mace-torch>=0.3.15",
     "torch-dftd>=0.5.3",
     "hamgnn>=2.1.0",
@@ -60,13 +60,18 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [[tool.uv.index]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv]
 find-links = [
-    "https://data.pyg.org/whl/torch-2.7.1+cu126.html"
+    "https://data.pyg.org/whl/torch-2.5.1+cu124.html",
 ]
 override-dependencies = [
     "e3nn>=0.6.0",
@@ -74,9 +79,18 @@ override-dependencies = [
 
 [tool.uv.sources]
 qdyn-openmx-postprocess = { path = "packages/qdyn-openmx-postprocess" }
-torch = { index = "pytorch" }
-torchaudio = { index = "pytorch" }
-torchvision = { index = "pytorch" }
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
+]
 pyvaspwfc = { git = "https://github.com/QijingZheng/VaspBandUnfolding" }
 hamgnn = { git = "https://github.com/QuantumLab-ZY/HamGNN" }
 

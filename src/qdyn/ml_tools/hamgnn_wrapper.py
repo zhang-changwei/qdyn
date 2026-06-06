@@ -1,4 +1,5 @@
 from copy import deepcopy
+from functools import wraps
 import multiprocessing
 from multiprocessing.pool import AsyncResult
 import queue
@@ -21,8 +22,10 @@ import pytorch_lightning as pl
 from hamgnn.main import build_hamgnn_model
 from hamgnn.config.config_parsing import config_default
 from hamgnn.models.Model import Model
+from hamgnn.models.hamgnn_output import HamGNNPlusPlusOut
 import numpy.typing as npt
 
+from ..calc_common import select_orbitals
 from ..input import HamGNNInputT
 from ..params import ORBITAL_BASIS
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
@@ -30,43 +33,20 @@ from ..tools.scf import SCFLogger
 
 NAO_MAX_SPDF = {
     13: (2, 2, 1),
+    14: (3, 2, 1),
     19: (3, 2, 2),
+    20: (4, 2, 2),
     26: (3, 2, 2, 1),
 }
 
 def _load_config(config: HamGNNInputT) -> dict[str, Any]:
+    """Build HamGNN internal config dict from HamGNNInputT.
+
+    Pretrained model defaults are already applied by
+    HamGNNInputT.apply_pretrained_defaults (model_validator),
+    so both pretrained and custom models use the same code path.
+    """
     default = deepcopy(config_default)
-
-    if config.use_pretrained_model:
-        if config.model_name == 'universal2.0':
-            out = default['output_nets']['HamGNN_out']
-            out['nao_max'] = 26
-            out['add_H0'] = False
-            out['ham_type'] = 'openmx'
-            out['zero_point_shift'] = False
-
-            rep = default['representation_nets']['HamGNN_pre']
-            rep['cutoff'] = 26.0
-            rep['cutoff_func'] = 'cos'
-            rep['irreps_edge_sh'] = '0e + 1o + 2e + 3o + 4e + 5o + 6e'
-            rep['irreps_node_features'] = '128x0e+32x1o+32x1e+32x2o+32x2e+32x3o+32x3e+16x4o+16x4e+16x5o+8x5e+8x6e'
-            rep['num_layers'] = 3
-            rep['num_radial'] = 128
-            rep['num_types'] = 128
-            rep['rbf_func'] = 'bessel'
-            rep['set_features'] = True
-            rep['num_heads'] = 4
-            rep['radial_MLP'] = [128, 128]
-            rep['use_corr_prod'] = True
-            rep['num_hidden_features'] = 32
-            rep['use_kan'] = False
-            rep['radius_scale'] = 1.01
-            rep['build_internal_graph'] = False
-            rep['legacy_edge_update'] = True
-        else:
-            raise ValueError(f"Unsupported HamGNN pretrained model: {config.model_name}")
-        
-        return default
 
     out = default['output_nets']['HamGNN_out']
     out['nao_max'] = config.nao_max
@@ -101,19 +81,20 @@ def get_basis_def(software: str, stru: Atoms, nao_max: int = 26) -> dict[int, np
     for zi in z:
         if zi in basis_def:
             continue
-        orb = ORBITAL_BASIS[software][Element.from_Z(zi).symbol]
+        orb = ORBITAL_BASIS[Element.from_Z(zi).symbol]
         spdf = [int(x) for x in orb.split('-')[-1][1::2]]
+        # shape (nao_max,)
+        # equal to 1 if the corresponding orbital is included in the basis, 0 otherwise
         basis = np.zeros(nao_max, dtype=np.int32)
         left = 0
-        for idx, l in enumerate(spdf):
-            if l > nao_max_spdf[idx]:
-                raise ValueError()
-            width = (2*idx+1) * l
-            basis[l:l+width] = 1
-            left += (2*idx+1) * nao_max_spdf[idx]
+        for idx, mul in enumerate(spdf):
+            if mul > nao_max_spdf[idx]:
+                raise ValueError(f"Multiplicity {mul} exceeds maximum for orbital {idx}")
+            width = (2*idx+1)
+            basis[left: left+width*mul] = 1
+            left += width * nao_max_spdf[idx]
         basis_def[zi] = basis
     return basis_def
-
 
 def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data]:
     if software == 'openmx':
@@ -144,7 +125,6 @@ def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data
     else:
         raise NotImplementedError()
     return num_mat, graph
-
 
 def calc_hamgnn_HK_gamma(
     HR: npt.NDArray, 
@@ -197,6 +177,35 @@ def calc_hamgnn_HK_gamma(
 
     return HK
 
+
+def overwrite_hamgnn_basis(cls):
+    def get_basis_for_element(nao_max: int, spdf: list[int]) -> list[int]:
+        basis = []
+        left = 0
+        for idx, mul in enumerate(spdf):
+            width = (2*idx+1)
+            basis.extend(range(left, left+width*mul))
+            left += width * NAO_MAX_SPDF[nao_max][idx]
+        return basis
+
+    original_initialize_openmx_basis = cls._initialize_openmx_basis
+
+    @wraps(original_initialize_openmx_basis)
+    def new_initialize_openmx_basis(self, *args, **kwargs):
+        original_initialize_openmx_basis(self, *args, **kwargs)
+        
+        basis_def = {}
+        orbitals = select_orbitals('openmx', self.nao_max)
+
+        for element, orb in orbitals.items():
+            spdf = [int(x) for x in orb.split('-')[-1][1::2]]
+            basis_def[Element(element).Z] = get_basis_for_element(self.nao_max, spdf)
+
+        self.basis_def = basis_def
+
+    cls._initialize_openmx_basis = new_initialize_openmx_basis
+
+overwrite_hamgnn_basis(HamGNNPlusPlusOut)
 
 class LMDBDataset(Dataset):
     pass

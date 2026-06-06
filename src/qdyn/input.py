@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, Field, field_validator, PositiveInt, AfterValidator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, PositiveInt, AfterValidator
 from typing import Literal, List, Any, Annotated
 
 import numpy as np
@@ -8,6 +8,7 @@ import numpy as np
 from .params import NEQUIP_PRETRAINED_MODELS_TYPE
 from .params import MACE_PRETRAINED_MODELS_TYPE
 from .params import HAMGNN_PRETRAINED_MODELS_TYPE
+from .params import HAMGNN_PRETRAINED_CONFIGS
 from .params import HASH_PATTERN
 
 ## Important!
@@ -36,13 +37,6 @@ def validate_md5_hash(v: str) -> str:
 MD5HashStr = Annotated[str, AfterValidator(validate_md5_hash)]
 
 
-class BasicInputT(BaseModel):
-    """Basic input parameters for QDYN calculations."""
-
-    # deprecated
-    software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx'] = 'vasp'
-    plot: bool = False
-
 class SchedulerConfigT(BaseModel):
     """Scheduler configuration (reserved for future use)."""
 
@@ -51,8 +45,14 @@ class SchedulerConfigT(BaseModel):
 
 
 class DispersionInputT(BaseModel):
-    algo: Literal['dftd2', 'dftd3'] = 'dftd3'
-    damping: Literal['zero', 'bj', 'zerom', 'bjm'] = 'bj'
+    algo: Literal['dftd2', 'dftd3'] = Field(
+        default='dftd3',
+        description='Dispersion correction algorithm',
+    )
+    damping: Literal['zero', 'bj', 'zerom', 'bjm'] = Field(
+        default='bj',
+        description='Damping function for dispersion correction',
+    )
     xc: str = 'pbe'
     cutoff: float = Field(
         default=40.0,
@@ -87,11 +87,16 @@ class DFTBaseInputT(BaseModel):
         default=1e-6,
         ge=1e-12,
         le=1.0,
-        description=("Electronic convergence criterion (eV). "
-        " Hint: The unit is Hartree when using OPENMX."),
+        description=("Electronic convergence criterion. "
+                     "Unit: eV (VASP), Hartree (OpenMX), unitless (ABACUS)."),
         json_schema_extra={"widget": "log-step"},
     )
 
+    xc: Literal['PBE', 'PBEsol', 'PW91', 'HSE06', 'Not above'] = Field(
+        default='PBE',
+        description="Exchange-correlation functional type."
+    )
+    
     parameters: str = Field(
         default='',
         description="Additional INCAR parameters string",
@@ -108,8 +113,14 @@ class NequipInputT(BaseModel):
     use_pretrained_model: bool = False
     model_name: NEQUIP_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: MD5HashStr = ''
-    energy_unit: Literal['eV', 'Ry', 'Ha'] = 'eV'
-    length_unit: Literal['Ang', 'Bohr'] = 'Ang'
+    energy_unit: Literal['eV', 'Ry', 'Ha'] = Field(
+        default='eV',
+        description='Energy unit of the training dataset'
+    )
+    length_unit: Literal['Ang', 'Bohr'] = Field(
+        default='Ang',
+        description='Length unit of the training dataset'
+    )
     dispersion: DispersionInputT | None = None
 
 class MACEInputT(BaseModel):
@@ -118,7 +129,10 @@ class MACEInputT(BaseModel):
     use_pretrained_model: bool = True
     model_name: MACE_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: MD5HashStr = ''
-    default_dtype: Literal['float32', 'float64'] = 'float32'
+    default_dtype: Literal['float32', 'float64'] = Field(
+        default='float32',
+        description='numeric precision of the MACE model',
+    )
     dispersion: DispersionInputT | None = None
 
 class _HamGNNInputAdvT(BaseModel):
@@ -137,24 +151,90 @@ class _HamGNNInputAdvT(BaseModel):
     use_kan: bool = False
     radius_scale: float = 1.01
     build_internal_graph: bool = False
-    eigen_dtype: Literal['float32', 'float64'] = 'float64'
+    eigen_dtype: Literal['float32', 'float64'] = Field(
+        default='float64',
+        description='Numeric precision for eigenvalue solver',
+    )
 
 class HamGNNInputT(BaseModel):
     """Input parameters for HamGNN tight-binding Hamiltonian construction."""
-    version: Literal['v2.1'] = 'v2.1'
+    model_config = ConfigDict(json_schema_extra={
+        "x-config-import": {
+            "format": "yaml",
+            "maxBytes": 262144,
+            "hint": "Drop HamGNN config.yaml here to auto-fill parameters",
+            "set": {"use_pretrained_model": False, "model_name": ""},
+            "mapping": {
+                "output_nets.HamGNN_out.ham_type": "ham_type",
+                "output_nets.HamGNN_out.nao_max": "nao_max",
+                "output_nets.HamGNN_out.add_H0": "add_H0",
+                "representation_nets.HamGNN_pre.cutoff": "cutoff",
+                "representation_nets.HamGNN_pre.irreps_edge_sh": "irreps_edge_sh",
+                "representation_nets.HamGNN_pre.irreps_node_features": "irreps_node_features",
+                "representation_nets.HamGNN_pre.num_layers": "num_layers",
+                "representation_nets.HamGNN_pre.cutoff_func": "adv.cutoff_func",
+                "representation_nets.HamGNN_pre.edge_sh_normalization": "adv.edge_sh_normalization",
+                "representation_nets.HamGNN_pre.edge_sh_normalize": "adv.edge_sh_normalize",
+                "representation_nets.HamGNN_pre.num_radial": "adv.num_radial",
+                "representation_nets.HamGNN_pre.num_types": "adv.num_types",
+                "representation_nets.HamGNN_pre.rbf_func": "adv.rbf_func",
+                "representation_nets.HamGNN_pre.set_features": "adv.set_features",
+                "representation_nets.HamGNN_pre.radial_MLP": "adv.radial_MLP",
+                "representation_nets.HamGNN_pre.use_corr_prod": "adv.use_corr_prod",
+                "representation_nets.HamGNN_pre.correlation": "adv.correlation",
+                "representation_nets.HamGNN_pre.num_hidden_features": "adv.num_hidden_features",
+                "representation_nets.HamGNN_pre.use_kan": "adv.use_kan",
+                "representation_nets.HamGNN_pre.radius_scale": "adv.radius_scale",
+                "representation_nets.HamGNN_pre.build_internal_graph": "adv.build_internal_graph",
+                "representation_nets.HamGNN_pre.legacy_edge_update": "adv.legacy_edge_update",
+            }
+        },
+        "x-pretrained-overrides": HAMGNN_PRETRAINED_CONFIGS,
+    })
+
+    version: Literal['v2.1'] = Field(
+        default='v2.1',
+        description='HamGNN model version',
+    )
     use_gpu: bool = False
     use_pretrained_model: bool = False
     model_name: HAMGNN_PRETRAINED_MODELS_TYPE | Literal[''] = ''
     model_hash: str = ''
-    ham_type: Literal['abacus', 'openmx'] = 'openmx'
-    nao_max: int = 26
-    add_H0: bool = False
-    batch_size: int = 32
-
-    cutoff: float = 24.0
-    irreps_edge_sh: str = "0e + 1o + 2e + 3o + 4e"
-    irreps_node_features: str = "64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e"
-    num_layers: int = 3
+    ham_type: Literal['abacus', 'openmx'] = Field(
+        default='openmx',
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    nao_max: Literal[13, 14, 19, 20, 26] = Field(
+        default=26,
+        description="Maximum number of NAOs per atom in the Hamiltonian.",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    add_H0: bool = Field(
+        default=False,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        description="Number of structures per batch for HamGNN inference.",
+        json_schema_extra={"step": 8},
+    )
+    cutoff: float = Field(
+        default=24.0,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    irreps_edge_sh: str = Field(
+        default="0e + 1o + 2e + 3o + 4e",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    irreps_node_features: str = Field(
+        default="64x0e+32x1o+16x1e+8x2o+24x2e+8x3o+4x3e+4x4e",
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
+    num_layers: int = Field(
+        default=3,
+        json_schema_extra={"x-disabled-when": {"use_pretrained_model": True}},
+    )
 
     kspacing: float = Field(
         default=0.04,
@@ -166,14 +246,27 @@ class HamGNNInputT(BaseModel):
     ecut: float = Field(
         default=150.0,
         ge=1.0,
-        description="Energy cutoff (in Ry) for two-center integrals in LCAO."
+        description="Energy cutoff (in Ry) for two-center integrals in LCAO.",
     )
 
     adv: _HamGNNInputAdvT = Field(
         default_factory=_HamGNNInputAdvT,
-        json_schema_extra={"group": "advanced"},
+        json_schema_extra={"group": "advanced", "x-disabled-when": {"use_pretrained_model": True}},
     )
 
+    @model_validator(mode='after')
+    def apply_pretrained_defaults(self) -> 'HamGNNInputT':
+        if not self.use_pretrained_model:
+            return self
+        defaults = HAMGNN_PRETRAINED_CONFIGS.get(self.model_name)
+        if defaults is None:
+            return self
+        for key, value in defaults.items():
+            if key == "adv":
+                self.adv = _HamGNNInputAdvT(**value)
+            else:
+                setattr(self, key, value)
+        return self
 
 
 class ScissorInputT(BaseModel):
@@ -361,7 +454,7 @@ class SelDynInputT(BaseModel):
         },
     )
     layer_direction: (
-        Literal['000', '001', '010', '011', '100', '101', '110', '111'] | None
+        Literal['001', '010', '011', '100', '101', '110', '111'] | None
     ) = Field(
         default=None,
         description="Miller indices of the crystal surface. Required if constraint_layers is set.",
@@ -399,7 +492,7 @@ class SelDynInputT(BaseModel):
 
 class ThermostatsInputT(BaseModel):
     rescale_v_nraise: int = Field(
-        default=5,
+        default=4,
         ge=1,
     )
     bussi_taut: float = Field(
@@ -423,17 +516,14 @@ class PseudoHInputT(BaseModel):
 
 class NVTInputT(BaseModel):
     """Input parameters for NVT molecular dynamics."""
-    _comment: str = (
-        "NVT simulations can be run for multiple rounds.\n"
-        "Different thermostats and step counts can be set per round.\n"
-        "- 1st round (Warmup): Recommend 'rescale_v' or 'bussi' thermostat\n"
-        "    with a larger step count to steadily reach equilibrium.\n"
-        "- Subsequent rounds (Production): Temperature fixed at 'temp_end'. \n"
-        "    Recommend 'bussi' or 'nhc' thermostats with fewer steps \n"
-        "    for correct ensemble sampling.\n"
-        "- Convergence check enabled in Production rounds.\n"
-        "    NVT completes once convergence is reached or round count is exhausted.\n"
-    )
+    model_config = ConfigDict(json_schema_extra={
+        "x-ui-note": [
+            "NVT simulations can be run for multiple rounds with different thermostats and step counts per round.",
+            "<b>1st round (Warmup)</b>: Recommend <code>rescale_v</code> or <code>bussi</code> thermostat with a larger step count to steadily reach equilibrium.",
+            "<b>Subsequent rounds (Production)</b>: Temperature fixed at <code>temp_end</code>. Recommend <code>bussi</code> or <code>nhc</code> thermostats with fewer steps for correct ensemble sampling.",
+            "Convergence check is enabled in production rounds. NVT completes once convergence is reached or the round count is exhausted.",
+        ]
+    })
 
     thermostats_algo: list[Literal['rescale_v', 'bussi', 'nhc']] = Field(
         default=['rescale_v']*4,
@@ -482,6 +572,16 @@ class NVTInputT(BaseModel):
 
     calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "nequip": "#/$defs/NequipInputT",
+                    "mace": "#/$defs/MACEInputT",
+                },
+            }
+        },
     )
 
 
@@ -519,6 +619,16 @@ class NVEInputT(BaseModel):
 
     calculator: DFTBaseInputT | NequipInputT | MACEInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "nequip": "#/$defs/NequipInputT",
+                    "mace": "#/$defs/MACEInputT",
+                },
+            }
+        },
     )
 
 
@@ -542,31 +652,40 @@ class SCFInputT(BaseModel):
         json_schema_extra={"step": 10},
     )
 
-    is_alle: bool = Field(False, description="Whether to use all-electron vasp")
-    pseudo_h: PseudoHInputT | None = Field(
-        default=None,
-        json_schema_extra={"group": "advanced"},
-    )
-    parameters: str = Field(
-        '',
-        description="Additional INCAR parameters string",
-        json_schema_extra={
-            **ADVANCED_GROUP,
-            "widget": "textarea",
-            "placeholder": "e.g. ENCUT = 520\nISYM = 0",
-        },
+
+    is_alle: bool = Field(
+        False,
+        description="Whether to use all-electron VASP",
+        json_schema_extra={"x-show-when": {"software": "vasp"}},
     )
     
     software: Literal['vasp', 'openmx', 'hamgnn'] = 'vasp'
 
     calculator: DFTBaseInputT | HamGNNInputT = Field(
         default_factory=DFTBaseInputT,
+        json_schema_extra={
+            "discriminator": {
+                "propertyName": "software",
+                "mapping": {
+                    "vasp": "#/$defs/DFTBaseInputT",
+                    "openmx": "#/$defs/DFTBaseInputT",
+                    "hamgnn": "#/$defs/HamGNNInputT",
+                },
+                "x-defaultOverrides": {
+                    "openmx": {"scf_thr": 1e-8},
+                },
+            }
+        },
+    )
+    
+    pseudo_h: PseudoHInputT | None = Field(
+        default=None,
+        json_schema_extra={"group": "advanced"},
     )
 
 class InputT(BaseModel):
     """Input parameters for QDYN workflow."""
 
-    basic_input: BasicInputT
     scheduler_config: SchedulerConfigT
     nvt_input: NVTInputT | None = None
     nve_input: NVEInputT | None = None
@@ -603,4 +722,3 @@ class InputT(BaseModel):
                     'and Chinese characters'
                 )
         return v
-

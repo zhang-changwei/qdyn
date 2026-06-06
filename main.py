@@ -38,7 +38,8 @@ def start_mongod(config_path):
     config_path = (
         config_path or os.environ.get("QDYN_CONFIG") or "config/qdyn.yaml"
     )
-    assert Path(config_path).is_file(), f"Config file not found: {config_path}"
+    if not Path(config_path).is_file():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -95,7 +96,8 @@ def start_jf(config_path):
     config_path = (
         config_path or os.environ.get("QDYN_CONFIG") or "config/qdyn.yaml"
     )
-    assert Path(config_path).is_file(), f"Config file not found: {config_path}"
+    if not Path(config_path).is_file():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -105,7 +107,8 @@ def start_jf(config_path):
     os.environ['JFREMOTE_PROJECTS_FOLDER'] = str(jf_project_path.parent)
     os.environ['JFREMOTE_PROJECT'] = jf_project_name
 
-    assert jf_project_path.is_file(), f"JF project config not found: {jf_project_path}"
+    if not jf_project_path.is_file():
+        raise FileNotFoundError(f"JF project config not found: {jf_project_path}")
 
     # Initalize
     today = date.today().isoformat()
@@ -141,7 +144,8 @@ def serve(config_path, port_override=None):
     config_path = (
         config_path or os.environ.get("QDYN_CONFIG") or "config/qdyn.yaml"
     )
-    assert Path(config_path).is_file(), f"Config file not found: {config_path}"
+    if not Path(config_path).is_file():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     port = port_override or config['basic'].get('port', 8000)

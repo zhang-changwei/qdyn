@@ -5,16 +5,19 @@ from pathlib import Path
 from typing import Literal
 from copy import deepcopy
 
-import ase.io
 import numpy as np
-
 
 from ase import Atoms
 from jobflow.core.job import job
 
-from ..calc_common import read_stru
+from ..calc_common import read_stru, write_stru, xc_mapping, select_orbitals
 from ..input import NVTInputT, DFTBaseInputT
-from ..params import params_default, BAK_FNAMES, STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+from ..params import (
+    PARAMS_DEFAULT, BAK_FNAMES,
+    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, 
+    STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING,
+    ORBITAL_BASIS,
+)
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
 from .pseuh import write_poscar_and_potcar
@@ -73,6 +76,11 @@ def qdyn_nvt(
 
     software_lower = software.lower()
 
+    # select orbitals
+    if software_lower == 'openmx':
+        ORBITAL_BASIS.clear()
+        ORBITAL_BASIS.update(select_orbitals(software_lower, 'Quick'))
+
     structure.pop('momenta', None)
     cur_stru = Atoms.fromdict(structure)
 
@@ -105,7 +113,7 @@ def qdyn_nvt(
 
         if isinstance(calculator, DFTBaseInputT):
             # Prepare input files
-            _prepare_nvt_input(
+            dftinputs = _prepare_nvt_input(
                 software=software_lower,
                 structure=cur_stru, # type: ignore
                 parameters=parameters,
@@ -132,17 +140,17 @@ def qdyn_nvt(
                 log_every=parameters.log_every,
                 check_convergence=check_convergence
             ) as m:
-                run_software(software_lower, nprocs, monitor=m)
+                run_software(software_lower, nprocs, monitor=m, cell=cur_stru.get_cell())
             # update structure
-            cur_stru = read_stru(
-                STRU2_FNAME_MAPPING[software_lower],
-                stru_format=STRU_FORMAT_MAPPING[software_lower],
-                pseudo_h=is_pseudo_h,
+            cur_stru = read_stru(STRU2_FORMAT_MAPPING[software_lower],
+                                 STRU2_FNAME_MAPPING[software_lower],
+                                pseudo_h=is_pseudo_h,
             )
         else:
-            ase.io.write(STRU_FNAME_MAPPING[software_lower],
-                         cur_stru,
-                         format=STRU_FORMAT_MAPPING[software_lower],)
+            write_stru(STRU_FNAME_MAPPING[software_lower],
+                       cur_stru,
+                       stru_format=STRU_FORMAT_MAPPING[software_lower],
+                       extras=None)
             if prepare_input_only:
                 return {
                     'run_dir': str(Path.cwd()),
@@ -157,9 +165,10 @@ def qdyn_nvt(
                 temp_beg=temp_beg,
                 temp_end=temp_end,
             )
-            ase.io.write(STRU2_FNAME_MAPPING[software_lower],
-                         cur_stru,
-                         format=STRU_FORMAT_MAPPING[software_lower],)
+            write_stru(STRU2_FNAME_MAPPING[software_lower],
+                       cur_stru,
+                       stru_format=STRU2_FORMAT_MAPPING[software_lower],
+                       extras=None)
             if check_convergence and not scf_converged:
                 raise RuntimeError("NVT calculation failed: "
                                    "SCF did not converge in ASE MD run.")
@@ -256,10 +265,10 @@ def _prepare_nvt_input(
     """
     assert isinstance(parameters.calculator, DFTBaseInputT)
 
-    input = deepcopy(params_default['nvt'][software])
+    input = deepcopy(PARAMS_DEFAULT['nvt'][software])
     if software == 'vasp':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         # Handle predefined parameters in InputT
-        # 检查这些参数！！！！！
         if thermostats == 'nhc':
             input['MDALGO'] = 4
             input['NHC_NCHAINS'] = parameters.md_thermostats.nhc_tchain
@@ -292,10 +301,41 @@ def _prepare_nvt_input(
             write_poscar_and_potcar(
                 structure, pp_path=pp_path, output_dir=Path('.'),
             )
+    elif software == 'openmx':
+        input = xc_mapping(software, parameters.calculator.xc, input)
+        input['md.timestep'] = parameters.md_dt
+        input['md.maxiter'] = md_step
+        input['scf.criterion'] = parameters.calculator.scf_thr
+        if thermostats == 'nhc':
+            input['md.type'] = 'NVT_NH' # openmx only has nh
+            input['nh.mass.heatbath'] = (2.97e-6*structure.get_number_of_degrees_of_freedom()
+                *((temp_beg + temp_end)/2)*parameters.md_thermostats.nhc_tdamp**2) 
+            # mass Q = g*k_B*T*tdamp^2 , unit: amu*bohr^2, g is dof, tdamp's unit is fs here
+            input['md.tempcontrol'] = ['2', f'{1:<5} {temp_beg}', f'{md_step:<5} {temp_end}']
+        elif thermostats == 'rescale_v':
+            input['md.type'] = 'NVT_VS'
+            input['md.tempcontrol'] = [
+                '2', 
+                f'{1:<5} {parameters.md_thermostats.rescale_v_nraise} {temp_beg} 0.0', 
+                f'{md_step:<5} {parameters.md_thermostats.rescale_v_nraise} {temp_end} 0.0'
+            ]
+        else:
+            raise NotImplementedError()
+        dftinputs = DFTInputs(
+            software='openmx',
+            structure=structure,
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=parameters.calculator.kspacing,
+            inputs_dict=input,
+            inputs_params=parameters.calculator.parameters,
+        )
+        dftinputs.write()
     else:
         raise NotImplementedError(
             f"Software {software} is not supported for NVT input preparation yet."
         )
+    return dftinputs
 
 
 def check_nvt_convergence(
@@ -305,26 +345,46 @@ def check_nvt_convergence(
     last_nsteps: int | None = None,
     thres_avg: float = 0.004,
     thres_std: float = 1.1,
+    thres_potential_slope: float = 0.01,
+    thres_potential_drift: float = 0.005, # very loose threshold
 ) -> tuple[bool, float, float]:
-    """Check temperature convergence from MD data (universal for all software).
+    """Check NVT convergence from MD data (universal for all software).
 
-    This function checks if temperature converged to the target value.
+    This function checks if temperature converged to the target value and
+    potential energy reached a plateau.
 
     Args:
         md_data: MD data dictionary with 'temperatures' field.
         target_temp: Target temperature for NVT simulation.
         thres_avg: Maximum allowed average deviation.
         thres_std: Maximum allowed standard deviation.
+        thres_potential_slope: Maximum allowed potential energy slope in eV/atom/ps.
+        thres_potential_drift: Maximum allowed difference between first-half
+            and second-half mean potential energy in eV/atom.
 
     Returns:
         tuple:
-        - converged: True if temperature converged to target
+        - converged: True if temperature and potential energy converged
         - temp_avg: Average temperature of last n_last steps
         - temp_std: Standard deviation of temperature of last n_last steps
     """
-    temps = np.array(md_data['temperatures'])
+    temps = np.asarray(md_data['temperatures'], dtype=float)
+    potential_energies = np.asarray(
+        md_data['potential_energies'],
+        dtype=float,
+    )
+    if len(potential_energies) != len(temps):
+        raise ValueError("Temperature and potential energy data lengths differ; "
+                        "cannot check NVT convergence.")
+    time_ps = np.asarray(md_data['time_ps'], dtype=float)
+    if len(time_ps) != len(temps):
+        raise ValueError("Temperature and time_ps data lengths differ; "
+                        "cannot check NVT convergence.")
+
     if last_nsteps is not None:
         temps = temps[-last_nsteps:]
+        potential_energies = potential_energies[-last_nsteps:]
+        time_ps = time_ps[-last_nsteps:]
 
     if len(temps) == 0:
         raise ValueError("No temperature data available to check convergence.")
@@ -340,6 +400,20 @@ def check_nvt_convergence(
     if abs(temp_avg - target_avg) > thres_avg * target_avg:
         converged = False
     if temp_std > thres_std * target_std:
+        converged = False
+
+    natoms = len(structure)
+    potential_per_atom = potential_energies / natoms
+    
+    energy_slope = np.polyfit(time_ps - time_ps[0], potential_per_atom, 1)[0]
+    if abs(energy_slope) > thres_potential_slope:
+        converged = False
+    
+    half_index = len(potential_per_atom) // 2
+    first_half_mean = potential_per_atom[:half_index].mean()
+    second_half_mean = potential_per_atom[half_index:].mean()
+    potential_drift = second_half_mean - first_half_mean
+    if abs(potential_drift) > thres_potential_drift:
         converged = False
 
     return converged, temp_avg, temp_std

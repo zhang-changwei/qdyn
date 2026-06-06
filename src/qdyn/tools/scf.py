@@ -19,9 +19,16 @@ from jobflow.core.job import job, Job
 import numpy as np
 from pydantic import BaseModel
 
-from ..calc_common import write_stru, read_strus, change_dir
+from ..calc_common import (
+    write_stru, read_strus, 
+    change_dir, xc_mapping, select_orbitals
+)
 from ..input import SCFInputT, DFTBaseInputT
-from ..params import params_default, CHG_FNAME, INPUT_FNAMES, STRU_FNAME_MAPPING
+from ..params import (
+    PARAMS_DEFAULT, CHG_FNAME, INPUT_FNAMES,
+    STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING,
+    ORBITAL_BASIS,
+)
 from ..input_prepare import DFTInputs
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
 from .run_software import run_software
@@ -218,6 +225,11 @@ def qdyn_scf_cpu(
     # Prepare common input files once (these will be copied to each subdir)
     if isinstance(calc, DFTBaseInputT):
         software_dft = software
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, 'Standard'))
+        
         inputs_dict = _prepare_scf_input(software_dft, parameters)
         dftinputs = DFTInputs(
             software=software_dft,
@@ -238,6 +250,11 @@ def qdyn_scf_cpu(
         scf_solver = SCFSolverStub()
     else:
         software_dft = calc.ham_type
+        # select orbitals
+        if software_dft == 'openmx':
+            ORBITAL_BASIS.clear()
+            ORBITAL_BASIS.update(select_orbitals(software_dft, calc.nao_max))
+        
         inputs_dict = _prepare_scf_input(software_dft, parameters)
         if software_dft == 'openmx':
             inputs_dict['postprocess.output.level'] = (3 if calc.add_H0 else 1)
@@ -299,7 +316,12 @@ def qdyn_scf_cpu(
         subdir.mkdir(exist_ok=True)
         for fname in files_to_copy:
             shutil.copy2(task_dir / fname, subdir / fname)
-        write_stru(software_dft, stru, subdir, extras=dftinputs.stru_extras)
+        write_stru(
+            subdir / STRU_FNAME_MAPPING[software_dft],
+            stru,
+            stru_format=STRU_FORMAT_MAPPING[software_dft],
+            extras=dftinputs.stru_extras
+        )
 
         # Copy CHGCAR from previous successful calculation for faster convergence
         if prev_chgcar and prev_chgcar.is_file():
@@ -345,7 +367,12 @@ def qdyn_scf_cpu(
             atoms.extend(strus[idx + 1])
             for fname in files_to_copy:
                 shutil.copy2(subdir / fname, olapdir / fname)
-            write_stru(software_dft, atoms, olapdir, extras=dftinputs.stru_extras)
+            write_stru(
+                olapdir / STRU_FNAME_MAPPING[software_dft],
+                atoms,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
 
             with change_dir(olapdir):
                 run_software(
@@ -386,17 +413,19 @@ def _prepare_scf_input(
     """
     input = {}
     if isinstance(parameters.calculator, DFTBaseInputT):
-        input = deepcopy(params_default['scf'][software_dft])
+        input = deepcopy(PARAMS_DEFAULT['scf'][software_dft])
         if software_dft == 'vasp':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['EDIFF'] = parameters.calculator.scf_thr
         elif software_dft == 'openmx':
+            input = xc_mapping(software_dft, parameters.calculator.xc, input)
             input['scf.criterion'] = parameters.calculator.scf_thr
         else:
             raise NotImplementedError(
                 f"Software {software_dft} is not supported for SCF input preparation yet."
             )
     else:
-        input = deepcopy(params_default['scf'][software_dft])
+        input = deepcopy(PARAMS_DEFAULT['scf'][software_dft])
         if software_dft == 'openmx':
             input['scf.energycutoff'] = parameters.calculator.ecut
         else:

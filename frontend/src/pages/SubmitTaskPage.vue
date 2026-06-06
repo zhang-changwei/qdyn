@@ -197,7 +197,7 @@
               <el-radio-group v-model="formData.method">
                 <el-radio value="namd">NAMD (Standard)</el-radio>
                 <el-tooltip
-                  content="Not yet supported, coming soon"
+                  content="Reserved for future workflow methods"
                   placement="top"
                 >
                   <span class="disabled-radio-wrapper">
@@ -207,26 +207,7 @@
               </el-radio-group>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
-            <el-form-item label="DFT Software">
-              <el-select v-model="formData.basic_input.software" style="width: 100%;">
-                <el-option label="VASP" value="vasp" />
-                <el-option label="CP2K" value="cp2k" disabled>
-                  <span>CP2K <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
-                </el-option>
-                <el-option label="SIESTA" value="siesta" disabled>
-                  <span>SIESTA <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
-                </el-option>
-                <el-option label="ABACUS" value="abacus" disabled>
-                  <span>ABACUS <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
-                </el-option>
-                <el-option label="OpenMX" value="openmx" disabled>
-                  <span>OpenMX <el-tag size="small" type="info" style="margin-left: 8px;">Coming soon</el-tag></span>
-                </el-option>
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
+          <el-col :span="24">
             <el-form-item>
               <template #label>
                 <span>
@@ -240,7 +221,7 @@
                   </el-tooltip>
                 </span>
               </template>
-              <el-switch v-model="formData.basic_input.plot" />
+              <el-switch v-model="formData.plot" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -312,13 +293,16 @@ import TrajectoryUploader from '@/components/TrajectoryUploader.vue'
 import { validatePoscar, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
-import { buildDefaultsFromSchema, resolveDiscriminatorBranch } from '@/utils/schema-form'
+import { buildDefaultsFromSchema } from '@/utils/schema-form'
 import http from '@/api/http'
 import type { ValidatePoscarResponse, TaskSummary, SubmitResponse, PoolStatusResponse, StructurePreviewPayload, ComputeConstraintMaskRequest, NVTInput, NVEInput, SCFInput, PreNAMDInput, NAMDInput } from '@/api/types'
 
+// Step input keys — the subset of formData keys that hold step parameter objects
+type StepInputKey = 'nvt_input' | 'nve_input' | 'scf_input' | 'prenamd_input' | 'namd_input'
+
 // Step configuration: maps step name to formData key and schema key
 const STEP_CONFIG: Record<string, {
-  inputKey: keyof typeof formData
+  inputKey: StepInputKey
   schemaKey: keyof StepInputSchemas
   label: string
 }> = {
@@ -330,7 +314,7 @@ const STEP_CONFIG: Record<string, {
 }
 
 interface StepInputEntry {
-  inputKey: keyof typeof formData
+  inputKey: StepInputKey
   schemaKey: keyof StepInputSchemas
   label: string
 }
@@ -512,7 +496,7 @@ const formData = reactive<{
   steps: string[]
   method: 'namd' | 'n2amd'
   taskName: string
-  basic_input: { software: string; plot: boolean }
+  plot: boolean
   nvt_input: NVTInput | Record<string, unknown>
   nve_input: NVEInput | Record<string, unknown>
   scf_input: SCFInput | Record<string, unknown>
@@ -522,7 +506,7 @@ const formData = reactive<{
   steps: [],
   method: 'namd',
   taskName: '',
-  basic_input: { software: 'vasp', plot: false },
+  plot: false,
   nvt_input: {},
   nve_input: {},
   scf_input: {},
@@ -583,36 +567,6 @@ watch(
     }
   },
   { deep: true }
-)
-
-// Watch NVE software discriminator: when it changes, reset calculator defaults
-// to the matching branch (DFTBaseInputT for vasp, NequipInputT for nequip, etc.)
-watch(
-  () => (formData.nve_input as Record<string, unknown>)?.software,
-  (newSoftware, oldSoftware) => {
-    if (!newSoftware || newSoftware === oldSoftware) return
-    if (!schemas.value) return
-    const nveSchema = schemas.value.nve
-    if (!nveSchema?.properties?.calculator?.anyOf) return
-
-    // Use shared discriminator branch resolver
-    const softwareEnum = ['vasp', 'nequip', 'mace']
-    const targetSchema = resolveDiscriminatorBranch({
-      prop: nveSchema.properties.calculator,
-      rootSchema: nveSchema,
-      enumValues: softwareEnum,
-      value: newSoftware,
-    })
-
-    if (targetSchema) {
-      const defaults = buildDefaultsFromSchema(
-        targetSchema as Parameters<typeof buildDefaultsFromSchema>[0],
-        nveSchema,
-      )
-      const nveInput = formData.nve_input as Record<string, unknown>
-      nveInput.calculator = defaults
-    }
-  },
 )
 
 watch(selectedPool, (newPool, oldPool) => {
@@ -1003,10 +957,7 @@ async function handleSubmit(): Promise<void> {
   )
 
   const payload: Record<string, unknown> = {
-    basic_input: {
-      software: formData.basic_input.software,
-      plot: formData.basic_input.plot,
-    },
+    plot: formData.plot,
     scheduler_config: {},
     steps: formData.steps,
     stru: useTrajHash ? '' : (isResume ? '' : poscarContent.value),

@@ -2,16 +2,17 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
-import ase.io
 from ase import Atoms
 from jobflow.core.job import job
 import numpy as np
 
-
+from ..calc_common import write_stru, xc_mapping, select_orbitals
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
-    params_default, TRAJ_FNAME_MAPPING, 
-    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, STRU_FORMAT_MAPPING
+    PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, 
+    STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, 
+    STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING,
+    ORBITAL_BASIS,
 )
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
@@ -67,6 +68,11 @@ def qdyn_nve(
     software_lower = software.lower()
     nprocs = nodes * processes_per_node
 
+    # select orbitals
+    if software_lower == 'openmx':
+        ORBITAL_BASIS.clear()
+        ORBITAL_BASIS.update(select_orbitals(software_lower, 'Quick'))
+
     structure['momenta'] = np.array(structure['momenta'])
     cstru = Atoms.fromdict(structure)
     if parameters.sel.constraint_layers is not None and not cstru.constraints:
@@ -97,21 +103,22 @@ def qdyn_nve(
             log_every=1,
             check_convergence='rigorous'
         ) as m:
-            run_software(software_lower, nprocs, monitor=m)
-    
+            run_software(software_lower, nprocs, monitor=m, cell=cstru.get_cell())
     else:
-        ase.io.write(STRU_FNAME_MAPPING[software_lower],
-                     cstru,
-                     format=STRU_FORMAT_MAPPING[software_lower],)
+        write_stru(STRU_FNAME_MAPPING[software_lower],
+                   cstru,
+                   stru_format=STRU_FORMAT_MAPPING[software_lower],
+                   extras=None)
         if prepare_input_only:
             return {
                 'run_dir': str(Path.cwd()),
                 'software': software,
             }
         converged, _ = _run_ase_nve(cstru, parameters, model_path)
-        ase.io.write(STRU2_FNAME_MAPPING[software_lower],
-                     cstru,
-                     format=STRU_FORMAT_MAPPING[software_lower],)
+        write_stru(STRU2_FNAME_MAPPING[software_lower],
+                   cstru,
+                   stru_format=STRU2_FORMAT_MAPPING[software_lower],
+                   extras=None)
         if not converged:
             raise RuntimeError(
                 "NVE calculation failed: ASE MD did not converge properly. "
@@ -153,14 +160,31 @@ def _prepare_nve_input(
     """
     assert isinstance(parameters.calculator, DFTBaseInputT)
 
-    input = deepcopy(params_default['nve'][software])
+    input = deepcopy(PARAMS_DEFAULT['nve'][software])
     if software == 'vasp':
+        input = xc_mapping(software, parameters.calculator.xc, input)
         input['POTIM'] = parameters.md_dt
         input['NSW'] = parameters.md_step
         input['EDIFF'] = parameters.calculator.scf_thr
 
         dftinputs = DFTInputs(
             software='vasp',
+            structure=structure,
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=parameters.calculator.kspacing,
+            inputs_dict=input,
+            inputs_params=parameters.calculator.parameters,
+        )
+        dftinputs.write()
+    elif software == 'openmx':
+        input = xc_mapping(software, parameters.calculator.xc, input)
+        input['md.timestep'] = parameters.md_dt
+        input['md.maxiter'] = parameters.md_step
+        input['scf.criterion'] = parameters.calculator.scf_thr
+        
+        dftinputs = DFTInputs(
+            software='openmx',
             structure=structure,
             pp_path=pp_path,
             orb_path=orb_path,
