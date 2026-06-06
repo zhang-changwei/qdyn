@@ -52,6 +52,14 @@ def select_orbitals(software: str, category: str | int) -> dict[str, str]:
                 orbital_basis[element] = orb
     return orbital_basis
 
+
+def stru_todict(stru: Atoms) -> dict[str, Any]:
+    structure = stru.todict()
+    if structure.get('constraints') is not None:
+        structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+    return structure
+
+
 def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
     """Read a single structure from a file."""
     if stru_format in ioformats:
@@ -126,11 +134,11 @@ def read_stru(stru_format: str, stru_file: str | Path | IO) -> Atoms:
     return structure
 
 
-def read_strus(stru_format: str, traj_path: str) -> list[Atoms]:
+def read_strus(stru_format: str, traj_path: str, first_only: bool = False) -> list[Atoms]:
     """Read structures from trajectory file.
 
     Args:
-        stru_format: Trajectory format alias or ASE format string
+        stru_format: Trajectory formats supported in TRAJ_FORMAT_MAPPING
             (e.g. 'vasp-xdatcar', 'extxyz', 'lammps-data').
         traj_path: Explicit path to the trajectory file.
 
@@ -138,12 +146,42 @@ def read_strus(stru_format: str, traj_path: str) -> list[Atoms]:
         List of ASE Atoms objects representing the structures.
     """
     if stru_format in ioformats:
-        atoms = ase.io.read(traj_path, format=stru_format, index=':')
+        index = 0 if first_only else ':'
+        atoms = ase.io.read(traj_path, format=stru_format, index=index)
         if not isinstance(atoms, list):
             atoms = [atoms]
         return atoms
+    
+    f = open(traj_path)
+    atoms = []
+    if stru_format == 'openmx-md':
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            natoms = int(line)
+            line = f.readline() # time, energy, cell
+            if "Cell_Vectors" in line:
+                cell = np.asarray(line.split()[-9:], dtype=np.float64).reshape(3, 3)
+                pbc = True
+            else:
+                cell = (0, 0, 0)
+                pbc = False
+            positions = []
+            symbols = []
+            for _ in range(natoms):
+                line = f.readline()
+                parts = line.split()
+                symbols.append(parts[0])
+                positions.append([float(x) for x in parts[1:4]])
+            stru = Atoms(symbols, positions=positions, cell=cell, pbc=pbc)
+            atoms.append(stru)
+            if first_only:
+                break
     else:
         raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
+    f.close()
+    return atoms
 
 
 def write_stru(
@@ -178,7 +216,7 @@ def write_stru(
                 if s not in syms_set:
                     syms.append(s)
                     syms_set.add(s)
-            valence = [VALENCE_ELECTRONS['openmx'][s] for s in syms]
+            valence = [VALENCE_ELECTRONS['openmx'][s] for s in raw_syms]
             pos = structure.get_positions()
             cell = structure.get_cell().array
 
@@ -202,7 +240,7 @@ def write_stru(
 
             # species and coordinates block
             stru_lines.append("<Atoms.SpeciesAndCoordinates\n")
-            for i, (s, v) in enumerate(zip(syms, valence)):
+            for i, (s, v) in enumerate(zip(raw_syms, valence)):
                 stru_lines.append(
                     " {:5d} {:3s} {:12.8f} {:12.8f} {:12.8f} {:4.1f} {:4.1f}\n".format(
                         i+1, s, pos[i,0], pos[i,1], pos[i,2], v/2, v/2
@@ -337,6 +375,28 @@ def parse_band_index(
 
     return band
 
+# ------------------------------------------------------------------
+# structure / trajectory metadata
+# ------------------------------------------------------------------
+
+def _parse_trajectory(traj_path: str, formats: list[str]):
+    parsed = False
+    summary = {}
+    for fmt in formats:
+            try:
+                atoms = read_strus(fmt, traj_path, first_only=True)[0]
+                summary = {
+                    "formula": atoms.get_chemical_formula(),
+                    "num_atoms": len(atoms),
+                    "num_frames": count_trajectory_frames(traj_path, fmt),
+                    "format": fmt,
+                }
+                parsed = True
+                break
+            except Exception:
+                continue
+    return parsed, summary
+
 
 def count_trajectory_frames(path: str, stru_format: str) -> int:
     """Count frames in a trajectory file without loading all atoms into memory.
@@ -344,12 +404,9 @@ def count_trajectory_frames(path: str, stru_format: str) -> int:
     Uses format-specific lightweight scanning when available, falls back
     to ASE iread for unknown formats.
 
-    Parameters
-    ----------
-    path : str
-        Path to the trajectory file.
-    stru_format : str
-        ASE I/O format string (e.g. 'vasp-xdatcar').
+    Args:
+        path: Path to the trajectory file.
+        stru_format: trajectory format string (e.g. 'vasp-xdatcar').
     """
     if stru_format == "vasp-xdatcar":
         # Scan for "Direct configuration=" markers — O(n) read, no Atoms created
@@ -359,10 +416,12 @@ def count_trajectory_frames(path: str, stru_format: str) -> int:
         # fall back to ASE to determine actual frame count
         if count > 0:
             return count
-
-    # Generic fallback: may or may not be truly streaming depending on format.
-    # TODO: add lightweight frame counters for other formats (e.g. xyz, cp2k)
-    #       as they are supported, similar to the XDATCAR fast path above.
+    elif stru_format == "openmx-md":
+        with open(path, "r", encoding="utf-8", errors="replace") as fd:
+            count = sum(1 for line in fd if "time=" in line)
+        if count > 0:
+            return count
+    
     from ase.io import iread
     return sum(1 for _ in iread(path, format=stru_format, index=":"))
 
@@ -390,24 +449,17 @@ def read_trajectory_summary(
     formats = [fmt for fmt in formats if fmt]
 
     if pool.remote:
+        import inspect
         host = pool._get_remote_host(pool.get_pool_workers()[0])
         script = (
-            "import json, sys; "
-            "import ase.io; "
-            f"path={traj_path!r}; formats={formats!r}; "
-            "out={}; "
-            "\nfor fmt in formats:\n"
-            "    try:\n"
-            "        atoms=ase.io.read(path, format=fmt, index=0)\n"
-            "        frames=sum(1 for _ in ase.io.iread(path, format=fmt, index=':'))\n"
-            "        out={'formula': atoms.get_chemical_formula(),\n"
-            "             'num_atoms': len(atoms),\n"
-            "             'num_frames': frames,\n"
-            "             'format': fmt}\n"
-            "        break\n"
-            "    except Exception:\n"
-            "        pass\n"
-            "print(json.dumps(out))"
+            "import json, sys\n"
+            "import ase\n"
+            "import numpy as np\n"
+            f"{inspect.getsource(read_strus)}\n"
+            f"{inspect.getsource(count_trajectory_frames)}\n"
+            f"{inspect.getsource(_parse_trajectory)}\n"
+            f"parsed, summary = _parse_trajectory({traj_path!r}, {formats!r})\n"
+            "print(json.dumps(summary))\n"
         )
         stdout, stderr, rc = host.execute(
             pool._build_remote_python_command(script)
@@ -427,21 +479,8 @@ def read_trajectory_summary(
                 summary = {}
                 parsed = False
 
-        return parsed, summary
-
-    for fmt in formats:
-        try:
-            atoms = ase.io.read(traj_path, format=fmt, index=0)
-            summary = {
-                "formula": atoms.get_chemical_formula(),
-                "num_atoms": len(atoms),
-                "num_frames": count_trajectory_frames(traj_path, fmt),
-                "format": fmt,
-            }
-            parsed = True
-            break
-        except Exception:
-            continue
+    else:
+        parsed, summary = _parse_trajectory(traj_path, formats)
 
     return parsed, summary
     
@@ -464,12 +503,8 @@ def extract_structure_metadata(
             num_atoms = prev_meta.get("num_atoms")
     elif input.stru:
         try:
-            import io as _io
-            from ase.io import read as ase_read
-            atoms = ase_read(
-                _io.StringIO(input.stru),
-                format=input.stru_format or "vasp",
-            )
+            with io.StringIO(input.stru) as s:
+                atoms = read_stru(input.stru_format, s)
             formula = atoms.get_chemical_formula()
             num_atoms = len(atoms)
         except Exception:
@@ -488,6 +523,7 @@ def extract_structure_metadata(
             num_atoms = summary.get("num_atoms")
 
     return formula, num_atoms
+
 
 def eigh(H, S, solver: Literal['scipy', 'cuda'] = 'scipy', overwrite_S=False):
     if solver == 'scipy':

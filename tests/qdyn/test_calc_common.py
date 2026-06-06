@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 from ase import Atoms
@@ -50,7 +51,15 @@ class TestParseBandIndex:
             parse_band_index(expr, 120, 200)
 
 
-def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path):
+def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path, monkeypatch):
+    from qdyn.params import ORBITAL_BASIS, PSEUDO_POTENTIAL, VALENCE_ELECTRONS
+    monkeypatch.setitem(ORBITAL_BASIS, "Si", "Si7.0-s2p2d1")
+    monkeypatch.setitem(ORBITAL_BASIS, "O", "O6.0-s2p2d1")
+    monkeypatch.setitem(PSEUDO_POTENTIAL.setdefault('openmx', {}), "Si", "Si_PBE19")
+    monkeypatch.setitem(PSEUDO_POTENTIAL.setdefault('openmx', {}), "O", "O_PBE19")
+    monkeypatch.setitem(VALENCE_ELECTRONS.setdefault('openmx', {}), "Si", 4.0)
+    monkeypatch.setitem(VALENCE_ELECTRONS.setdefault('openmx', {}), "O", 6.0)
+
     stru = Atoms(
         "SiOSi",
         positions=[
@@ -58,12 +67,22 @@ def test_write_stru_openmx_keeps_unique_species_order(tmp_path: Path):
             [0.0, 0.0, 1.0],
             [0.0, 0.0, 2.0],
         ],
+        cell=[5.0, 5.0, 5.0],
+        pbc=True,
     )
 
-    write_stru("openmx", stru, tmp_path, extras="")
+    out_path = tmp_path / "qdyn.dat"
+    write_stru(out_path, stru, "openmx-dat", extras="")
 
-    text = (tmp_path / "qdyn.dat").read_text(encoding="utf-8")
+    text = out_path.read_text(encoding="utf-8")
     assert "Species.Number             2" in text
     assert "Atoms.Number                  3" in text
-    assert " Si " in text
-    assert " O " in text
+    species_block = re.search(
+        r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>",
+        text,
+        re.S,
+    )
+    assert species_block is not None
+    species_lines = species_block.group(1).strip().splitlines()
+    assert len(species_lines) == 3
+    assert [line.split()[1] for line in species_lines] == ["Si", "O", "Si"]

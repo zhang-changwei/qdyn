@@ -649,7 +649,7 @@ def check_hash(
     # delete it and report as not existing — forces a clean re-upload.
     summary = {}
     if exists and file_type == "trajectory":
-        from .calc_common import count_trajectory_frames, read_trajectory_summary
+        from .calc_common import read_trajectory_summary
         from .params import TRAJ_FORMAT_MAPPING
 
         parsed, summary = read_trajectory_summary(

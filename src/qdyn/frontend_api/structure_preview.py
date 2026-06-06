@@ -8,8 +8,7 @@ StructurePreviewPayload suitable for frontend 3D visualization.
 import io
 import logging
 
-import ase.io
-
+from ..calc_common import read_stru
 from ..tools.seldyn import extract_constraint_mask
 from .models import StructurePreviewPayload
 
@@ -39,7 +38,7 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
         ValueError: If ASE cannot parse the content.
     """
     try:
-        atoms = ase.io.read(io.StringIO(content), format=fmt)
+        atoms = read_stru(fmt, io.StringIO(content))
     except Exception as exc:
         raise ValueError(f"Failed to parse structure: {exc}") from exc
 

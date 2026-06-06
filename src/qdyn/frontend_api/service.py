@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from ..calc_common import read_stru
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
 from .run_dir_access import (
@@ -1735,7 +1736,7 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
         if access.root_file_exists("qdyn_md.log"):
             data = parse_qdyn_log_text(access.read_root_text("qdyn_md.log"))
             current_step = data['steps'][-1]
-            total_steps = data['total_logged_steps'] * data['interval']
+            total_steps = data['total_steps']
             last_temp = data['temperatures'][-1]
             last_energy = data['potential_energies'][-1]
     except Exception as exc:
@@ -1766,18 +1767,121 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
     )
 
 
-def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
+def _parse_qdyn_scf_log_text(
+    log_text: str,
+) -> tuple[int, list[tuple[int, str, str]]]:
+    """Parse qdyn_scf.log text into total steps and data records."""
+    import re
+
+    lines = [line.strip() for line in log_text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("qdyn_scf.log is empty")
+
+    match = re.search(r"\bStep:\s*(\d+)", lines[0])
+    if match is None:
+        raise ValueError("Failed to parse total steps from qdyn_scf.log")
+
+    total_steps = int(match.group(1))
+    records: list[tuple[int, str, str]] = []
+
+    for line in lines[2:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            step = int(parts[0])
+        except ValueError:
+            continue
+        global_idx = parts[1]
+        category = parts[2] if len(parts) >= 3 else ""
+        records.append((step, global_idx, category))
+
+    return total_steps, records
+
+
+def _parse_scf_global_index(frame_name: str) -> int:
+    """Extract the numeric index from an scf_* frame name."""
+    try:
+        return int(frame_name.rsplit("_", 1)[1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _infer_next_scf_frame_name(frame_name: str) -> str | None:
+    """Infer the next scf_* frame name while preserving zero padding."""
+    import re
+
+    match = re.match(r"^(.*?)(\d+)$", frame_name)
+    if match is None:
+        return None
+
+    prefix, index_text = match.groups()
+    return f"{prefix}{int(index_text) + 1:0{len(index_text)}d}"
+
+
+def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
+    """Build SCF progress from qdyn_scf.log without software-specific files."""
+    total_steps, records = _parse_qdyn_scf_log_text(log_text)
+
+    seen_frames: set[str] = set()
+    completed_records: list[tuple[int, str, str]] = []
+    for record in records:
+        _, global_idx, _ = record
+        # A frame may emit multiple category rows; progress counts frames.
+        if global_idx in seen_frames:
+            continue
+        seen_frames.add(global_idx)
+        completed_records.append(record)
+
+    completed = min(len(completed_records), total_steps)
+    running = 1 if total_steps > 0 and completed < total_steps else 0
+    pending = max(0, total_steps - completed - running)
+    percent = (
+        round(completed / total_steps * 100, 2)
+        if total_steps > 0
+        else None
+    )
+
+    batch_info = SCFBatchInfo(
+        completed=completed,
+        converged=completed,
+        failed=0,
+        running=running,
+        pending=pending,
+    )
+
+    current_frame: SCFCurrentFrame | None = None
+    if running and completed_records:
+        _, last_global_idx, _ = completed_records[-1]
+        next_frame_name = _infer_next_scf_frame_name(last_global_idx)
+        if next_frame_name is not None:
+            current_frame = SCFCurrentFrame(
+                name=next_frame_name,
+                global_index=_parse_scf_global_index(next_frame_name),
+                status="RUNNING",
+                electronic_step_current=None,
+                electronic_step_limit=None,
+                scf_algorithm=None,
+                converged=None,
+            )
+
+    return JobProgressResponse(
+        available=True,
+        step_type="scf",
+        current_step=completed,
+        total_steps=total_steps,
+        percent=percent,
+        batch=batch_info,
+        current_frame=current_frame,
+        failed_frames=[],
+    )
+
+
+def _get_scf_progress_from_status_scan(access: RunDirAccess) -> JobProgressResponse:
     """
     Get SCF batch progress driven by status files (RUNNING/ENDED/FAIL).
 
-    Uses ``scan_scf_status()`` to check all scf_* subdirectories in a
-    single pass (one SSH command for remote workers instead of O(N)
-    individual ``test -f`` calls).
-
-    For the currently-running frame, a few additional targeted reads
-    fetch OSZICAR and INCAR data (1-2 extra SSH calls at most).
-
-    Works for both local and remote workers via ``RunDirAccess``.
+    This is the legacy fallback for tasks that do not have qdyn_scf.log.
     """
     scf_map = access.scan_scf_status()
     if not scf_map:
@@ -1872,6 +1976,28 @@ def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
         current_frame=current_frame,
         failed_frames=failed_frames,
     )
+
+
+def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
+    """
+    Get SCF batch progress, preferring the software-neutral qdyn_scf.log.
+
+    Falls back to legacy scf_* status scanning for older tasks that do not
+    have the log file, or when the log cannot be parsed.
+    """
+    try:
+        if access.root_file_exists("qdyn_scf.log"):
+            return _get_scf_progress_from_log_text(
+                access.read_root_text("qdyn_scf.log")
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to parse qdyn_scf.log from %s: %s",
+            access.run_dir_path,
+            exc,
+        )
+
+    return _get_scf_progress_from_status_scan(access)
 
 
 # -----------------------------------------------------------------------------
@@ -2333,10 +2459,9 @@ def get_job_md_timeseries(
             total_steps = int(nsw_val)
     # If INCAR is missing but qdyn_md.log header has total info, derive NSW
     if total_steps is None:
-        interval = raw_data.get('interval', 1)
-        total_logged = raw_data.get('total_logged_steps', 0)
-        if total_logged > 0:
-            total_steps = total_logged * interval
+        total_from_header = raw_data.get('total_steps', 0)
+        if total_from_header > 0:
+            total_steps = total_from_header
 
     stats = MDTimeseriesStats(
         current_step=raw_data['steps'][-1] if raw_data['steps'] else 0,
@@ -2764,7 +2889,7 @@ def _preview_from_job_kwargs(
             traj_path = Path(traj_path)
             if traj_path.is_file():
                 ase_fmt = TRAJ_FORMAT_MAPPING.get(traj_format, traj_format)
-                atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+                atoms = read_stru(ase_fmt, str(traj_path))
                 buf = io.StringIO()
                 stru_fmt = STRU_FORMAT_MAPPING.get(software, software)
                 ase.io.write(buf, atoms, format=stru_fmt)
@@ -2800,7 +2925,7 @@ def _preview_from_traj_hash(
 
     try:
         ase_fmt = TRAJ_FORMAT_MAPPING.get(stru_format, stru_format)
-        atoms = ase.io.read(str(traj_path), format=ase_fmt, index=0)
+        atoms = read_stru(ase_fmt, str(traj_path))
         # Convert back to text for build_preview (to get constraint handling)
         buf = io.StringIO()
         ase.io.write(buf, atoms, format=stru_format)

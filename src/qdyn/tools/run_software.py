@@ -64,7 +64,7 @@ class MDProgressMonitor:
             self.log_file = open('qdyn_md.log', 'w')
             # Write header
             self.log_file.write(
-                f"Step: {self.nstep // self.log_every}, Interval: {self.log_every}\n"
+                f"Step: {self.nstep}, Interval: {self.log_every}\n"
                 f"Time[ps]       Etot[eV]     Epot[eV]     Ekin[eV]         T[K]\n"
             )
             self.log_file.flush()
@@ -194,6 +194,10 @@ def run_software(
     **kwargs: Any,
 ) -> None:
     """Run the specified software with appropriate settings.
+
+    Notes: 
+        Do not use logging in this function unless you know exactly what you are doing.
+        It may be called in subprocesses.
 
     Args:
         software: Name of the software to run (e.g., 'vasp').
