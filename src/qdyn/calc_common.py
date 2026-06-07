@@ -19,7 +19,7 @@ from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
-from .tools.pseuh import read_stru_pseuh
+from .tools.pseuh import resolve_symbol, validate_pseudo_h_symbols, parse_pseudo_h_symbol
 from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
 from .params import XC_MAPPING, ALL_ORBITALS
 
@@ -63,16 +63,60 @@ def stru_todict(stru: Atoms) -> dict[str, Any]:
 
 def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = False) -> Atoms:
     """Read a single structure from a file."""
-    if pseudo_h:
-        return read_stru_pseuh(stru_file, stru_format)
-
-    if stru_format in ioformats:
-        return ase.io.read(stru_file, format=stru_format, index=0) # type: ignore
     
-    f = open(stru_file) if isinstance(stru_file, (str, Path)) else stru_file
+    if isinstance(stru_file, (str, Path)):
+        with open(stru_file, 'r') as f:
+            content = f.read()
+    else:
+        content = stru_file.read()
+    
+    if pseudo_h:
+        lines = content.splitlines(keepends=True)
+        if stru_format == 'vasp':
+            try:
+                raw_symbols = lines[5].split()
+                atom_counts = [int(x) for x in lines[6].split()]
+            except Exception as e:
+                raise ValueError("Failed to parse element symbols "
+                                f"and counts from {stru_file}: {e}")
+        else:
+            raise ValueError(f"Unsupported stru_format: {stru_format!r}")
+        
+        validate_pseudo_h_symbols(raw_symbols)
+        
+        # Replace pseudo-H symbols with plain "H" so ASE can parse
+        clean_symbols: list[str] = []
+        for sym in raw_symbols:
+            clean = ''.join(ch for ch in sym if ch.isalpha())
+            if not clean:
+                clean = sym
+            clean_symbols.append(clean)
+            
+        if stru_format == 'vasp':
+            lines[5] = ' '.join(clean_symbols) + '\n'
+        else:
+            raise ValueError(f"Unsupported stru_format: {stru_format!r}")
+        
+    if stru_format in ioformats:
+        if pseudo_h:
+            atoms = ase.io.read(io.StringIO(''.join(lines)), format=stru_format) # type: ignore
 
+            # Tag atoms by their pseudo-H charge (tag = charge × 100)
+            tags: list[int] = []
+            for sym, count in zip(raw_symbols, atom_counts): # type: ignore
+                charge = parse_pseudo_h_symbol(sym)
+                if charge is not None:
+                    tags.extend([round(charge * 100)] * count)
+                else:
+                    tags.extend([0] * count)
+            atoms.set_tags(tags) # type: ignore
+            
+        else:
+            atoms = ase.io.read(io.StringIO(content), format=stru_format, index=0) # type: ignore
+            
+        return atoms # type: ignore
+    
     if stru_format == 'openmx-dat':
-        content = f.read()
         # parse symbols, positions
         pattern = re.compile(r"<Atoms\.SpeciesAndCoordinates\s+(.*?)\s+Atoms\.SpeciesAndCoordinates>", re.I | re.S)
         try:
@@ -132,9 +176,6 @@ def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = Fal
     else:
         raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
     
-    if isinstance(stru_file, (str, Path)):
-        f.close()
-
     return structure
 
 
@@ -192,6 +233,7 @@ def write_stru(
     stru_path: str | Path, 
     structure: Atoms, 
     stru_format: str,
+    pseudo_h: bool = False,
     extras: str | None = None
 ) -> None:
     """Write ASE Atoms object to a structure file.
@@ -200,12 +242,36 @@ def write_stru(
         stru_path: Path to write the structure file to.
         structure: ASE Atoms object to write.
         stru_format: Structure format.
+        pseudo_h: Whether to use pseudo-H.
         extras: Additional information to include in the structure file.
     """
+    if pseudo_h:
+        tags = structure.get_tags()
+        symbols = structure.get_chemical_symbols()
+        groups: list[tuple[str, int]] = []
+        for sym, tag in zip(symbols, tags):
+            eff = resolve_symbol(sym, tag)
+            if groups and groups[-1][0] == eff:
+                groups[-1] = (eff, groups[-1][1] + 1)
+            else:
+                groups.append((eff, 1))
+    
     if stru_format in ioformats:
-        ase.io.write(
-            stru_path, structure, format=stru_format
-        )
+                
+        with io.StringIO() as buffer:
+            ase.io.write(buffer, structure, format=stru_format)
+            lines = buffer.getvalue().splitlines(keepends=True)
+            
+        if pseudo_h:
+            if stru_format == 'vasp':
+                lines[5] = ' '.join(g[0] for g in groups) + '\n' # type: ignore
+                lines[6] = ' '.join(str(g[1]) for g in groups) + '\n' # type: ignore
+            else:
+                raise NotImplementedError(f"Unsupported stru_format: {stru_format}")
+            
+        with open(stru_path, 'w') as f:
+            f.writelines(lines)
+
     elif stru_format == 'openmx-dat':
         from .params import PSEUDO_POTENTIAL, ORBITAL_BASIS
     

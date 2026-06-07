@@ -20,7 +20,6 @@ from ..params import (
 )
 from ..input_prepare import DFTInputs
 from ..output_postprocess import parse_md_data_from_qdyn_log, plot_md_results
-from .pseuh import write_poscar_and_potcar
 from .run_software import run_software, MDProgressMonitor
 from .seldyn import add_constraints
 
@@ -90,8 +89,7 @@ def qdyn_nvt(
     )
 
     if (
-        not is_pseudo_h
-        and parameters.sel.constraint_layers is not None
+        parameters.sel.constraint_layers is not None
         and not cur_stru.constraints
     ):
         cur_stru = add_constraints(cur_stru, parameters.sel)
@@ -119,6 +117,7 @@ def qdyn_nvt(
                 parameters=parameters,
                 pp_path=pp_path,
                 orb_path=orb_path,
+                pseudo_h=is_pseudo_h,
                 thermostats=algo,
                 md_step=md_step,
                 temp_beg=temp_beg,
@@ -144,8 +143,7 @@ def qdyn_nvt(
             # update structure
             cur_stru = read_stru(STRU2_FORMAT_MAPPING[software_lower],
                                  STRU2_FNAME_MAPPING[software_lower],
-                                pseudo_h=is_pseudo_h,
-            )
+                                 is_pseudo_h)
         else:
             write_stru(STRU_FNAME_MAPPING[software_lower],
                        cur_stru,
@@ -238,6 +236,7 @@ def _prepare_nvt_input(
     parameters: NVTInputT,
     pp_path: str,
     orb_path: str,
+    pseudo_h: bool,
     thermostats: str,
     md_step: int,
     temp_beg: float,
@@ -289,15 +288,12 @@ def _prepare_nvt_input(
             pp_path=pp_path,
             orb_path=orb_path,
             kspacing=parameters.calculator.kspacing,
+            pseudo_h=pseudo_h, 
             inputs_dict=input,
             inputs_params=parameters.calculator.parameters,
         )
         dftinputs.write()
 
-        if parameters.pseudo_h is not None and parameters.pseudo_h.is_pseudo_h:
-            write_poscar_and_potcar(
-                structure, pp_path=pp_path, output_dir=Path('.'),
-            )
     elif software == 'openmx':
         input = xc_mapping(software, parameters.calculator.xc, input)
         input['md.timestep'] = parameters.md_dt

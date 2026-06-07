@@ -12,7 +12,7 @@ from pymatgen.io.vasp import Incar
 
 from .calc_common import write_stru, read_stru
 from .params import PSEUDO_POTENTIAL, STRU_FNAME_MAPPING, STRU_FORMAT_MAPPING
-from .tools.pseuh import write_stru_pseuh
+from .tools.pseuh import resolve_symbol
 
 
 class DFTInputs:
@@ -37,12 +37,12 @@ class DFTInputs:
         self._orb_path = (Path(orb_path).expanduser().resolve() 
                           if orb_path is not None else None)
         self._kpoints: tuple[int, int, int] | None = None
-        self._pseudoh: bool = pseudo_h
         self._gamma: bool | None = None
         self._inputs: dict[str, Any] | None = None
         self._nbands: int | None = None
 
         self.software = software
+        self.pseudoh: bool = pseudo_h
 
         # Step 0: STRU
         # Step 1: KPOINTS
@@ -221,22 +221,14 @@ class DFTInputs:
             self.write_inputs(software, folder)
         if kpoints:
             self.write_kpoints(software, folder)
-        if self._pseudoh:
-            write_stru_pseuh(
-                software,
-                folder,
-                self.stru,
-                self.pp_path,
-                self.stru_extras
-            )
-        else:
-            if stru:
-                write_stru(folder / STRU_FNAME_MAPPING[software], 
-                        self.stru,
-                        STRU_FORMAT_MAPPING[software], 
-                        self.stru_extras)
-            if pp:
-                self.write_pp(software, folder)
+        if stru:
+            write_stru(folder / STRU_FNAME_MAPPING[software], 
+                    self.stru,
+                    STRU_FORMAT_MAPPING[software], 
+                    self.pseudoh,
+                    self.stru_extras)
+        if pp:
+            self.write_pp(software, folder)
 
     def write_inputs(self, software: str, folder: Path):
         if software == 'vasp':
@@ -262,9 +254,14 @@ class DFTInputs:
         else:
             raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
-    def write_pp(self, software: str, folder: Path):        
+    def write_pp(self, software: str, folder: Path):  
+        symbols = self.stru.get_chemical_symbols()
+        if self.pseudoh:
+            tags = self.stru.get_tags()
+            raw_symbols = self.stru.get_chemical_symbols()
+            symbols = [resolve_symbol(sym, tag) for sym, tag in zip(raw_symbols, tags)]
+            
         if software == 'vasp':
-            symbols = self.stru.get_chemical_symbols()
             unique_symbols: list[str] = []
             for s in symbols:
                 if s not in unique_symbols:
