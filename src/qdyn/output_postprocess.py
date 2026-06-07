@@ -323,23 +323,16 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
         software_dft = 'openmx'
+        hamgnn_out = np.load(os.path.join(dir_path, 'wfz.npz'), mmap_mode='r')
+        nbands = hamgnn_out['wfc'].shape[1]
     except Exception as e:
         raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
-    
-    symbol = stru.symbols.indices()
-    naos = {}
-    for sym in symbol:
-        basis = ORBITAL_BASIS[sym]
-        orbitals = basis.partition('-')[2]
-        numbers = re.findall(r'[spdf](\d+)', orbitals)
-        naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
 
     syms = stru.get_chemical_symbols()
     nele = 0
     nbands = 0
     for sym in syms:
         nele += VALENCE_ELECTRONS[software_dft][sym]
-        nbands += naos[sym]
     vbm = (nele + 1) // 2
     cbm = vbm + 1
     return vbm, cbm, nbands
@@ -349,9 +342,14 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
 def parse_qdyn_log_text(text: str) -> Dict:
     """Parse qdyn_md.log content from a string.
 
+    The header ``Step: <N>, Interval: <I>`` carries the total MD steps
+    (not frame count).  Each data row is anchored to its physical step
+    via the time column, so both VASP (no step-0 frame) and ASE/MLFF
+    (with step-0 frame) parse correctly without special-casing.
+
     Returns dict with keys: steps, temperatures, total_energies,
     potential_energies, kinetic_energies, converged, time_ps,
-    interval, total_logged_steps.
+    interval, total_steps.
     """
     steps: list[int] = []
     temperatures: list[float] = []
@@ -365,24 +363,36 @@ def parse_qdyn_log_text(text: str) -> Dict:
         raise ValueError("No valid MD data found in qdyn_md.log.")
 
     step_part, interval_part = lines[0].split(',')
-    total_logged_steps = int(step_part.split(':')[1])
+    total_steps = int(step_part.split(':')[1])
     interval = int(interval_part.split(':')[1])
+
+    raw_times: list[float] = []
+    raw_data: list[tuple[float, float, float, float]] = []
 
     for line in lines[2:]:
         stripped = line.strip()
         if not stripped or len(stripped.split()) != 5:
             continue
         t, etot, epot, ekin, temp = map(float, stripped.split())
-        row_index = len(steps) + 1
-        steps.append(row_index * interval)
+        raw_times.append(t)
+        raw_data.append((etot, epot, ekin, temp))
+
+    if not raw_times:
+        raise ValueError("No valid MD data found in qdyn_md.log.")
+
+    if len(raw_times) >= 2:
+        dt = raw_times[1] - raw_times[0]
+    else:
+        dt = raw_times[0] if raw_times[0] > 0 else interval * 1e-3
+
+    for t, (etot, epot, ekin, temp) in zip(raw_times, raw_data):
+        step = round(t / dt) * interval if dt > 0 else 0
+        steps.append(step)
         time_ps.append(t)
         total_energies.append(etot)
         potential_energies.append(epot)
         kinetic_energies.append(ekin)
         temperatures.append(temp)
-
-    if not steps:
-        raise ValueError("No valid MD data found in qdyn_md.log.")
 
     return {
         'steps': steps,
@@ -393,7 +403,7 @@ def parse_qdyn_log_text(text: str) -> Dict:
         'converged': [True] * len(steps),
         'time_ps': time_ps,
         'interval': interval,
-        'total_logged_steps': total_logged_steps,
+        'total_steps': total_steps,
     }
 
 
@@ -696,18 +706,18 @@ def calc_openmx_HK_SK_gamma(
         for i in range(natoms):
             nao_i = nao_per_atom[i]
             off_i = nao_idx_offset[i]
-            tmp = Son[i][:nao_i**2] 
-            SK[off_i:off_i+nao_i, off_i:off_i+nao_i] = tmp.reshape(nao_i, nao_i)
-        # off-site
+            tmp = Son[i][:nao_i**2]
+            SK[off_i:off_i+nao_i, off_i:off_i+nao_i] += tmp.reshape(nao_i, nao_i)
+        # off-site (periodic images contribute to the same atom pair)
         for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
             nao_i = nao_per_atom[i]
             nao_j = nao_per_atom[j]
             off_i = nao_idx_offset[i]
             off_j = nao_idx_offset[j]
-            tmp = Soff[idx][:nao_i*nao_j] 
-            SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+            tmp = Soff[idx][:nao_i*nao_j]
+            SK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp.reshape(nao_i, nao_j)
     else:
-        # no on-site
+        # no on-site, cross-frame overlap
         for idx, (i, j) in enumerate(zip(edge_index[0], edge_index[1])):
             if i < natoms and j >= natoms:
                 j -= natoms
@@ -715,8 +725,8 @@ def calc_openmx_HK_SK_gamma(
                 nao_j = nao_per_atom[j]
                 off_i = nao_idx_offset[i]
                 off_j = nao_idx_offset[j]
-                tmp = Soff[idx][:nao_i*nao_j] 
-                SK[off_i:off_i+nao_i, off_j:off_j+nao_j] = tmp.reshape(nao_i, nao_j)
+                tmp = Soff[idx][:nao_i*nao_j]
+                SK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp.reshape(nao_i, nao_j)
 
     return SK
 

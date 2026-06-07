@@ -20,6 +20,7 @@ dependencies = [
     "ase>=3.28.0",
     "pymatgen>=2025.10.7",
     "pydantic>=2.12.5",
+    "psutil>=7.2.2",
     "pyvaspwfc",
     "natsort>=8.4.0",
 ]

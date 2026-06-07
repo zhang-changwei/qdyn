@@ -231,7 +231,7 @@ def _run_ase_nve(structure: Atoms, parameters: NVEInputT, model_path: str):
     dyn = VelocityVerlet(structure, 
                          timestep=md_dt * ase.units.fs)
     logfile = open('qdyn_md.log', 'w')
-    logfile.write(f'Step: {md_step + 1}, Interval: 1\n')
+    logfile.write(f'Step: {md_step}, Interval: 1\n')
     md_logger = MDLogger(dyn, structure, logfile, mode='w')
     dyn.attach(md_logger, interval=1)
 

@@ -69,16 +69,53 @@ class SCFLogger:
     def close(self):
         self.log_file.close()
 
-class SCFSolverStub:
+class DFTSCFSolver:
+
+    def __init__(
+        self, 
+        software: str, 
+        scf_input: SCFInputT, 
+        inputs_dict: dict,
+        logger: SCFLogger,
+        nproc: int = 1,
+        threads_per_proc: int = 1
+    ):
+        self.software = software
+        self.nproc = nproc
+        self.omp = threads_per_proc
+        self.scf_input = scf_input
+        self.inputs = inputs_dict
+        self.logger = logger
+
+        self.tasks: list[tuple[int, Path, Atoms]] = []
+        self.task_count = 0
+        pass
 
     def add(self, step: int, job_dir: Path, stru: Atoms):
-        pass
+        self.tasks.append((step, job_dir, stru))
+        self.task_count += 1
+        self.run()
 
     def close(self):
         pass
 
     def run(self):
-        pass
+        if not self.task_count:
+            return
+        
+        for step, subdir, stru in self.tasks:
+            with change_dir(subdir):
+                run_software(
+                    software=self.software, 
+                    nprocs=self.nproc,
+                    is_alle=self.scf_input.is_alle,
+                    omp=self.omp,
+                )
+                _validate_scf_output(self.software, self.inputs)
+            self.logger(step=step, global_idx=subdir.name, category='normal')
+
+        self.tasks.clear()
+        self.task_count = 0
 
 
 class TrajInfo(BaseModel):
@@ -87,6 +124,25 @@ class TrajInfo(BaseModel):
     start: int
     stop: int
 
+
+def overlap_run_software(
+    subdir: Path,
+    olapdir: Path,
+    software_dft: str,
+    threads_per_process: int,
+):
+    """Run overlap postprocess and save the overlap matrix."""
+    with change_dir(olapdir):
+        run_software(
+            software=software_dft,
+            nprocs=threads_per_process,
+            postprocess=True,
+            omp=1,
+        )
+    # save overlap matrix
+    scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
+    SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
+    np.save(subdir / "overlap.npy", SK)
 
 
 def qdyn_scf(
@@ -241,13 +297,17 @@ def qdyn_scf_cpu(
             inputs_params=calc.parameters,
         )
         postprocess = False
-        # resources
-        nprocs = nodes * processes_per_node
-        omp = threads_per_process
         # logger and solver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
         last_step = scf_logger.cur_step
-        scf_solver = SCFSolverStub()
+        scf_solver = DFTSCFSolver(
+            software=software_dft,
+            scf_input=parameters,
+            inputs_dict=dftinputs.inputs,
+            logger=scf_logger,
+            nproc=nodes * processes_per_node,
+            threads_per_proc=threads_per_process,
+        )
     else:
         software_dft = calc.ham_type
         # select orbitals
@@ -269,9 +329,6 @@ def qdyn_scf_cpu(
             inputs_dict=inputs_dict,
         )
         postprocess = True
-        # resources
-        nprocs = processes_per_node * threads_per_process # nodes = 1
-        omp = 1
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
@@ -327,27 +384,16 @@ def qdyn_scf_cpu(
         if prev_chgcar and prev_chgcar.is_file():
             shutil.copy2(prev_chgcar, subdir / chgcar)
 
-        # Change to subdirectory and run
-        with change_dir(subdir):
-            run_software(
-                software=software_dft, 
-                nprocs=nprocs, 
-                is_alle=parameters.is_alle,
-                postprocess=postprocess,
-                omp=omp,
-            )
-            _validate_scf_output(software, software_dft, dftinputs.inputs)
-
         # run scf solver
         scf_solver.add(idx, subdir, stru)
 
-        # Updates and logging
+        # Update CHGCAR
         prev_chgcar = subdir / chgcar
-        scf_logger(step=idx, global_idx=subdir.name, category='normal')
     
     # run solver for tail frames
     scf_solver.run()
     scf_solver.close()
+    del scf_solver
 
 
     # tdoverlap calculation
@@ -356,39 +402,41 @@ def qdyn_scf_cpu(
         dftinputs.update_stru_extras()
 
     if software_dft in {'abacus', 'openmx'}:
-        for idx in range(nstep):
-            global_idx = frame_start + idx + 1
-            subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+        import multiprocessing
+        from multiprocessing.pool import AsyncResult
+        results: list[AsyncResult] = []
+        with multiprocessing.Pool(processes=processes_per_node) as pool:
+            for idx in range(nstep):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
 
-            olapdir = subdir / "overlap"
-            olapdir.mkdir(exist_ok=True)
+                olapdir = subdir / "overlap"
+                olapdir.mkdir(exist_ok=True)
 
-            atoms = strus[idx].copy()
-            atoms.extend(strus[idx + 1])
-            for fname in files_to_copy:
-                shutil.copy2(subdir / fname, olapdir / fname)
-            write_stru(
-                olapdir / STRU_FNAME_MAPPING[software_dft],
-                atoms,
-                stru_format=STRU_FORMAT_MAPPING[software_dft],
-                extras=dftinputs.stru_extras
-            )
-
-            with change_dir(olapdir):
-                run_software(
-                    software=software_dft,
-                    nprocs=nprocs,
-                    postprocess=True,
-                    omp=omp,
+                atoms = strus[idx].copy()
+                atoms.extend(strus[idx + 1])
+                for fname in files_to_copy:
+                    shutil.copy2(subdir / fname, olapdir / fname)
+                write_stru(
+                    olapdir / STRU_FNAME_MAPPING[software_dft],
+                    atoms,
+                    stru_format=STRU_FORMAT_MAPPING[software_dft],
+                    extras=dftinputs.stru_extras
+                )
+                results.append(
+                    pool.apply_async(
+                        overlap_run_software, 
+                        args=(subdir, olapdir, software_dft, threads_per_process)
+                    )
                 )
 
-            # save overlap matrix
-            scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
-            SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
-            np.save(olapdir / "overlap.npy", SK)
-
             # logging
-            scf_logger(step=idx, global_idx=subdir.name, category='overlap')
+            for idx, result in enumerate(results):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+                result.get()
+
+                scf_logger(step=idx, global_idx=subdir.name, category='overlap')
     
     scf_logger.close()
 
@@ -450,7 +498,7 @@ def _clean_all_files(subdir: str, stru: str):
             os.remove(fpath)
 
 
-def _validate_scf_output(software: str, software_dft: str, inputs: dict):
+def _validate_scf_output(software: str, inputs: dict):
     """Validate SCF calculation completed successfully.
 
     Checks for 'Total CPU' and SCF convergence in OUTCAR, reading only
@@ -514,24 +562,7 @@ def _validate_scf_output(software: str, software_dft: str, inputs: dict):
                 "The calculation may not have completed successfully."
             )
         
-        # Check SCF convergence
-        # scf_max_iter = 40
-        # scf_criterion = 1.0e-6
-        
-        # max_iter_match = re.search(r"scf\.maxIter\s+([0-9]+)", text)
-        # if max_iter_match:
-        #     try:
-        #         scf_max_iter = int(max_iter_match.group(1))
-        #     except ValueError:
-        #         scf_max_iter = 40
-        # criterion_match = re.search(r"scf\.criterion\s+([0-9eE\.+\-]+)", text)
-        # if criterion_match:
-        #     try:
-        #         scf_criterion = float(criterion_match.group(1))
-        #     except ValueError:
-        #         scf_criterion = 1.0e-6
-        
-        scf_max_iter = inputs.get('scf.maxIter', 40)
+        scf_max_iter = inputs.get('scf.maxiter', 40)
         scf_criterion = inputs.get('scf.criterion', 1.0e-6)
 
         scf_lines = re.findall(
@@ -555,18 +586,6 @@ def _validate_scf_output(software: str, software_dft: str, inputs: dict):
             raise RuntimeError(
                 "SCF calculation failed: SCF did not converge. "
                 "qdyn.out last-step Uele change exceeds scf.criterion."
-            )
-            
-    elif software == 'hamgnn':
-        if software_dft == 'openmx':
-            if not os.path.isfile('qdyn.scfout'):
-                raise FileNotFoundError("Overlap matrix calculation failed: qdyn.scfout not found.")
-        elif software_dft == 'abacus':
-            if not os.path.isfile('placeholder'): # align with 3.11lts
-                raise FileNotFoundError("Overlap matrix calculation failed: placeholder not found.")
-        else:
-            raise NotImplementedError(
-                f"Hamgnn does not support '{software_dft}' yet."
             )
     else:
         raise NotImplementedError(
