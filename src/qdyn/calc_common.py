@@ -110,7 +110,10 @@ def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = Fal
             atoms = ase.io.read(io.StringIO(''.join(lines)), format=stru_format, index=0) # type: ignore
             atoms.set_tags(tags) # type: ignore
         else:
-            atoms = ase.io.read(io.StringIO(content), format=stru_format, index=0) # type: ignore
+            try:
+                atoms = ase.io.read(io.StringIO(content), format=stru_format, index=0)
+            except KeyError as e:
+                return read_stru(stru_format, stru_file, pseudo_h=True)
             
         return atoms # type: ignore
     
@@ -242,7 +245,12 @@ def read_strus(
                     frame.set_tags(tags) # type: ignore
         else:
             content = f.read()
-            atoms = ase.io.read(io.StringIO(content), format=stru_format, index=index)
+            try:
+                atoms = ase.io.read(io.StringIO(content), format=stru_format, index=index)
+            except KeyError:
+                f.close()
+                return read_strus(stru_format, traj_path, pseudo_h=True)
+            
             if not isinstance(atoms, list):
                 atoms = [atoms]
               
