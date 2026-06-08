@@ -111,7 +111,7 @@ def qdyn_nvt(
 
         if isinstance(calculator, DFTBaseInputT):
             # Prepare input files
-            dftinputs = _prepare_nvt_input(
+            _prepare_nvt_input(
                 software=software_lower,
                 structure=cur_stru, # type: ignore
                 parameters=parameters,
@@ -254,6 +254,7 @@ def _prepare_nvt_input(
             range, etc.
         pp_path: Path to pseudopotential directory.
         orb_path: Path to orbital files (for SIESTA/ABACUS/OpenMX).
+        pseudo_h: Whether to use pseudo-H.
         thermostats: Thermostat algorithm to use ('bussi', 'rescale_v', 'nhc').
         md_step: Number of MD steps to run.
         temp_beg: Initial temperature for the NVT simulation.
@@ -328,7 +329,6 @@ def _prepare_nvt_input(
         raise NotImplementedError(
             f"Software {software} is not supported for NVT input preparation yet."
         )
-    return dftinputs
 
 
 def check_nvt_convergence(

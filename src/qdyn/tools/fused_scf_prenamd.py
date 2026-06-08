@@ -125,7 +125,12 @@ def qdyn_fused_scf_prenamd_task(
     nprocs_py = max(1, ncpus // omp_py)
     scf_step = scf_input.scf_step
 
-    strus = read_strus(traj.format, traj_path=traj.path)
+    is_pseudo_h = (
+        scf_input.pseudo_h is not None
+        and scf_input.pseudo_h.is_pseudo_h
+    )
+
+    strus = read_strus(traj.format, traj_path=traj.path, pseudo_h=is_pseudo_h)
     strus = strus[-scf_step:]
     strus = strus[traj.start:traj.stop]
     n_frames = len(strus)
@@ -146,6 +151,7 @@ def qdyn_fused_scf_prenamd_task(
             pp_path=pp_path,
             orb_path=orb_path,
             kspacing=calc.kspacing,
+            pseudo_h=is_pseudo_h,
             inputs_dict=inputs_dict,
             inputs_params=calc.parameters,
         )
@@ -292,6 +298,7 @@ def qdyn_fused_scf_prenamd_task(
                 subdir / STRU_FNAME_MAPPING[software_dft], 
                 stru,
                 stru_format=STRU_FORMAT_MAPPING[software_dft],
+                pseudo_h=is_pseudo_h,
                 extras=dftinputs.stru_extras
             )
 

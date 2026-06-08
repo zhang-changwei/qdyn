@@ -83,6 +83,14 @@ def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = Fal
             raise ValueError(f"Unsupported stru_format: {stru_format!r}")
         
         validate_pseudo_h_symbols(raw_symbols)
+        # Tag atoms by their pseudo-H charge (tag = charge × 100)
+        tags: list[int] = []
+        for sym, count in zip(raw_symbols, atom_counts):
+            charge = parse_pseudo_h_symbol(sym)
+            if charge is not None:
+                tags.extend([round(charge * 100)] * count)
+            else:
+                tags.extend([0] * count)
         
         # Replace pseudo-H symbols with plain "H" so ASE can parse
         clean_symbols: list[str] = []
@@ -99,18 +107,8 @@ def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = Fal
         
     if stru_format in ioformats:
         if pseudo_h:
-            atoms = ase.io.read(io.StringIO(''.join(lines)), format=stru_format) # type: ignore
-
-            # Tag atoms by their pseudo-H charge (tag = charge × 100)
-            tags: list[int] = []
-            for sym, count in zip(raw_symbols, atom_counts): # type: ignore
-                charge = parse_pseudo_h_symbol(sym)
-                if charge is not None:
-                    tags.extend([round(charge * 100)] * count)
-                else:
-                    tags.extend([0] * count)
+            atoms = ase.io.read(io.StringIO(''.join(lines)), format=stru_format, index=0) # type: ignore
             atoms.set_tags(tags) # type: ignore
-            
         else:
             atoms = ase.io.read(io.StringIO(content), format=stru_format, index=0) # type: ignore
             
@@ -179,7 +177,12 @@ def read_stru(stru_format: str, stru_file: str | Path | IO, pseudo_h: bool = Fal
     return structure
 
 
-def read_strus(stru_format: str, traj_path: str, first_only: bool = False) -> list[Atoms]:
+def read_strus(
+    stru_format: str, 
+    traj_path: str, 
+    first_only: bool = False, 
+    pseudo_h: bool = False,
+    ) -> list[Atoms]:
     """Read structures from trajectory file.
 
     Args:
@@ -190,16 +193,61 @@ def read_strus(stru_format: str, traj_path: str, first_only: bool = False) -> li
     Returns:
         List of ASE Atoms objects representing the structures.
     """
+    f = open(traj_path)
+    
+    if pseudo_h:
+        lines = f.readlines()
+        if stru_format == 'vasp-xdatcar':
+            try:
+                raw_symbols = lines[5].split()
+                atom_counts = [int(x) for x in lines[6].split()]
+            except Exception as e:
+                raise ValueError("Failed to parse element symbols "
+                                f"and counts from {traj_path}: {e}")
+        else:
+            raise ValueError(f"Unsupported stru_format: {stru_format!r}")
+        
+        validate_pseudo_h_symbols(raw_symbols)
+        # Tag atoms by their pseudo-H charge (tag = charge × 100)
+        tags: list[int] = []
+        for sym, count in zip(raw_symbols, atom_counts):
+            charge = parse_pseudo_h_symbol(sym)
+            if charge is not None:
+                tags.extend([round(charge * 100)] * count)
+            else:
+                tags.extend([0] * count)
+        
+        # Replace pseudo-H symbols with plain "H" so ASE can parse
+        clean_symbols: list[str] = []
+        for sym in raw_symbols:
+            clean = ''.join(ch for ch in sym if ch.isalpha())
+            if not clean:
+                clean = sym
+            clean_symbols.append(clean)
+            
+        if stru_format == 'vasp-xdatcar':
+            lines[5] = ' '.join(clean_symbols) + '\n'
+        else:
+            raise ValueError(f"Unsupported stru_format: {stru_format!r}")
+    
     if stru_format in ioformats:
         index = 0 if first_only else ':'
-        atoms = ase.io.read(traj_path, format=stru_format, index=index)
-        if not isinstance(atoms, list):
-            atoms = [atoms]
-        return atoms
-    
-    f = open(traj_path)
-    atoms = []
-    if stru_format == 'openmx-md':
+        if pseudo_h:
+            atoms = ase.io.read(io.StringIO(''.join(lines)), format=stru_format, index=index) # type: ignore
+            if not isinstance(atoms, list):
+                atoms.set_tags(tags) # type: ignore
+                atoms = [atoms]
+            else:
+                for frame in atoms:
+                    frame.set_tags(tags) # type: ignore
+        else:
+            content = f.read()
+            atoms = ase.io.read(io.StringIO(content), format=stru_format, index=index)
+            if not isinstance(atoms, list):
+                atoms = [atoms]
+              
+    elif stru_format == 'openmx-md':
+        atoms = []
         while True:
             line = f.readline()
             if not line:
@@ -359,7 +407,7 @@ def write_stru(
     else:
         raise NotImplementedError(f"Unsupported software: {stru_format}")
 
-
+# write_strus not used in current codebase, so not supported to handle pseudo-H for now. 
 def write_strus(software: str, structures: list[Atoms], out_dir: str | Path = '.') -> str:
     """Write structures to a trajectory file in software-native format.
 

@@ -77,6 +77,11 @@ def qdyn_nve(
     cstru = Atoms.fromdict(structure)
     if parameters.sel.constraint_layers is not None and not cstru.constraints:
         cstru = add_constraints(cstru, parameters.sel)
+        
+    is_pseudo_h = (
+        parameters.pseudo_h is not None
+        and parameters.pseudo_h.is_pseudo_h
+    )
 
     if isinstance(parameters.calculator, DFTBaseInputT):
         # Prepare input files
@@ -86,6 +91,7 @@ def qdyn_nve(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
+            pseudo_h=is_pseudo_h,
         )
 
         if prepare_input_only:
@@ -148,6 +154,7 @@ def _prepare_nve_input(
     parameters: NVEInputT,
     pp_path: str,
     orb_path: str,
+    pseudo_h: bool = False,
 ):
     """Prepare input files for NVE molecular dynamics.
 
@@ -157,6 +164,7 @@ def _prepare_nve_input(
         parameters: NVE parameters.
         pp_path: Path to pseudopotential directory.
         orb_path: Path to orbital files.
+        pseudo_h: Whether to use pseudo-H.
     """
     assert isinstance(parameters.calculator, DFTBaseInputT)
 
@@ -173,6 +181,7 @@ def _prepare_nve_input(
             pp_path=pp_path,
             orb_path=orb_path,
             kspacing=parameters.calculator.kspacing,
+            pseudo_h=pseudo_h,
             inputs_dict=input,
             inputs_params=parameters.calculator.parameters,
         )

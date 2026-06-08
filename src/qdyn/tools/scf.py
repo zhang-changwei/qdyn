@@ -270,8 +270,13 @@ def qdyn_scf_cpu(
     calc = parameters.calculator
     scf_step = parameters.scf_step
     frame_start = traj.start
+    
+    is_pseudo_h = (
+        parameters.pseudo_h is not None
+        and parameters.pseudo_h.is_pseudo_h
+    )
 
-    strus = read_strus(traj.format, traj.path)
+    strus = read_strus(traj.format, traj.path, pseudo_h=is_pseudo_h)
     strus = strus[-scf_step:]
     strus = strus[traj.start:traj.stop]
     n_frames = len(strus)
@@ -293,6 +298,7 @@ def qdyn_scf_cpu(
             pp_path=pp_path,
             orb_path=orb_path,
             kspacing=calc.kspacing,
+            pseudo_h=is_pseudo_h,
             inputs_dict=inputs_dict,
             inputs_params=calc.parameters,
         )
@@ -377,6 +383,7 @@ def qdyn_scf_cpu(
             subdir / STRU_FNAME_MAPPING[software_dft],
             stru,
             stru_format=STRU_FORMAT_MAPPING[software_dft],
+            pseudo_h=is_pseudo_h,
             extras=dftinputs.stru_extras
         )
 
