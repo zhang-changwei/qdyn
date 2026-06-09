@@ -166,6 +166,8 @@ class StructurePreviewPayload(BaseModel):
     lattice: list[list[float]]
     pbc: list[bool] = Field(default=[True, True, True])
     constraint_mask: list[bool] | None = None  # true = constrained (source-agnostic)
+    format: Literal["vasp"] = "vasp"
+    content: str
 
 
 class StructureValidationResponse(BaseModel):
