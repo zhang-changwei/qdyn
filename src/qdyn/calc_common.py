@@ -24,6 +24,21 @@ from .params import XC_MAPPING, ALL_ORBITALS
 
 logger = logging.getLogger(__name__)
 
+
+def has_valid_cell(atoms: Atoms, eps: float = 1e-8) -> bool:
+    """Return True when atoms has a finite, full-rank cell with nonzero volume."""
+    try:
+        cell = atoms.cell.array
+        return (
+            atoms.cell.rank == 3
+            and np.isfinite(cell).all()
+            and np.isfinite(atoms.cell.volume)
+            and abs(atoms.cell.volume) > eps
+        )
+    except Exception:
+        return False
+
+
 def xc_mapping(software: str, xc: str, input: dict) -> dict:
     if software == 'vasp':
         if xc in ['PBE', 'Not above']:
