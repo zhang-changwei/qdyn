@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response
 
 from ..api_common import verify_task_ownership as api_verify_task_ownership
 from ..auth.dependencies import get_current_user
-from ..calc_common import read_stru
+from ..calc_common import has_valid_cell, read_stru
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError, ValidationError
 from . import service
@@ -78,6 +78,13 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             "success": False,
             "error": {"code": code, "message": message},
         }
+
+    def has_valid_periodic_cell(atoms: Any) -> bool:
+        """Return True when layer constraints can use the structure cell."""
+        try:
+            return bool(atoms.pbc.all()) and has_valid_cell(atoms)
+        except Exception:
+            return False
 
     def verify_task_ownership_local(task_id: str, username: str) -> None:
         """Verify that the task belongs to the user, raising HTTPException if not."""
@@ -518,26 +525,26 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         return success_response({"task_name": name})
 
     # -------------------------------------------------------------------------
-    # POST /frontend/structures/validate - POSCAR validation
+    # POST /frontend/structures/validate - structure validation
     # -------------------------------------------------------------------------
 
     @router.post(
         "/structures/validate",
-        summary="Validate POSCAR structure",
-        description="Pre-validate a POSCAR structure string before submission.",
+        summary="Validate structure",
+        description="Pre-validate a structure string before submission.",
     )
     def validate_structure(
         payload: StructureValidationRequest,
         username: str = Depends(get_current_user),
     ) -> Dict[str, Any]:
         """
-        Validate a POSCAR structure string.
+        Validate a structure string.
 
-        This endpoint performs local validation of a POSCAR format structure
+        This endpoint performs local validation of a structure format
         before task submission, checking for parseability and basic integrity.
 
         Args:
-            payload: The POSCAR validation request payload.
+            payload: The structure validation request payload.
 
         Returns:
             A unified response with validation result.
@@ -546,24 +553,29 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         try:
             # Attempt to parse the structure through the shared format router
-            atoms = read_stru("vasp", io.StringIO(payload.content))
+            atoms = read_stru(payload.stru_format, io.StringIO(payload.content))
 
             # Basic validation checks
             if atoms is None:
                 return error_response(
                     "PARSE_ERROR",
-                    "Failed to parse structure: ASE returned None",
+                    (
+                        f"Failed to parse structure as '{payload.stru_format}': "
+                        "ASE returned None"
+                    ),
                 )
 
             # Build 3D preview payload (best-effort; failure does not block validation)
             preview = None
             try:
-                from .structure_preview import build_preview
+                from .structure_preview import build_preview_from_atoms
 
-                preview = build_preview(payload.content, fmt="vasp")
+                preview = build_preview_from_atoms(atoms)
             except Exception as preview_exc:
                 logger.warning(
-                    "Structure preview generation failed: %s", preview_exc,
+                    "Structure preview generation failed for format '%s': %s",
+                    payload.stru_format,
+                    preview_exc,
                 )
 
             # Extract basic info for the response
@@ -581,7 +593,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         except Exception as exc:
             return error_response(
                 "PARSE_ERROR",
-                f"Failed to parse structure: {str(exc)}",
+                f"Failed to parse structure as '{payload.stru_format}': {exc}",
             )
 
     # -------------------------------------------------------------------------
@@ -631,12 +643,26 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         if req.stru_content:
             # Path A: Parse structure from raw file content
+            from ..params import SUPPORTED_STRUCTURE_FORMATS
+
+            if req.stru_format not in SUPPORTED_STRUCTURE_FORMATS:
+                supported = ", ".join(sorted(SUPPORTED_STRUCTURE_FORMATS))
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Structure format '{req.stru_format}' is not supported "
+                        f"for constraint previews. Supported formats: {supported}."
+                    ),
+                )
+
             try:
                 atoms = read_stru(req.stru_format, io.StringIO(req.stru_content))
             except Exception as exc:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Failed to parse structure: {exc}",
+                    detail=(
+                        f"Failed to parse structure as '{req.stru_format}': {exc}"
+                    ),
                 )
         elif req.task_id:
             # Path B: Resolve structure from task (resume mode)
@@ -701,6 +727,14 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             )
 
         # Compute layer-based constraint mask via add_constraints + readback
+        if not has_valid_periodic_cell(atoms):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Layer constraints require a periodic structure with a valid cell."
+                ),
+            )
+
         try:
             from copy import deepcopy
 
