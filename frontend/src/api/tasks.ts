@@ -37,14 +37,22 @@ import type {
 /**
  * Upload a trajectory file to the server.
  * Uses multipart/form-data with streaming progress.
+ *
+ * @param file - Trajectory file to upload
+ * @param struFormat - ASE trajectory format (vasp-xdatcar/extxyz/openmx-md);
+ *                      the backend parses the file with exactly this format and
+ *                      no longer auto-detects. Defaults to "vasp-xdatcar".
+ * @param onProgress - Upload progress callback (0-100)
  */
 export async function uploadTrajectory(
   file: File,
+  struFormat = 'vasp-xdatcar',
   onProgress?: (percent: number) => void
 ): Promise<{ hash: string; formula?: string; num_atoms?: number; num_frames?: number }> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('file_type', 'trajectory')
+  formData.append('stru_format', struFormat)
   const resp = await http.post('/upload', formData, {
     timeout: 0, // no timeout for large files
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -59,9 +67,18 @@ export async function uploadTrajectory(
 
 /**
  * Check if a trajectory file with the given hash already exists on the server.
+ *
+ * @param hash - MD5 of the trajectory file
+ * @param struFormat - ASE trajectory format used to re-summarize a cached hit
+ *                      with the user-selected format. Defaults to "vasp-xdatcar".
  */
-export async function checkTrajectoryHash(hash: string): Promise<{ exists: boolean; formula?: string; num_atoms?: number; num_frames?: number }> {
-  const resp = await http.get('/upload/hash', { params: { hash, file_type: 'trajectory' } })
+export async function checkTrajectoryHash(
+  hash: string,
+  struFormat = 'vasp-xdatcar'
+): Promise<{ exists: boolean; formula?: string; num_atoms?: number; num_frames?: number }> {
+  const resp = await http.get('/upload/hash', {
+    params: { hash, file_type: 'trajectory', stru_format: struFormat },
+  })
   return resp.data
 }
 

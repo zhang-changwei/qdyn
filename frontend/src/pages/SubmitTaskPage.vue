@@ -134,12 +134,13 @@
       </el-card>
 
       <!-- Structure upload — only for new tasks, after steps are chosen -->
-      <!-- POSCAR upload (NVT/NVE first step) -->
+      <!-- Single-frame structure upload (NVT/NVE first step) -->
       <el-card v-if="submitMode === 'new' && formData.steps.length > 0 && !isSCFFirstStep" class="form-section">
         <template #header>
-          <span class="section-title">2. Structure (POSCAR)</span>
+          <span class="section-title">2. Structure File</span>
         </template>
-        <PoscarUploader
+        <StructureUploader
+          v-model:format="selectedStruFormat"
           @file-loaded="handlePoscarLoaded"
           @clear="handlePoscarCleared"
         />
@@ -171,6 +172,7 @@
           <span class="section-title">2. Trajectory File</span>
         </template>
         <TrajectoryUploader
+          v-model:format="selectedTrajFormat"
           :status="trajStatus"
           :hash="trajHash"
           :file-name="trajFileName"
@@ -276,13 +278,13 @@ import { FUSED_SCF_PRENAMD } from '@/constants/steps'
 import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import SparkMD5 from 'spark-md5'
-import PoscarUploader from '@/components/PoscarUploader.vue'
+import StructureUploader from '@/components/StructureUploader.vue'
 import StepSelector from '@/components/StepSelector.vue'
 import ResumeTaskSelector from '@/components/ResumeTaskSelector.vue'
 import DynamicStepForm from '@/components/DynamicStepForm.vue'
 import StructureViewer from '@/components/StructureViewer.vue'
 import TrajectoryUploader from '@/components/TrajectoryUploader.vue'
-import { validatePoscar, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
+import { validateStructure, computeConstraintMask, getTaskStructurePreview } from '@/api/structures'
 import { getStepInputSchemas, type StepInputSchemas } from '@/api/schema'
 import { getTaskSummaryList, uploadTrajectory, checkTrajectoryHash, getPoolStatus } from '@/api/tasks'
 import { buildDefaultsFromSchema } from '@/utils/schema-form'
@@ -329,6 +331,13 @@ const submitting = ref(false)
 const poscarContent = ref('')
 const poscarValidation = ref<ValidatePoscarResponse | null>(null)
 const poscarVersion = ref(0) // Used to prevent race condition in validation
+// User-selected upload formats. Two distinct value domains that must NOT be
+// shared: a single-frame structure format (read_stru) for the NVT/NVE path,
+// and a trajectory format (read_strus) for the SCF-first path. The two domains
+// are split by upload scenario. The trajectory VASP value is `vasp-xdatcar`,
+// never bare `vasp`.
+const selectedStruFormat = ref('vasp')
+const selectedTrajFormat = ref('vasp-xdatcar')
 const structurePreview = ref<StructurePreviewPayload | null>(null)
 const basePreview = ref<StructurePreviewPayload | null>(null)
 const schemas = ref<StepInputSchemas | null>(null)
@@ -570,6 +579,29 @@ watch(selectedPool, (newPool, oldPool) => {
   formData.steps = []
 })
 
+// Re-validate the already-loaded structure when the user switches the
+// single-frame format, so the preview/validation never lingers in a state
+// parsed under a stale format (e.g. validated as vasp but now marked cif).
+watch(selectedStruFormat, (newFormat, oldFormat) => {
+  if (newFormat === oldFormat) return
+  if (poscarContent.value) {
+    handlePoscarLoaded(poscarContent.value, newFormat)
+  }
+})
+
+// Re-process the already-uploaded trajectory when the user switches the
+// trajectory format, so the hash check / upload and the resulting summary are
+// always parsed under the format that the submit payload will send. Without
+// this, switching format after a successful upload would leave a stale
+// summary/hash validated under the old format. processTrajFile() bumps
+// trajVersion and re-reads selectedTrajFormat, so a plain re-run is safe.
+watch(selectedTrajFormat, (newFormat, oldFormat) => {
+  if (newFormat === oldFormat) return
+  if (trajFile.value) {
+    processTrajFile(trajFile.value)
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Constraint mask real-time computation
 // ---------------------------------------------------------------------------
@@ -616,7 +648,9 @@ watch(
         const requestPayload: ComputeConstraintMaskRequest = poscarContent.value
           ? {
               stru_content: poscarContent.value,
-              stru_format: 'vasp',
+              // Constraint editor only renders on the single-frame (POSCAR) path,
+              // so this is always the single-frame structure format.
+              stru_format: selectedStruFormat.value,
               constraint_layers: params.constraint_layers,
               layer_direction: params.layer_direction,
               total_layers: params.total_layers!,
@@ -652,8 +686,11 @@ watch(
 // POSCAR upload handlers (existing)
 // ---------------------------------------------------------------------------
 
-async function handlePoscarLoaded(content: string): Promise<void> {
+async function handlePoscarLoaded(content: string, format?: string): Promise<void> {
   poscarContent.value = content
+  // Keep the parent-owned format in sync with the value the file was loaded
+  // under (the uploader emits the active format alongside the content).
+  if (format) selectedStruFormat.value = format
   poscarVersion.value++ // Increment version to track this request
   constraintRequestId++ // Invalidate any in-flight constraint requests
   const currentVersion = poscarVersion.value
@@ -662,7 +699,7 @@ async function handlePoscarLoaded(content: string): Promise<void> {
   basePreview.value = null
 
   try {
-    const result = await validatePoscar(content)
+    const result = await validateStructure(content, selectedStruFormat.value)
     // Only update validation if this is the latest request
     if (poscarVersion.value === currentVersion) {
       poscarValidation.value = result
@@ -754,7 +791,7 @@ async function processTrajFile(file: File): Promise<void> {
 
     // Step 2: Check server
     trajStatus.value = 'checking'
-    const checkResult = await checkTrajectoryHash(hash)
+    const checkResult = await checkTrajectoryHash(hash, selectedTrajFormat.value)
     if (trajVersion.value !== myVersion) return // Superseded
 
     if (checkResult.exists) {
@@ -773,7 +810,7 @@ async function processTrajFile(file: File): Promise<void> {
 
     // Step 3: Upload
     trajStatus.value = 'uploading'
-    const uploadResult = await uploadTrajectory(file, (p) => {
+    const uploadResult = await uploadTrajectory(file, selectedTrajFormat.value, (p) => {
       if (trajVersion.value === myVersion) trajUploadProgress.value = p
     })
     if (trajVersion.value !== myVersion) return // Superseded
@@ -905,13 +942,13 @@ async function handleSubmit(): Promise<void> {
       return
     }
   } else {
-    // NVT/NVE first step: require POSCAR
+    // NVT/NVE first step: require a single-frame structure
     if (!poscarContent.value) {
-      ElMessage.error('Please upload a POSCAR file')
+      ElMessage.error('Please upload a structure file')
       return
     }
     if (!poscarValidation.value?.valid) {
-      ElMessage.error('Please fix POSCAR validation errors before submitting')
+      ElMessage.error('Please fix structure validation errors before submitting')
       return
     }
   }
@@ -953,7 +990,10 @@ async function handleSubmit(): Promise<void> {
     scheduler_config: {},
     steps: formData.steps,
     stru: useTrajHash ? '' : (isResume ? '' : poscarContent.value),
-    stru_format: 'vasp',
+    // Dual-semantic stru_format split by upload scenario:
+    // trajectory (SCF-first) sends the ASE trajectory format string
+    // (vasp-xdatcar, never bare vasp); single-frame sends the structure format.
+    stru_format: useTrajHash ? selectedTrajFormat.value : selectedStruFormat.value,
     ...(useTrajHash ? { stru_hash: trajHash.value } : {}),
     task_name: formData.taskName.trim() || null,
   }

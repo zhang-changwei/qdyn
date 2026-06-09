@@ -266,10 +266,13 @@ export interface ContinueResultResponse {
 // ============================================
 
 /**
- * POSCAR validation request
+ * Structure validation request
  */
 export interface ValidatePoscarRequest {
   content: string
+  /** ASE single-frame format string (vasp/cif/extxyz/openmx-dat).
+   *  Backend defaults to "vasp" when omitted (backward compatible). */
+  stru_format?: string
 }
 
 /**
@@ -282,6 +285,10 @@ export interface StructurePreviewPayload {
   lattice: number[][]
   pbc: boolean[]
   constraint_mask: boolean[] | null
+  /** Canonical preview content format (always "vasp"). */
+  format?: 'vasp'
+  /** Canonical VASP-serialized structure content. */
+  content?: string
 }
 
 /**
