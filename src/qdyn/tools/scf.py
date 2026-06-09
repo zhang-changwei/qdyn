@@ -341,110 +341,111 @@ def qdyn_scf_cpu(
             nproc=processes_per_node,
             threads_per_proc=threads_per_process,
         )
-    dftinputs.write(stru=False)
+    try:
+        dftinputs.write(stru=False)
 
-    if prepare_input_only:
+        if prepare_input_only:
+            return {
+                'run_dir': str(Path.cwd()),
+                'software': software,
+                'software_dft': software_dft,
+            }
+
+        # Task working directory
+        task_dir = Path.cwd()
+        numdigit = len(str(scf_step))
+
+        prev_chgcar = None
+        chgcar = CHG_FNAME[software_dft]
+        files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
+
+        # Run SCF calculations sequentially with CHGCAR passing
+        for idx, stru in enumerate(strus[:scf_end]):
+            if idx <= last_step:
+                # Skip already completed steps
+                # TODO: retry hasn't completed yet
+                continue
+
+            # Create subdir, copy input files and write structure file
+            global_idx = frame_start + idx + 1
+            subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+            if subdir.is_dir(): # optional
+                shutil.rmtree(subdir)
+            subdir.mkdir(exist_ok=True)
+            for fname in files_to_copy:
+                shutil.copy2(task_dir / fname, subdir / fname)
+            write_stru(
+                subdir / STRU_FNAME_MAPPING[software_dft],
+                stru,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
+
+            # Copy CHGCAR from previous successful calculation for faster convergence
+            if prev_chgcar and prev_chgcar.is_file():
+                shutil.copy2(prev_chgcar, subdir / chgcar)
+
+            # run scf solver
+            scf_solver.add(idx, subdir, stru)
+
+            # Update CHGCAR
+            prev_chgcar = subdir / chgcar
+
+        # run solver for tail frames
+        scf_solver.run()
+
+        # tdoverlap calculation
+        if software_dft == 'openmx':
+            dftinputs.update_inputs({'postprocess.output.level': 1})
+            dftinputs.update_stru_extras()
+
+        if software_dft in {'abacus', 'openmx'}:
+            import multiprocessing
+            from multiprocessing.pool import AsyncResult
+            results: list[AsyncResult] = []
+            with multiprocessing.Pool(processes=processes_per_node) as pool:
+                for idx in range(nstep):
+                    global_idx = frame_start + idx + 1
+                    subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+
+                    olapdir = subdir / "overlap"
+                    olapdir.mkdir(exist_ok=True)
+
+                    atoms = strus[idx].copy()
+                    atoms.extend(strus[idx + 1])
+                    for fname in files_to_copy:
+                        shutil.copy2(subdir / fname, olapdir / fname)
+                    write_stru(
+                        olapdir / STRU_FNAME_MAPPING[software_dft],
+                        atoms,
+                        stru_format=STRU_FORMAT_MAPPING[software_dft],
+                        extras=dftinputs.stru_extras
+                    )
+                    results.append(
+                        pool.apply_async(
+                            overlap_run_software,
+                            args=(subdir, olapdir, software_dft, threads_per_process)
+                        )
+                    )
+
+                # logging
+                for idx, result in enumerate(results):
+                    global_idx = frame_start + idx + 1
+                    subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+                    result.get()
+
+                    scf_logger(step=idx, global_idx=subdir.name, category='overlap')
+
         return {
-            'run_dir': str(Path.cwd()),
+            'run_dir': str(task_dir),
             'software': software,
             'software_dft': software_dft,
         }
-
-    # Task working directory
-    task_dir = Path.cwd()
-    numdigit = len(str(scf_step))
-
-    prev_chgcar = None
-    chgcar = CHG_FNAME[software_dft]
-    files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
-
-    # Run SCF calculations sequentially with CHGCAR passing
-    for idx, stru in enumerate(strus[:scf_end]):
-        if idx <= last_step:
-            # Skip already completed steps
-            # TODO: retry hasn't completed yet
-            continue
-
-        # Create subdir, copy input files and write structure file
-        global_idx = frame_start + idx + 1
-        subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
-        if subdir.is_dir(): # optional
-            shutil.rmtree(subdir)
-        subdir.mkdir(exist_ok=True)
-        for fname in files_to_copy:
-            shutil.copy2(task_dir / fname, subdir / fname)
-        write_stru(
-            subdir / STRU_FNAME_MAPPING[software_dft],
-            stru,
-            stru_format=STRU_FORMAT_MAPPING[software_dft],
-            extras=dftinputs.stru_extras
-        )
-
-        # Copy CHGCAR from previous successful calculation for faster convergence
-        if prev_chgcar and prev_chgcar.is_file():
-            shutil.copy2(prev_chgcar, subdir / chgcar)
-
-        # run scf solver
-        scf_solver.add(idx, subdir, stru)
-
-        # Update CHGCAR
-        prev_chgcar = subdir / chgcar
-    
-    # run solver for tail frames
-    scf_solver.run()
-    scf_solver.close()
-    del scf_solver
-
-
-    # tdoverlap calculation
-    if software_dft == 'openmx':
-        dftinputs.update_inputs({'postprocess.output.level': 1})
-        dftinputs.update_stru_extras()
-
-    if software_dft in {'abacus', 'openmx'}:
-        import multiprocessing
-        from multiprocessing.pool import AsyncResult
-        results: list[AsyncResult] = []
-        with multiprocessing.Pool(processes=processes_per_node) as pool:
-            for idx in range(nstep):
-                global_idx = frame_start + idx + 1
-                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
-
-                olapdir = subdir / "overlap"
-                olapdir.mkdir(exist_ok=True)
-
-                atoms = strus[idx].copy()
-                atoms.extend(strus[idx + 1])
-                for fname in files_to_copy:
-                    shutil.copy2(subdir / fname, olapdir / fname)
-                write_stru(
-                    olapdir / STRU_FNAME_MAPPING[software_dft],
-                    atoms,
-                    stru_format=STRU_FORMAT_MAPPING[software_dft],
-                    extras=dftinputs.stru_extras
-                )
-                results.append(
-                    pool.apply_async(
-                        overlap_run_software, 
-                        args=(subdir, olapdir, software_dft, threads_per_process)
-                    )
-                )
-
-            # logging
-            for idx, result in enumerate(results):
-                global_idx = frame_start + idx + 1
-                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
-                result.get()
-
-                scf_logger(step=idx, global_idx=subdir.name, category='overlap')
-    
-    scf_logger.close()
-
-    return {
-        'run_dir': str(task_dir),
-        'software': software,
-        'software_dft': software_dft,
-    }
+    finally:
+        try:
+            scf_solver.close()
+        finally:
+            scf_logger.close()
 
 
 def _prepare_scf_input(
