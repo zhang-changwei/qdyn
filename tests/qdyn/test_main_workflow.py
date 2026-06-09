@@ -585,7 +585,7 @@ def test_step_scf_uses_active_pool_user_data_path(monkeypatch):
     assert captured["traj_format"] == "extxyz"
 
 
-def test_step_scf_uses_nve_output_software_for_traj_format(monkeypatch):
+def test_step_scf_uses_nve_output_traj_format(monkeypatch):
     manager = _make_manager()
 
     captured: dict[str, object] = {}
@@ -600,8 +600,11 @@ def test_step_scf_uses_nve_output_software_for_traj_format(monkeypatch):
 
     jobs = manager.step_scf(
         input=SCFInputT(),
-        nve_software="mace",
-        jobs={"nve": [SimpleNamespace(output={"traj_path": "/tmp/traj.xyz", "software": "mace"})]},
+        jobs={"nve": [SimpleNamespace(output={
+            "traj_path": "/tmp/traj.xyz",
+            "software": "mace",
+            "traj_format": "extxyz",
+        })]},
         is_first_step=False,
         stru_format="vasp",
         stru_hash="",

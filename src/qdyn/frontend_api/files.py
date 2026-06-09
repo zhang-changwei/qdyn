@@ -121,7 +121,7 @@ def _detect_subdir_status(access: RunDirAccess, subdir: str) -> str:
         return "unknown"
 
 
-# Map from scan_scf_status marker names to SubdirInfo display status
+# Map from scan_scf_status log-derived status to SubdirInfo display status
 _SCF_STATUS_MAP = {
     "ENDED": "completed",
     "FAIL": "failed",

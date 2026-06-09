@@ -1,7 +1,8 @@
 from ase import Atoms
 
+from qdyn.frontend_api import preview as preview_mod
 from qdyn.frontend_api import service
-from qdyn.frontend_api.structure_preview import (
+from qdyn.frontend_api.preview import (
     build_preview,
     build_preview_from_atoms,
 )
@@ -51,7 +52,7 @@ def test_enrich_with_layer_constraints_recomputes_content(monkeypatch):
     assert "Selective dynamics" not in preview.content
 
     monkeypatch.setattr(
-        service,
+        preview_mod,
         "_get_constraint_params_for_task",
         lambda task_id: {
             "constraint_layers": "1",

@@ -568,7 +568,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
             # Build 3D preview payload (best-effort; failure does not block validation)
             preview = None
             try:
-                from .structure_preview import build_preview_from_atoms
+                from .preview import build_preview_from_atoms
 
                 preview = build_preview_from_atoms(atoms)
             except Exception as preview_exc:

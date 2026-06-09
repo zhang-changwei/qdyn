@@ -355,15 +355,8 @@ def get_job_md_timeseries(
     if potim is not None:
         references.potim_fs = potim
 
-    total_steps: int | None = None
-    if incar_path is not None:
-        nsw_val = _parse_incar_numeric_value(incar_path, "NSW")
-        if nsw_val is not None:
-            total_steps = int(nsw_val)
-    if total_steps is None:
-        total_from_header = raw_data.get('total_steps', 0)
-        if total_from_header > 0:
-            total_steps = total_from_header
+    total_from_header = raw_data.get('total_steps', 0)
+    total_steps: int | None = int(total_from_header) if total_from_header > 0 else None
 
     stats = MDTimeseriesStats(
         current_step=raw_data['steps'][-1] if raw_data['steps'] else 0,

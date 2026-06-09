@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ._common import _detect_step_type, _get_task_run_dir_access
 from ..main_workflow import MainWorkflow
+from ..output_postprocess import SCF_COMPLETED_LOG_CATEGORIES, SCF_RUNNING_LOG_CATEGORIES
 from .run_dir_access import RunDirAccess
 from .models import (
     JobProgressResponse,
@@ -13,38 +14,6 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_nsw_from_incar(incar_path: Path) -> int | None:
-    """Parse the NSW value from an INCAR file."""
-    try:
-        with open(incar_path, "r") as f:
-            for line in f:
-                stripped = line.strip().upper()
-                if "NSW" in stripped:
-                    parts = line.split("=")
-                    if len(parts) >= 2:
-                        try:
-                            return int(parts[1].split()[0].strip())
-                        except (ValueError, IndexError):
-                            continue
-    except OSError:
-        pass
-    return None
-
-
-def _parse_nsw_from_text(text: str) -> int | None:
-    """Parse the NSW value from INCAR text content."""
-    for line in text.splitlines():
-        stripped = line.strip().upper()
-        if "NSW" in stripped:
-            parts = line.split("=")
-            if len(parts) >= 2:
-                try:
-                    return int(parts[1].split()[0].strip())
-                except (ValueError, IndexError):
-                    continue
-    return None
 
 
 def get_job_progress(
@@ -88,25 +57,6 @@ def get_job_progress(
         return JobProgressResponse(available=False, step_type=step_type)
 
 
-def infer_md_total_steps(
-    access: RunDirAccess, software: str | None = None
-) -> int | None:
-    """Infer MD total steps from the run directory.
-
-    VASP compatibility fallback: reads ``NSW`` from ``INCAR`` when the
-    ``qdyn_md.log`` header does not provide total steps.  Other software
-    backends do not have an equivalent fallback yet.
-    """
-    if software is not None and software != "vasp":
-        return None
-    try:
-        if access.root_file_exists("INCAR"):
-            incar_text = access.read_root_text("INCAR")
-            return _parse_nsw_from_text(incar_text)
-    except Exception:
-        pass
-    return None
-
 
 def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressResponse:
     """Parse qdyn_md.log for MD progress (step, temperature, energy)."""
@@ -128,9 +78,6 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
         logger.warning(
             "Failed to read qdyn_md.log from %s: %s", access.run_dir_path, exc
         )
-
-    if total_steps is None:
-        total_steps = infer_md_total_steps(access)
 
     percent: float | None = None
     if total_steps and total_steps > 0:
@@ -159,8 +106,6 @@ def _parse_qdyn_scf_log_text(
     return parse_qdyn_scf_log_text(log_text)
 
 
-_SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
-_SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
 
 
 def _parse_scf_global_index(frame_name: str) -> int:
@@ -183,9 +128,9 @@ def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
 
     frame_status: dict[str, str] = {}
     for _, global_idx, category in records:
-        if category in _SCF_COMPLETED_LOG_CATEGORIES:
+        if category in SCF_COMPLETED_LOG_CATEGORIES:
             frame_status[global_idx] = "ENDED"
-        elif category in _SCF_RUNNING_LOG_CATEGORIES:
+        elif category in SCF_RUNNING_LOG_CATEGORIES:
             if frame_status.get(global_idx) != "ENDED":
                 frame_status[global_idx] = "RUNNING"
 
