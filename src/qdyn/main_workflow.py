@@ -396,6 +396,7 @@ class MainWorkflow:
         self,
         *,
         input: SCFInputT,
+        nve_software: str | None = None,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru_format: str,
@@ -411,7 +412,11 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
+            if nve_software is None:
+                raise ValidationError(
+                    "NVE software is required when SCF uses NVE output."
+                )
+            traj_format = TRAJ_FORMAT_MAPPING[nve_software]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
@@ -502,6 +507,7 @@ class MainWorkflow:
         *,
         scf_input: SCFInputT,
         prenamd_input: PreNAMDInputT,
+        nve_software: str | None = None,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru_format: str,
@@ -517,7 +523,11 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
+            if nve_software is None:
+                raise ValidationError(
+                    "NVE software is required when FUSED_SCF_PRENAMD uses NVE output."
+                )
+            traj_format = TRAJ_FORMAT_MAPPING[nve_software]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
@@ -833,6 +843,11 @@ class MainWorkflow:
             next_step = 'pre_namd'
             jobs_scf = self.step_scf(
                 input=input.scf_input,
+                nve_software=(
+                    input.nve_input.software
+                    if 'nve' in input.steps and input.nve_input is not None
+                    else None
+                ),
                 jobs=jobs,
                 is_first_step=first_step == 'scf',
                 stru_format=stru_format,
@@ -857,6 +872,11 @@ class MainWorkflow:
             jobs['fused_scf_prenamd'] = self.step_fused_scf_prenamd(
                 scf_input=input.scf_input,
                 prenamd_input=input.prenamd_input,
+                nve_software=(
+                    input.nve_input.software
+                    if 'nve' in input.steps and input.nve_input is not None
+                    else None
+                ),
                 jobs=jobs,
                 is_first_step=first_step == 'fused_scf_prenamd',
                 stru_format=stru_format,

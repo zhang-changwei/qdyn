@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ase import Atoms
 from jobflow.core.job import job, Job
+from jobflow.core.reference import OutputReference
 import numpy as np
 from pydantic import BaseModel
 
@@ -119,7 +120,7 @@ class DFTSCFSolver:
 
 
 class TrajInfo(BaseModel):
-    path: str
+    path: str | OutputReference
     format: str
     start: int
     stop: int
