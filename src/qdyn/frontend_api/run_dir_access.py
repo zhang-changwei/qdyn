@@ -37,37 +37,36 @@ class ScfSubdirStatus:
     file_count: int
 
 
-_SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
-_SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
-
-
 def _scf_statuses_from_log(log_path: Path) -> dict[str, str]:
     """Parse qdyn_scf.log and return per-frame status dict.
 
-    Reads data rows (skipping the 2-line header) and maps each global_idx to
-    its final status.  ENDED takes priority over RUNNING for the same frame.
+    Delegates to the core parser in ``output_postprocess`` and reduces
+    records to per-frame final status (ENDED > RUNNING).
 
     Returns an empty dict if the log is missing, unreadable, or malformed.
     """
-    statuses: dict[str, str] = {}
+    from ..output_postprocess import (
+        SCF_COMPLETED_LOG_CATEGORIES,
+        SCF_RUNNING_LOG_CATEGORIES,
+        parse_qdyn_scf_log_text,
+    )
+
     if not log_path.is_file():
-        return statuses
+        return {}
     try:
         with open(log_path, "r", errors="replace") as f:
-            lines = f.readlines()
-        for line in lines[2:]:
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            global_idx = parts[1]
-            category = parts[2]
-            if category in _SCF_COMPLETED_LOG_CATEGORIES:
-                statuses[global_idx] = "ENDED"
-            elif category in _SCF_RUNNING_LOG_CATEGORIES:
-                if statuses.get(global_idx) != "ENDED":
-                    statuses[global_idx] = "RUNNING"
-    except OSError:
+            text = f.read()
+        _total, records = parse_qdyn_scf_log_text(text)
+    except (OSError, ValueError):
         return {}
+
+    statuses: dict[str, str] = {}
+    for _step, global_idx, category in records:
+        if category in SCF_COMPLETED_LOG_CATEGORIES:
+            statuses[global_idx] = "ENDED"
+        elif category in SCF_RUNNING_LOG_CATEGORIES:
+            if statuses.get(global_idx) != "ENDED":
+                statuses[global_idx] = "RUNNING"
     return statuses
 
 

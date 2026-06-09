@@ -1576,6 +1576,34 @@ def get_job_progress(
         return JobProgressResponse(available=False, step_type=step_type)
 
 
+def infer_md_total_steps(
+    access: RunDirAccess, software: str | None = None
+) -> int | None:
+    """Infer MD total steps from the run directory.
+
+    VASP compatibility fallback: reads ``NSW`` from ``INCAR`` when the
+    ``qdyn_md.log`` header does not provide total steps.  Other software
+    backends do not have an equivalent fallback yet.
+
+    Args:
+        access: Run directory accessor.
+        software: DFT software identifier (e.g. ``"vasp"``).  ``None``
+            falls back to checking for ``INCAR`` (VASP compatibility).
+
+    Returns:
+        Total MD steps or ``None`` if not determinable.
+    """
+    if software is not None and software != "vasp":
+        return None
+    try:
+        if access.root_file_exists("INCAR"):
+            incar_text = access.read_root_text("INCAR")
+            return _parse_nsw_from_text(incar_text)
+    except Exception:
+        pass
+    return None
+
+
 def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressResponse:
     """Parse qdyn_md.log for MD progress (step, temperature, energy)."""
     from ..output_postprocess import parse_qdyn_log_text
@@ -1598,12 +1626,7 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
         )
 
     if total_steps is None:
-        try:
-            if access.root_file_exists("INCAR"):
-                incar_text = access.read_root_text("INCAR")
-                total_steps = _parse_nsw_from_text(incar_text)
-        except Exception:
-            pass
+        total_steps = infer_md_total_steps(access)
 
     percent: float | None = None
     if total_steps and total_steps > 0:
@@ -1623,33 +1646,13 @@ def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressRespons
 def _parse_qdyn_scf_log_text(
     log_text: str,
 ) -> tuple[int, list[tuple[int, str, str]]]:
-    """Parse qdyn_scf.log text into total steps and data records."""
-    import re
+    """Parse qdyn_scf.log text into total steps and data records.
 
-    lines = [line.strip() for line in log_text.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("qdyn_scf.log is empty")
+    Delegates to the core parser in ``output_postprocess``.
+    """
+    from ..output_postprocess import parse_qdyn_scf_log_text
 
-    match = re.search(r"\bStep:\s*(\d+)", lines[0])
-    if match is None:
-        raise ValueError("Failed to parse total steps from qdyn_scf.log")
-
-    total_steps = int(match.group(1))
-    records: list[tuple[int, str, str]] = []
-
-    for line in lines[2:]:
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        try:
-            step = int(parts[0])
-        except ValueError:
-            continue
-        global_idx = parts[1]
-        category = parts[2] if len(parts) >= 3 else ""
-        records.append((step, global_idx, category))
-
-    return total_steps, records
+    return parse_qdyn_scf_log_text(log_text)
 
 
 _SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}

@@ -338,6 +338,79 @@ def parse_md_data_from_qdyn_log(
         return parse_qdyn_log_text(f.read())
 
 # ===========================================================================
+# qdyn_scf.log parser (software-agnostic)
+# ===========================================================================
+
+SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
+SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
+
+
+def parse_qdyn_scf_log_text(
+    text: str,
+) -> tuple[int, list[tuple[int, str, str]]]:
+    """Parse qdyn_scf.log content into total steps and records.
+
+    Returns:
+        (total_steps, records), where each record is
+        (step, global_idx, category).
+
+    Raises:
+        ValueError: If the log text is empty or the header cannot be parsed.
+    """
+    import re as _re
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("qdyn_scf.log is empty")
+
+    match = _re.search(r"\bStep:\s*(\d+)", lines[0])
+    if match is None:
+        raise ValueError("Failed to parse total steps from qdyn_scf.log")
+
+    total_steps = int(match.group(1))
+    records: list[tuple[int, str, str]] = []
+
+    for line in lines[2:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            step = int(parts[0])
+        except ValueError:
+            continue
+        global_idx = parts[1]
+        category = parts[2] if len(parts) >= 3 else ""
+        records.append((step, global_idx, category))
+
+    return total_steps, records
+
+
+def completed_scf_frames_from_qdyn_log_text(
+    text: str,
+    completed_categories: set[str] | None = None,
+) -> set[str]:
+    """Return frame names whose categories indicate completed products.
+
+    Args:
+        text: Raw qdyn_scf.log content.
+        completed_categories: Override the default completed category set.
+            Defaults to ``SCF_COMPLETED_LOG_CATEGORIES``.
+
+    Returns:
+        Set of global_idx strings with a completed category.
+    """
+    if completed_categories is None:
+        completed_categories = SCF_COMPLETED_LOG_CATEGORIES
+
+    _total, records = parse_qdyn_scf_log_text(text)
+    return {
+        global_idx
+        for _, global_idx, category in records
+        if category in completed_categories
+    }
+
+
+# ===========================================================================
 # VASP specific functions
 # ===========================================================================
 def _evs_and_whts_from_procar(
