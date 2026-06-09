@@ -458,7 +458,6 @@ def validate_workflow_input(
     skip: list[str] | None = None,
 ) -> None:
     """Validate user workflow input before building the jobflow graph."""
-
     check_list = {
         'gpu': False, 
         'models': [],
@@ -492,16 +491,12 @@ def validate_workflow_input(
     if not input.steps:
         raise ValidationError("input.steps is empty; at least one step is required.")
 
-    # step contiguity check (namd only; other methods reserved for future use)
-    if method == "namd":
-        key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
-        expanded_steps = _expand_steps_for_validation(input.steps)
-        step_int = sorted(key_map[s] for s in expanded_steps)
-        for i in range(1, len(step_int)):
-            if step_int[i] != step_int[i - 1] + 1:
-                raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")
-    else:
-        raise NotImplementedError(f"Method '{method}' is not supported yet.")
+    key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
+    expanded_steps = _expand_steps_for_validation(input.steps)
+    step_int = sorted(key_map[s] for s in expanded_steps)
+    for i in range(1, len(step_int)):
+        if step_int[i] != step_int[i - 1] + 1:
+            raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")
 
     # ------------------------------------------------------------------
     # Check workflow starting point: resume / stru / stru_hash

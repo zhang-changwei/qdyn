@@ -157,11 +157,7 @@ class MainWorkflow:
         """Get execution config for the active pool and software."""
         return self.active_pool.worker_cfg[key][software]
 
-    def _get_first_step(
-        self, steps: Sequence[str], method: Literal['namd', 'n2amd']
-    ) -> str:
-        if method != 'namd':
-            raise NotImplementedError(f"Method '{method}' is not supported yet.")
+    def _get_first_step(self, steps: Sequence[str]) -> str:
         key_map = {
             'nvt': 0,
             'nve': 1,
@@ -764,7 +760,7 @@ class MainWorkflow:
     def main_workflow(
         self,
         input: InputT,
-        method: Literal['namd', 'n2amd'] = 'namd',
+        method: Literal['namd'] = 'namd',
         stru: str = '',
         stru_format: str = 'vasp',
         stru_hash: str = '',
@@ -797,7 +793,7 @@ class MainWorkflow:
             active_pool=active_pool,
         )
 
-        first_step = self._get_first_step(input.steps, method)
+        first_step = self._get_first_step(input.steps)
 
         if self._should_run_step('nvt', input.steps, flag) and input.nvt_input is not None:
             next_step = 'nve'
@@ -913,7 +909,7 @@ class MainWorkflow:
     def submit(
         self,
         input: InputT,
-        method: Literal['namd', 'n2amd'] = 'namd',
+        method: Literal['namd'] = 'namd',
         stru: str = '',
         stru_format: str = 'vasp',
         stru_hash: str = '',

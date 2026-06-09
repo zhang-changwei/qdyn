@@ -391,7 +391,7 @@ class SubmitResponse(BaseModel):
 @app.post("/submit", response_model=SubmitResponse, status_code=201)
 async def submit_task(
     input: InputT,
-    method: Literal["namd", "n2amd"] = "namd",
+    method: Literal["namd"] = "namd",
     resume: bool = False,
     prev_task_id: str = "",
     username: str = Depends(get_current_user),

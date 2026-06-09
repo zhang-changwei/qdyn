@@ -189,25 +189,17 @@
       <!-- Method & Basic Settings section -->
       <el-card class="form-section">
         <template #header>
-          <span class="section-title">{{ submitMode === 'resume' ? '3' : '3' }}. Method & Settings</span>
+          <span class="section-title">{{ submitMode === 'resume' ? '3' : '3' }}. Method &amp; Settings</span>
         </template>
         <el-row :gutter="16">
-          <el-col :span="24">
+          <el-col :span="12">
             <el-form-item label="NAMD Method">
               <el-radio-group v-model="formData.method">
                 <el-radio value="namd">NAMD (Standard)</el-radio>
-                <el-tooltip
-                  content="Reserved for future workflow methods"
-                  placement="top"
-                >
-                  <span class="disabled-radio-wrapper">
-                    <el-radio value="n2amd" disabled>N2AMD</el-radio>
-                  </span>
-                </el-tooltip>
               </el-radio-group>
             </el-form-item>
           </el-col>
-          <el-col :span="24">
+          <el-col :span="12">
             <el-form-item>
               <template #label>
                 <span>
@@ -494,7 +486,7 @@ function buildStepDefaults(schemaKey: keyof StepInputSchemas): Record<string, un
 
 const formData = reactive<{
   steps: string[]
-  method: 'namd' | 'n2amd'
+  method: 'namd'
   taskName: string
   plot: boolean
   nvt_input: NVTInput | Record<string, unknown>
@@ -1073,19 +1065,14 @@ async function handleSubmit(): Promise<void> {
 
 .step-params-title {
   margin: 0 0 var(--space-4) 0;
-  font: var(--text-body);
-  color: var(--fg-secondary);
+  font: var(--text-h4);
+  color: var(--fg-primary);
 }
 
 .submit-section {
   display: flex;
   justify-content: center;
   padding: var(--space-6) 0;
-}
-
-.disabled-radio-wrapper {
-  display: inline-flex;
-  vertical-align: middle;
 }
 
 :deep(.param-help-icon) {
