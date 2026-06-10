@@ -61,11 +61,9 @@ def _download_nequip_model(model_name: str, device: str) -> Path:
         f"nequip.net:{model_name}:0.1",
         target.name,
         "--mode",
-        "aotinductor",
+        "torchscript",
         "--device",
         device,
-        "--target",
-        "ase",
     ]
     if shutil.which("nequip-compile") is None:
         cmd = [
@@ -75,11 +73,9 @@ def _download_nequip_model(model_name: str, device: str) -> Path:
             f"nequip.net:{model_name}:0.1",
             target.name,
             "--mode",
-            "aotinductor",
+            "torchscript",
             "--device",
             device,
-            "--target",
-            "ase",
         ]
     subprocess.run(cmd, cwd=str(target.parent), check=True)
     return target
