@@ -383,7 +383,7 @@ def qdyn_fused_scf_prenamd_task(
             remove_large_outputs((software, software_dft), subdirs[canac_start: canac_end])
             if software_dft in ('abacus', 'openmx'):
                 remove_large_outputs(
-                    (software_dft),
+                    (software_dft,),
                     [os.path.join(f, 'overlap')
                      for f in subdirs[canac_start: canac_end]]
                 )
