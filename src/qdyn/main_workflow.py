@@ -420,10 +420,7 @@ class MainWorkflow:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = nve_output.get(
-                    'traj_format',
-                    TRAJ_FORMAT_MAPPING.get(nve_output.get('software', ''), stru_format),
-                )
+                traj_format = nve_output['traj_format']
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
@@ -529,10 +526,7 @@ class MainWorkflow:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = nve_output.get(
-                    'traj_format',
-                    TRAJ_FORMAT_MAPPING.get(nve_output.get('software', ''), stru_format),
-                )
+                traj_format = nve_output['traj_format']
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
