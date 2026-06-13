@@ -157,7 +157,10 @@ class MainWorkflow:
         """Get execution config for the active pool and software."""
         return self.active_pool.worker_cfg[key][software]
 
-    def _get_first_step(self, steps: Sequence[str]) -> str:
+    @staticmethod
+    def _get_first_step(steps: Sequence[str], method: str):
+        if method != 'namd':
+            raise NotImplementedError(f"Method '{method}' is not supported yet.")
         key_map = {
             'nvt': 0,
             'nve': 1,
@@ -396,7 +399,6 @@ class MainWorkflow:
         self,
         *,
         input: SCFInputT,
-        nve_software: str | None = None,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru_format: str,
@@ -412,11 +414,7 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            if nve_software is None:
-                raise ValidationError(
-                    "NVE software is required when SCF uses NVE output."
-                )
-            traj_format = TRAJ_FORMAT_MAPPING[nve_software]
+            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
@@ -507,7 +505,6 @@ class MainWorkflow:
         *,
         scf_input: SCFInputT,
         prenamd_input: PreNAMDInputT,
-        nve_software: str | None = None,
         jobs: Dict[str, List[Job | Flow]],
         is_first_step: bool,
         stru_format: str,
@@ -523,11 +520,7 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            if nve_software is None:
-                raise ValidationError(
-                    "NVE software is required when FUSED_SCF_PRENAMD uses NVE output."
-                )
-            traj_format = TRAJ_FORMAT_MAPPING[nve_software]
+            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
@@ -803,7 +796,7 @@ class MainWorkflow:
             active_pool=active_pool,
         )
 
-        first_step = self._get_first_step(input.steps)
+        first_step = self._get_first_step(input.steps, method)
 
         if self._should_run_step('nvt', input.steps, flag) and input.nvt_input is not None:
             next_step = 'nve'
@@ -843,11 +836,6 @@ class MainWorkflow:
             next_step = 'pre_namd'
             jobs_scf = self.step_scf(
                 input=input.scf_input,
-                nve_software=(
-                    input.nve_input.software
-                    if 'nve' in input.steps and input.nve_input is not None
-                    else None
-                ),
                 jobs=jobs,
                 is_first_step=first_step == 'scf',
                 stru_format=stru_format,
@@ -872,11 +860,6 @@ class MainWorkflow:
             jobs['fused_scf_prenamd'] = self.step_fused_scf_prenamd(
                 scf_input=input.scf_input,
                 prenamd_input=input.prenamd_input,
-                nve_software=(
-                    input.nve_input.software
-                    if 'nve' in input.steps and input.nve_input is not None
-                    else None
-                ),
                 jobs=jobs,
                 is_first_step=first_step == 'fused_scf_prenamd',
                 stru_format=stru_format,

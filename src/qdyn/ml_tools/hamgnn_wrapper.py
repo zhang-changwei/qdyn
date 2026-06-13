@@ -512,6 +512,7 @@ class MLSCFSolver:
 
         batch_per_proc = max(1, mlh_input.batch_size // nproc)
         self.batch_size = batch_per_proc * nproc
+        mlh_input.batch_size = self.batch_size
         self.nproc = nproc
         self.threads_per_proc = threads_per_proc
 
