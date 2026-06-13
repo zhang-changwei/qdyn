@@ -126,9 +126,9 @@ def qdyn_fused_scf_prenamd_task(
     nprocs_py = max(1, ncpus // omp_py)
     scf_step = scf_input.scf_step
 
-    strus = read_strus(traj.format, traj_path=traj.path)
+    strus = read_strus(traj['format'], traj_path=traj['path'])
     strus = strus[-scf_step:]
-    strus = strus[traj.start:traj.stop]
+    strus = strus[traj['start']:traj['stop']]
     n_frames = len(strus)
     nstep = n_frames - 1
 
@@ -235,7 +235,7 @@ def qdyn_fused_scf_prenamd_task(
 
     # create subdirs list for canac
     subdirs: list[str] = []
-    for global_idx in range(traj.start, traj.stop):
+    for global_idx in range(traj['start'], traj['stop']):
         subdir_name = f"scf_{global_idx + 1:0{numdigit}d}" # 1-based index
         subdir_path = task_dir / subdir_name
         subdirs.append(str(subdir_path))

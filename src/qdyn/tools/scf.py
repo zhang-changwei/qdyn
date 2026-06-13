@@ -13,7 +13,7 @@ import re
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from typing import NamedTuple
+from typing import TypedDict
 
 from ase import Atoms
 from jobflow.core.job import job, Job
@@ -124,7 +124,7 @@ class DFTSCFSolver:
         self.task_count = 0
 
 
-class TrajInfo(NamedTuple):
+class TrajInfo(TypedDict):
     path: str
     format: str
     start: int
@@ -275,11 +275,11 @@ def qdyn_scf_cpu(
     software = software.lower()
     calc = parameters.calculator
     scf_step = parameters.scf_step
-    frame_start = traj.start
+    frame_start = traj['start']
 
-    strus = read_strus(traj.format, traj.path)
+    strus = read_strus(traj['format'], traj['path'])
     strus = strus[-scf_step:]
-    strus = strus[traj.start:traj.stop]
+    strus = strus[traj['start']:traj['stop']]
     n_frames = len(strus)
     nstep = n_frames - 1 # nstep >= 0
     scf_end = nstep if not has_tail else n_frames
