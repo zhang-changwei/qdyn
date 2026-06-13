@@ -8,12 +8,12 @@ trajectory. It supports:
 - Status file tracking (RUNNING, ENDED, FAIL) for resume capability
 """
 
-from dataclasses import dataclass
 import os
 import re
 import shutil
 from copy import deepcopy
 from pathlib import Path
+from typing import NamedTuple
 
 from ase import Atoms
 from jobflow.core.job import job, Job
@@ -124,8 +124,7 @@ class DFTSCFSolver:
         self.task_count = 0
 
 
-@dataclass
-class TrajInfo:
+class TrajInfo(NamedTuple):
     path: str
     format: str
     start: int

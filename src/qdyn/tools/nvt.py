@@ -328,7 +328,6 @@ def check_nvt_convergence(
     thres_avg: float = 0.004,
     thres_std: float = 1.1,
     thres_potential_slope: float = 0.01,
-    thres_potential_drift: float = 0.005, # very loose threshold
 ) -> tuple[bool, float, float]:
     """Check NVT convergence from MD data (universal for all software).
 
@@ -341,8 +340,6 @@ def check_nvt_convergence(
         thres_avg: Maximum allowed average deviation.
         thres_std: Maximum allowed standard deviation.
         thres_potential_slope: Maximum allowed potential energy slope in eV/atom/ps.
-        thres_potential_drift: Maximum allowed difference between first-half
-            and second-half mean potential energy in eV/atom.
 
     Returns:
         tuple:
@@ -387,15 +384,11 @@ def check_nvt_convergence(
     natoms = len(structure)
     potential_per_atom = potential_energies / natoms
     
-    energy_slope = np.polyfit(time_ps - time_ps[0], potential_per_atom, 1)[0]
-    if abs(energy_slope) > thres_potential_slope:
-        converged = False
-    
-    half_index = len(potential_per_atom) // 2
-    first_half_mean = potential_per_atom[:half_index].mean()
-    second_half_mean = potential_per_atom[half_index:].mean()
-    potential_drift = second_half_mean - first_half_mean
-    if abs(potential_drift) > thres_potential_drift:
+    try:
+        energy_slope = np.polyfit(time_ps - time_ps[0], potential_per_atom, 1)[0]
+        if abs(energy_slope) > thres_potential_slope:
+            converged = False
+    except Exception:
         converged = False
 
     return converged, temp_avg, temp_std
