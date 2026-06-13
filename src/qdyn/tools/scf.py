@@ -1,4 +1,4 @@
-"""
+﻿"""
 SCF (Self-Consistent Field) calculation module for NAMD workflow.
 
 This module handles static SCF calculations on structures extracted from NVE
@@ -89,6 +89,12 @@ class DFTSCFSolver:
 
         self.tasks: list[tuple[int, Path, Atoms]] = []
         self.task_count = 0
+        pass
+
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc, tb):
         pass
 
     def add(self, step: int, job_dir: Path, stru: Atoms):
@@ -342,24 +348,25 @@ def qdyn_scf_cpu(
             nproc=processes_per_node,
             threads_per_proc=threads_per_process,
         )
-    try:
-        dftinputs.write(stru=False)
+    dftinputs.write(stru=False)
 
-        if prepare_input_only:
-            return {
-                'run_dir': str(Path.cwd()),
-                'software': software,
-                'software_dft': software_dft,
-            }
+    if prepare_input_only:
+        scf_logger.close()
+        return {
+            'run_dir': str(Path.cwd()),
+            'software': software,
+            'software_dft': software_dft,
+        }
+    
+    # Task working directory
+    task_dir = Path.cwd()
+    numdigit = len(str(scf_step))
 
-        # Task working directory
-        task_dir = Path.cwd()
-        numdigit = len(str(scf_step))
+    prev_chgcar = None
+    chgcar = CHG_FNAME[software_dft]
+    files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
 
-        prev_chgcar = None
-        chgcar = CHG_FNAME[software_dft]
-        files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
-
+    with scf_solver:
         # Run SCF calculations sequentially with CHGCAR passing
         for idx, stru in enumerate(strus[:scf_end]):
             if idx <= last_step:
@@ -394,59 +401,59 @@ def qdyn_scf_cpu(
 
         # run solver for tail frames
         scf_solver.run()
+    del scf_solver
 
-        # tdoverlap calculation
-        if software_dft == 'openmx':
-            dftinputs.update_inputs({'postprocess.output.level': 1})
-            dftinputs.update_stru_extras()
 
-        if software_dft in {'abacus', 'openmx'}:
-            import multiprocessing
-            from multiprocessing.pool import AsyncResult
-            results: list[AsyncResult] = []
-            with multiprocessing.Pool(processes=processes_per_node) as pool:
-                for idx in range(nstep):
-                    global_idx = frame_start + idx + 1
-                    subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+    # tdoverlap calculation
+    if software_dft == 'openmx':
+        dftinputs.update_inputs({'postprocess.output.level': 1})
+        dftinputs.update_stru_extras()
 
-                    olapdir = subdir / "overlap"
-                    olapdir.mkdir(exist_ok=True)
+    if software_dft in {'abacus', 'openmx'}:
+        import multiprocessing
+        from multiprocessing.pool import AsyncResult
+        results: list[AsyncResult] = []
+        with multiprocessing.Pool(processes=processes_per_node) as pool:
+            for idx in range(nstep):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
 
-                    atoms = strus[idx].copy()
-                    atoms.extend(strus[idx + 1])
-                    for fname in files_to_copy:
-                        shutil.copy2(subdir / fname, olapdir / fname)
-                    write_stru(
-                        olapdir / STRU_FNAME_MAPPING[software_dft],
-                        atoms,
-                        stru_format=STRU_FORMAT_MAPPING[software_dft],
-                        extras=dftinputs.stru_extras
+                olapdir = subdir / "overlap"
+                olapdir.mkdir(exist_ok=True)
+
+                atoms = strus[idx].copy()
+                atoms.extend(strus[idx + 1])
+                for fname in files_to_copy:
+                    shutil.copy2(subdir / fname, olapdir / fname)
+                write_stru(
+                    olapdir / STRU_FNAME_MAPPING[software_dft],
+                    atoms,
+                    stru_format=STRU_FORMAT_MAPPING[software_dft],
+                    extras=dftinputs.stru_extras
+                )
+                results.append(
+                    pool.apply_async(
+                        overlap_run_software,
+                        args=(subdir, olapdir, software_dft, threads_per_process)
                     )
-                    results.append(
-                        pool.apply_async(
-                            overlap_run_software,
-                            args=(subdir, olapdir, software_dft, threads_per_process)
-                        )
-                    )
+                )
 
-                # logging
-                for idx, result in enumerate(results):
-                    global_idx = frame_start + idx + 1
-                    subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
-                    result.get()
+            # logging
+            for idx, result in enumerate(results):
+                global_idx = frame_start + idx + 1
+                subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+                result.get()
 
-                    scf_logger(step=idx, global_idx=subdir.name, category='overlap')
+                scf_logger(step=idx, global_idx=subdir.name, category='overlap')
 
-        return {
-            'run_dir': str(task_dir),
-            'software': software,
-            'software_dft': software_dft,
-        }
-    finally:
-        try:
-            scf_solver.close()
-        finally:
-            scf_logger.close()
+    # cleanup
+    scf_logger.close()
+
+    return {
+        'run_dir': str(task_dir),
+        'software': software,
+        'software_dft': software_dft,
+    }
 
 
 def _prepare_scf_input(

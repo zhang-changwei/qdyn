@@ -1,6 +1,7 @@
-import os
+﻿import os
 import re
 import shutil
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from collections.abc import Generator
@@ -194,79 +195,82 @@ def qdyn_fused_scf_prenamd_task(
             threads_per_proc=omp_py,
         )
         batch_size = calc.batch_size
-    pool_olap = None
-    cleanup_ok = False
-    try:
-        dftinputs.write(stru=False)
+    dftinputs.write(stru=False)
 
-        # for overlap (use a copy to avoid mutating the SCF inputs_dict)
-        if software_dft in ('abacus', 'openmx'):
-            inputs_dict_olap = deepcopy(inputs_dict)
-            if software_dft == 'openmx':
-                inputs_dict_olap['postprocess.output.level'] = 1
-            elif software_dft == 'abacus':
-                inputs_dict_olap['calculation'] = 'get_s'
-            dftinputs_olap = DFTInputs(
-                software=software_dft,
-                structure=strus[0],
-                pp_path=pp_path,
-                orb_path=orb_path,
-                kspacing=calc.kspacing,
-                inputs_dict=inputs_dict_olap,
-            )
-            import multiprocessing
-            pool_olap = multiprocessing.Pool(processes=nprocs_py)
+    # for overlap (use a copy to avoid mutating the SCF inputs_dict)
+    need_olap = False
+    if software_dft in ('abacus', 'openmx'):
+        inputs_dict_olap = deepcopy(inputs_dict)
+        if software_dft == 'openmx':
+            inputs_dict_olap['postprocess.output.level'] = 1
+        elif software_dft == 'abacus':
+            inputs_dict_olap['calculation'] = 'get_s'
+        dftinputs_olap = DFTInputs(
+            software=software_dft,
+            structure=strus[0],
+            pp_path=pp_path,
+            orb_path=orb_path,
+            kspacing=calc.kspacing,
+            inputs_dict=inputs_dict_olap,
+        )
+        import multiprocessing
+        need_olap = True
 
-        if prepare_input_only:
-            cleanup_ok = True
-            return {
-                'run_dir': str(Path.cwd()),
-                'software': software,
-                'software_dft': software_dft,
-            }
-
-        # Task working directory
-        task_dir = Path.cwd()
-        numdigit = len(str(scf_step))
-
-        prev_chgcar = None
-        chgcar = CHG_FNAME[software_dft]
-        files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
-        vbm, cbm = 0, 0
-
-        # create subdirs list for canac
-        subdirs: list[str] = []
-        for global_idx in range(traj.start, traj.stop):
-            subdir_name = f"scf_{global_idx + 1:0{numdigit}d}" # 1-based index
-            subdir_path = task_dir / subdir_name
-            subdirs.append(str(subdir_path))
-
-        LARGE_FNAMES: dict[str, set] = {
-            'vasp': {
-                'WAVECAR', 'CHG', 'CHGCAR', 'OUTCAR',
-                'vasprun.xml', 'vaspout.h5'
-            },
-            'openmx': {
-                'qdyn.scfout', 'qdyn.out'
-            },
-            'hamgnn': {
-                'wfc.npz', 'overlap.npy', 'overlap.npz'
-            }
+    if prepare_input_only:
+        scf_logger.close()
+        return {
+            'run_dir': str(Path.cwd()),
+            'software': software,
+            'software_dft': software_dft,
         }
-        def remove_large_outputs(
-            softwares: Sequence[str],
-            folders: Sequence[str | Path]
-        ) -> None:
-            fnames = set()
-            for s in softwares:
-                fnames = fnames.union(LARGE_FNAMES.get(s, set()))
 
-            for folder in folders:
-                for fname in fnames:
-                    fpath = os.path.join(folder, fname)
-                    if os.path.isfile(fpath):
-                        os.remove(fpath)
+    # Task working directory
+    task_dir = Path.cwd()
+    numdigit = len(str(scf_step))
 
+    prev_chgcar = None
+    chgcar = CHG_FNAME[software_dft]
+    files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
+    vbm, cbm = 0, 0
+
+    # create subdirs list for canac
+    subdirs: list[str] = []
+    for global_idx in range(traj.start, traj.stop):
+        subdir_name = f"scf_{global_idx + 1:0{numdigit}d}" # 1-based index
+        subdir_path = task_dir / subdir_name
+        subdirs.append(str(subdir_path))
+
+    LARGE_FNAMES: dict[str, set] = {
+        'vasp': {
+            'WAVECAR', 'CHG', 'CHGCAR', 'OUTCAR',
+            'vasprun.xml', 'vaspout.h5'
+        },
+        'openmx': {
+            'qdyn.scfout', 'qdyn.out'
+        },
+        'hamgnn': {
+            'wfc.npz', 'overlap.npy', 'overlap.npz'
+        }
+    }
+    def remove_large_outputs(
+        softwares: Sequence[str],
+        folders: Sequence[str | Path]
+    ) -> None:
+        fnames = set()
+        for s in softwares:
+            fnames = fnames.union(LARGE_FNAMES.get(s, set()))
+
+        for folder in folders:
+            for fname in fnames:
+                fpath = os.path.join(folder, fname)
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+
+    pool_olap = (
+        multiprocessing.Pool(processes=nprocs_py) # type: ignore
+        if need_olap else nullcontext()
+    )
+    with pool_olap, scf_solver:
         # Run SCF calculations sequentially with CHGCAR passing.
         # The outer loop iterates over CA-NAC pair groups: each group processes
         # pairs [canac_start, canac_end). Before running CA-NAC, SCF must complete
@@ -340,8 +344,7 @@ def qdyn_fused_scf_prenamd_task(
                 continue
 
             # overlap block (normal frames)
-            if software_dft in ('abacus', 'openmx'):
-                assert pool_olap is not None
+            if need_olap:
                 results = []
 
                 for canac_idx in range(canac_start, canac_end):
@@ -362,7 +365,7 @@ def qdyn_fused_scf_prenamd_task(
                     )
 
                     results.append(
-                        pool_olap.apply_async(
+                        pool_olap.apply_async( # type: ignore
                             overlap_run_software,
                             args=(subdir, olapdir, software_dft, omp_py)
                         )
@@ -379,7 +382,7 @@ def qdyn_fused_scf_prenamd_task(
             next(canac, None) # type: ignore
 
             # Remove frames that cannot be needed by later CA-NAC pairs.
-            # Keep frame canac_end — it is the left endpoint of the next group.
+            # Keep frame canac_end because it is the left endpoint of the next group.
             remove_large_outputs((software, software_dft), subdirs[canac_start: canac_end])
             if software_dft in ('abacus', 'openmx'):
                 remove_large_outputs(
@@ -388,36 +391,26 @@ def qdyn_fused_scf_prenamd_task(
                      for f in subdirs[canac_start: canac_end]]
                 )
 
-        # tdolap output
-        out = next(canac, None) # type: ignore
-        if out is None:
-            raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
-        # Ensure generator is exhausted before deleting the final boundary frame.
-        next(canac, None) # type: ignore
-        # last frame should not be cleaned
 
-        cleanup_ok = True
-        return {
-            "run_dir": str(Path.cwd()),
-            "software": software,
-            "software_dft": software_dft,
-            "VBM": vbm,
-            "CBM": cbm,
-            "tdolap_path": out['tdolap_path'],
-        }
-    finally:
-        try:
-            if pool_olap is not None:
-                if cleanup_ok:
-                    pool_olap.close()
-                else:
-                    pool_olap.terminate()
-                pool_olap.join()
-        finally:
-            try:
-                scf_solver.close()
-            finally:
-                scf_logger.close()
+    # tdolap output
+    out = next(canac, None) # type: ignore
+    if out is None:
+        raise RuntimeError("CA-NAC extraction did not produce a tdolap output.")
+    # Ensure generator is exhausted before deleting the final boundary frame.
+    next(canac, None) # type: ignore
+    # last frame should not be cleaned
+
+    # close the logger
+    scf_logger.close()
+    return {
+        "run_dir": str(Path.cwd()),
+        "software": software,
+        "software_dft": software_dft,
+        "VBM": vbm,
+        "CBM": cbm,
+        "tdolap_path": out['tdolap_path'],
+    }
+
 
 @job
 def qdyn_cat_canac_outputs(
