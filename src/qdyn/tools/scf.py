@@ -21,7 +21,7 @@ import numpy as np
 
 from ..calc_common import (
     write_stru, read_strus, 
-    change_dir, has_valid_cell, xc_mapping, select_orbitals
+    change_dir, xc_mapping, select_orbitals
 )
 from ..input import SCFInputT, DFTBaseInputT
 from ..params import (
@@ -282,10 +282,6 @@ def qdyn_scf_cpu(
     strus = strus[traj['start']:traj['stop']]
     if not strus:
         raise ValueError("SCF trajectory selection contains no frames.")
-    if not has_valid_cell(strus[0]):
-        raise ValueError(
-            "SCF trajectories require a valid periodic cell in the first frame."
-        )
     n_frames = len(strus)
     nstep = n_frames - 1 # nstep >= 0
     scf_end = nstep if not has_tail else n_frames

@@ -29,7 +29,7 @@ def has_valid_cell(atoms: Atoms, eps: float = 1e-8) -> bool:
     """Return True when atoms has a finite, full-rank cell with nonzero volume."""
     try:
         cell = atoms.cell.array
-        return (
+        return bool(
             atoms.cell.rank == 3
             and np.isfinite(cell).all()
             and np.isfinite(atoms.cell.volume)
@@ -398,18 +398,18 @@ def _parse_trajectory(traj_path: str, formats: list[str]):
     parsed = False
     summary = {}
     for fmt in formats:
-            try:
-                atoms = read_strus(fmt, traj_path, first_only=True)[0]
-                summary = {
-                    "formula": atoms.get_chemical_formula(),
-                    "num_atoms": len(atoms),
-                    "num_frames": count_trajectory_frames(traj_path, fmt),
-                    "format": fmt,
-                }
-                parsed = True
-                break
-            except Exception:
-                continue
+        try:
+            atoms = read_strus(fmt, traj_path, first_only=True)[0]
+            summary = {
+                "formula": atoms.get_chemical_formula(),
+                "num_atoms": len(atoms),
+                "num_frames": count_trajectory_frames(traj_path, fmt),
+                "format": fmt,
+            }
+            parsed = True
+            break
+        except Exception:
+            continue
     return parsed, summary
 
 

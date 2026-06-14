@@ -12,7 +12,7 @@ from jobflow.core.job import job, Job
 
 from ..calc_common import (
     write_stru, read_strus, 
-    has_valid_cell, parse_band_index, select_orbitals
+    parse_band_index, select_orbitals
 )
 from ..input import SCFInputT, PreNAMDInputT, DFTBaseInputT
 from ..input_prepare import DFTInputs
@@ -131,10 +131,6 @@ def qdyn_fused_scf_prenamd_task(
     strus = strus[traj['start']:traj['stop']]
     if not strus:
         raise ValueError("Fused SCF trajectory selection contains no frames.")
-    if not has_valid_cell(strus[0]):
-        raise ValueError(
-            "Fused SCF trajectories require a valid periodic cell in the first frame."
-        )
     n_frames = len(strus)
     nstep = n_frames - 1
 

@@ -15,7 +15,7 @@ from .ml_tools.mlff_wrapper import (
     hamgnn_pretrained_model_filename,
 )
 from .calc_common import has_valid_cell, read_stru
-from .params import SUPPORTED_STRUCTURE_FORMATS, SUPPORTED_TRAJECTORY_FORMATS
+from .params import SUPPORTED_STRU_FORMATS, SUPPORTED_TRAJ_FORMATS
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -524,11 +524,11 @@ def validate_workflow_input(
 
     # stru / stru_hash check
     elif stru:
-        if stru_format not in SUPPORTED_STRUCTURE_FORMATS:
+        if stru_format not in SUPPORTED_STRU_FORMATS:
             raise ValidationError(
                 f"Structure format '{stru_format}' is not supported for "
                 "single-frame structure input. Supported formats: "
-                f"{_format_list(SUPPORTED_STRUCTURE_FORMATS)}."
+                f"{_format_list(SUPPORTED_STRU_FORMATS)}."
             )
         try:
             with io.StringIO(stru) as s:
@@ -546,11 +546,11 @@ def validate_workflow_input(
             )
 
     elif stru_hash:
-        if stru_format not in SUPPORTED_TRAJECTORY_FORMATS:
+        if stru_format not in SUPPORTED_TRAJ_FORMATS:
             raise ValidationError(
                 f"Trajectory format '{stru_format}' is not supported for "
                 "trajectory hash input. Supported formats: "
-                f"{_format_list(SUPPORTED_TRAJECTORY_FORMATS)}."
+                f"{_format_list(SUPPORTED_TRAJ_FORMATS)}."
             )
         if not active_pool.user_file_exists("trajectory", stru_hash):
             raise ValidationError(

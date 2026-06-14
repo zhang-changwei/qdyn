@@ -643,10 +643,10 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
 
         if req.stru_content:
             # Path A: Parse structure from raw file content
-            from ..params import SUPPORTED_STRUCTURE_FORMATS
+            from ..params import SUPPORTED_STRU_FORMATS
 
-            if req.stru_format not in SUPPORTED_STRUCTURE_FORMATS:
-                supported = ", ".join(sorted(SUPPORTED_STRUCTURE_FORMATS))
+            if req.stru_format not in SUPPORTED_STRU_FORMATS:
+                supported = ", ".join(sorted(SUPPORTED_STRU_FORMATS))
                 raise HTTPException(
                     status_code=422,
                     detail=(

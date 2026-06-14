@@ -20,7 +20,7 @@ from .input import (
 )
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
-from .calc_common import TRAJ_FORMAT_MAPPING, read_stru, stru_todict
+from .calc_common import read_stru, stru_todict
 from .pool import WorkerPool
 
 from .tools.nvt import qdyn_nvt

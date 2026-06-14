@@ -189,13 +189,13 @@ TRAJ_FORMAT_MAPPING = {
     'openmx': 'openmx-md',
 }
 
-SUPPORTED_STRUCTURE_FORMATS = {
+SUPPORTED_STRU_FORMATS = {
     'vasp',
     'cif',
     'extxyz',
     'openmx-dat',
 }
-SUPPORTED_TRAJECTORY_FORMATS = {
+SUPPORTED_TRAJ_FORMATS = {
     'vasp-xdatcar',
     'extxyz',
     'openmx-md',
