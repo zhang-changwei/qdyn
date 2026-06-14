@@ -521,7 +521,7 @@ def validate_workflow_input(
     elif stru:
         try:
             with io.StringIO(stru) as s:
-                read_stru(stru_format, s)
+                read_stru(stru_format, s, input.pseudo_h)
         except Exception as exc:
             raise ValidationError(
                 f"Provided structure string could not be parsed "
@@ -539,6 +539,7 @@ def validate_workflow_input(
             pool=active_pool,
             file_hash=stru_hash,
             formats=[stru_format],
+            pseudo_h=input.pseudo_h,
         )
         if not parsed:
             raise ValidationError(

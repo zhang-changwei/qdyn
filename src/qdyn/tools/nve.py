@@ -27,6 +27,7 @@ def qdyn_nve(
     pp_path: str,
     orb_path: str,
     structure: dict,
+    pseudo_h: bool = False,
     model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
@@ -77,11 +78,6 @@ def qdyn_nve(
     cstru = Atoms.fromdict(structure)
     if parameters.sel.constraint_layers is not None and not cstru.constraints:
         cstru = add_constraints(cstru, parameters.sel)
-        
-    is_pseudo_h = (
-        parameters.pseudo_h is not None
-        and parameters.pseudo_h.is_pseudo_h
-    )
 
     if isinstance(parameters.calculator, DFTBaseInputT):
         # Prepare input files
@@ -91,7 +87,7 @@ def qdyn_nve(
             parameters=parameters,
             pp_path=pp_path,
             orb_path=orb_path,
-            pseudo_h=is_pseudo_h,
+            pseudo_h=pseudo_h,
         )
 
         if prepare_input_only:

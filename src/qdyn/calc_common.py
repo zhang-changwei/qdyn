@@ -505,12 +505,12 @@ def parse_band_index(
 # structure / trajectory metadata
 # ------------------------------------------------------------------
 
-def _parse_trajectory(traj_path: str, formats: list[str]):
+def _parse_trajectory(traj_path: str, formats: list[str], pseudo_h: bool = False):
     parsed = False
     summary = {}
     for fmt in formats:
             try:
-                atoms = read_strus(fmt, traj_path, first_only=True)[0]
+                atoms = read_strus(fmt, traj_path, first_only=True, pseudo_h=pseudo_h)[0]
                 summary = {
                     "formula": atoms.get_chemical_formula(),
                     "num_atoms": len(atoms),
@@ -557,6 +557,7 @@ def read_trajectory_summary(
     pool: WorkerPool,
     file_hash: str,
     formats: list[str],
+    pseudo_h: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     """Read a best-effort trajectory summary from a remote pool file.
 
@@ -584,7 +585,7 @@ def read_trajectory_summary(
             f"{inspect.getsource(read_strus)}\n"
             f"{inspect.getsource(count_trajectory_frames)}\n"
             f"{inspect.getsource(_parse_trajectory)}\n"
-            f"parsed, summary = _parse_trajectory({traj_path!r}, {formats!r})\n"
+            f"parsed, summary = _parse_trajectory({traj_path!r}, {formats!r}, {pseudo_h!r})\n"
             "print(json.dumps(summary))\n"
         )
         stdout, stderr, rc = host.execute(
@@ -606,7 +607,7 @@ def read_trajectory_summary(
                 parsed = False
 
     else:
-        parsed, summary = _parse_trajectory(traj_path, formats)
+        parsed, summary = _parse_trajectory(traj_path, formats, pseudo_h)
 
     return parsed, summary
     
@@ -630,7 +631,7 @@ def extract_structure_metadata(
     elif input.stru:
         try:
             with io.StringIO(input.stru) as s:
-                atoms = read_stru(input.stru_format, s)
+                atoms = read_stru(input.stru_format, s, input.pseudo_h)
             formula = atoms.get_chemical_formula()
             num_atoms = len(atoms)
         except Exception:
@@ -642,6 +643,7 @@ def extract_structure_metadata(
             pool=pool,
             file_hash=input.stru_hash,
             formats=[input.stru_format],
+            pseudo_h=input.pseudo_h,
         )
 
         if parsed:

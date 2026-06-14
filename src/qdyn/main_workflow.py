@@ -226,6 +226,7 @@ class MainWorkflow:
         is_first_step: bool,
         stru: str,
         stru_format: str,
+        pseudo_h: bool = False,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
@@ -244,7 +245,7 @@ class MainWorkflow:
                 ) from exc
         elif stru:
             with io.StringIO(stru) as s:
-                structure = stru_todict(read_stru(stru_format, s))
+                structure = stru_todict(read_stru(stru_format, s, pseudo_h))
         else:
             raise ValidationError(
                 "No structure provided for the nvt step. \n"
@@ -282,6 +283,7 @@ class MainWorkflow:
             pp_path=pp_path,
             orb_path=orb_path,
             structure=structure,
+            pseudo_h=pseudo_h,
             model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
@@ -314,6 +316,7 @@ class MainWorkflow:
         is_first_step: bool,
         stru: str,
         stru_format: str,
+        pseudo_h: bool = False,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
@@ -334,7 +337,7 @@ class MainWorkflow:
                 ) from exc
         elif stru:
             with io.StringIO(stru) as s:
-                structure = stru_todict(read_stru(stru_format, s))
+                structure = stru_todict(read_stru(stru_format, s, pseudo_h))
         else:
             raise ValidationError(
                 "No structure provided for NVE step. \n"
@@ -372,6 +375,7 @@ class MainWorkflow:
             pp_path=pp_path,
             orb_path=orb_path,
             structure=structure,
+            pseudo_h=pseudo_h,
             model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
@@ -404,6 +408,7 @@ class MainWorkflow:
         is_first_step: bool,
         stru_format: str,
         stru_hash: str,
+        pseudo_h: bool = False,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
@@ -474,6 +479,7 @@ class MainWorkflow:
             orb_path=orb_path,
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
+            pseudo_h=pseudo_h,
             model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
@@ -510,6 +516,7 @@ class MainWorkflow:
         is_first_step: bool,
         stru_format: str,
         stru_hash: str,
+        pseudo_h: bool = False,
         resume: bool,
         prev_task_id: str,
         prepare_input_only: bool,
@@ -587,6 +594,7 @@ class MainWorkflow:
             traj_path=traj_path, # type: ignore
             traj_format=traj_format,
             model_path=model_path,
+            pseudo_h=pseudo_h,
             nodes=nodes,
             ncpus=ncpus,
             nprocs_dft=nprocs_dft,
@@ -807,6 +815,7 @@ class MainWorkflow:
                 is_first_step=first_step == 'nvt',
                 stru=stru,
                 stru_format=stru_format,
+                pseudo_h=input.pseudo_h,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
@@ -826,6 +835,7 @@ class MainWorkflow:
                 is_first_step=first_step == 'nve',
                 stru=stru,
                 stru_format=stru_format,
+                pseudo_h=input.pseudo_h,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
@@ -841,6 +851,7 @@ class MainWorkflow:
                 is_first_step=first_step == 'scf',
                 stru_format=stru_format,
                 stru_hash=stru_hash,
+                pseudo_h=input.pseudo_h,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),
@@ -865,6 +876,7 @@ class MainWorkflow:
                 is_first_step=first_step == 'fused_scf_prenamd',
                 stru_format=stru_format,
                 stru_hash=stru_hash,
+                pseudo_h=input.pseudo_h,
                 resume=resume,
                 prev_task_id=prev_task_id,
                 prepare_input_only=bool(flag),

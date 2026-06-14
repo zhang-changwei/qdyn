@@ -569,10 +569,10 @@ class NVTInputT(BaseModel):
         json_schema_extra={"group": "advanced"},
     )
 
-    pseudo_h: PseudoHInputT | None = Field(
-        default=None,
-        json_schema_extra={"group": "advanced"},
-    )
+    # pseudo_h: PseudoHInputT | None = Field(
+    #     default=None,
+    #     json_schema_extra={"group": "advanced"},
+    # )
 
     software: Literal['vasp', 'nequip', 'mace'] = 'vasp'
 
@@ -616,10 +616,10 @@ class NVEInputT(BaseModel):
         json_schema_extra={"group": "advanced"},
     )
 
-    pseudo_h: PseudoHInputT | None = Field(
-        default=None,
-        json_schema_extra={"group": "advanced"},
-    )
+    # pseudo_h: PseudoHInputT | None = Field(
+    #     default=None,
+    #     json_schema_extra={"group": "advanced"},
+    # )
 
     software: Literal['vasp', 'nequip', 'mace'] = 'vasp'
 
@@ -684,10 +684,10 @@ class SCFInputT(BaseModel):
         },
     )
     
-    pseudo_h: PseudoHInputT | None = Field(
-        default=None,
-        json_schema_extra={"group": "advanced"},
-    )
+    # pseudo_h: PseudoHInputT | None = Field(
+    #     default=None,
+    #     json_schema_extra={"group": "advanced"},
+    # )
 
 class InputT(BaseModel):
     """Input parameters for QDYN workflow."""
@@ -704,6 +704,7 @@ class InputT(BaseModel):
     stru: str = ''
     stru_format: str = 'vasp'
     stru_hash: MD5HashStr = ''
+    pseudo_h: bool = False
     plot: bool = False
 
     task_name: str | None = Field(

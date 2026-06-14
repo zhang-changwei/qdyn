@@ -31,6 +31,7 @@ def qdyn_nvt(
     pp_path: str,
     orb_path: str,
     structure: dict,
+    pseudo_h: bool = False,
     model_path: str = '',
     nodes: int = 1,
     processes_per_node: int = 1,
@@ -83,11 +84,6 @@ def qdyn_nvt(
     structure.pop('momenta', None)
     cur_stru = Atoms.fromdict(structure)
 
-    is_pseudo_h = (
-        parameters.pseudo_h is not None
-        and parameters.pseudo_h.is_pseudo_h
-    )
-
     if (
         parameters.sel.constraint_layers is not None
         and not cur_stru.constraints
@@ -117,7 +113,7 @@ def qdyn_nvt(
                 parameters=parameters,
                 pp_path=pp_path,
                 orb_path=orb_path,
-                pseudo_h=is_pseudo_h,
+                pseudo_h=pseudo_h,
                 thermostats=algo,
                 md_step=md_step,
                 temp_beg=temp_beg,
@@ -143,7 +139,7 @@ def qdyn_nvt(
             # update structure
             cur_stru = read_stru(STRU2_FORMAT_MAPPING[software_lower],
                                  STRU2_FNAME_MAPPING[software_lower],
-                                 is_pseudo_h)
+                                 pseudo_h)
         else:
             write_stru(STRU_FNAME_MAPPING[software_lower],
                        cur_stru,
