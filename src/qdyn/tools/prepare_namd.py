@@ -174,6 +174,10 @@ def plot_ksen_weight(
     Returns:
         Path to the saved plot.
     """
+    
+    if software in ['abacus', 'openmx', 'hamgnn']:
+        return ''
+    
     import matplotlib
     matplotlib.use('agg')
     import matplotlib.pyplot as plt
@@ -181,8 +185,8 @@ def plot_ksen_weight(
 
     # Extract parameters
     dt = parameters.md_dt
-    which_spin = parameters.adv.ispin - 1  # Convert to 0-based index
-    which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
+    which_spin = parameters.adv.ispin # 1-based
+    which_kpoint = parameters.adv.ikpt # 1-based
     which_atoms = parameters.adv.which_atoms
     if which_atoms is not None:
         which_atoms = np.asarray(which_atoms, dtype=int)
