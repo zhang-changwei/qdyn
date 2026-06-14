@@ -1314,10 +1314,10 @@ provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
 
 /* --- Group section (border container for Calculator, Thermostats, etc.) --- */
 .field-group-section {
-  margin: var(--space-2) 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--el-border-radius-base);
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
 }
 
 .field-group-label {

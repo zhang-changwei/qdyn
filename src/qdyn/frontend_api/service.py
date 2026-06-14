@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-from ..calc_common import read_stru
+from ..calc_common import read_strus
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
 from .run_dir_access import (
@@ -1526,153 +1526,6 @@ def _parse_nsw_from_text(text: str) -> int | None:
     return None
 
 
-def read_file_tail(path: Path, max_bytes: int = 65536) -> str:
-    """
-    Read the tail of a file efficiently using binary seek.
-
-    Seeks to the end of the file and reads the last *max_bytes* bytes,
-    then decodes with error replacement.  The first (potentially
-    incomplete) line is discarded so that only complete lines are
-    returned.
-
-    Args:
-        path: Path to the file.
-        max_bytes: Maximum number of bytes to read from the tail.
-
-    Returns:
-        A string of complete lines from the file tail.  May be empty
-        if the file is empty or unreadable.
-    """
-    try:
-        size = path.stat().st_size
-        if size == 0:
-            return ""
-        with open(path, "rb") as f:
-            read_start = max(0, size - max_bytes)
-            f.seek(read_start)
-            raw = f.read()
-        text = raw.decode("utf-8", errors="replace")
-        # If we didn't start at byte 0 the first line may be incomplete
-        if read_start > 0:
-            newline_pos = text.find("\n")
-            if newline_pos != -1:
-                text = text[newline_pos + 1 :]
-        return text
-    except OSError:
-        return ""
-
-
-def _parse_nelm_from_incar(incar_path: Path) -> int | None:
-    """Parse the NELM value (electronic step limit) from an INCAR file.
-
-    Uses exact key matching to avoid false hits on NELMIN or similar keys.
-    """
-    import re
-    nelm_pattern = re.compile(r'^\s*NELM\s*=\s*(\d+)', re.IGNORECASE)
-    try:
-        with open(incar_path, "r") as f:
-            for line in f:
-                m = nelm_pattern.match(line)
-                if m:
-                    return int(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
-def _parse_nelm_from_text(text: str) -> int | None:
-    """Parse the NELM value from INCAR text content."""
-    import re
-    nelm_pattern = re.compile(r'^\s*NELM\s*=\s*(\d+)', re.IGNORECASE)
-    for line in text.splitlines():
-        m = nelm_pattern.match(line)
-        if m:
-            return int(m.group(1))
-    return None
-
-
-def _parse_oszicar_tail(oszicar_path: Path) -> dict:
-    """
-    Parse the last complete electronic step from an OSZICAR file tail.
-
-    Uses ``read_file_tail`` to avoid reading the entire file.  Looks for
-    lines matching the VASP electronic-step format::
-
-        <ALGORITHM> : <N>  <E>  <dE>  <deps>  <rms>  <rms(c)>
-
-    where ``<ALGORITHM>`` is typically ``CG`` or ``RMM``.
-
-    Returns:
-        A dict with keys ``electronic_step_current``, ``scf_algorithm``,
-        ``last_energy``.  Values are ``None`` if parsing fails.
-    """
-    result = {
-        "electronic_step_current": None,
-        "scf_algorithm": None,
-        "last_energy": None,
-    }
-
-    tail = read_file_tail(oszicar_path)
-    if not tail:
-        return result
-
-    # Walk lines in reverse to find the last complete electronic step line.
-    # Electronic step lines look like: "       CG       1    -0.12345 ..."
-    # We match the "<algo> : <N>" pattern.
-    import re
-
-    estep_re = re.compile(
-        r"^\s*(CG|RMM|DAV|PMM|Mixed)\s*:\s*(\d+)\s+"
-        r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
-    )
-
-    for line in reversed(tail.splitlines()):
-        m = estep_re.match(line)
-        if m:
-            result["scf_algorithm"] = m.group(1)
-            try:
-                result["electronic_step_current"] = int(m.group(2))
-                result["last_energy"] = float(m.group(3))
-            except ValueError:
-                pass
-            break
-
-    return result
-
-
-def _parse_oszicar_tail_text(tail: str) -> dict:
-    """Parse the last complete electronic step from OSZICAR text.
-
-    Same logic as ``_parse_oszicar_tail`` but accepts pre-read text
-    instead of a Path, enabling remote usage.
-    """
-    import re
-
-    result = {
-        "electronic_step_current": None,
-        "scf_algorithm": None,
-        "last_energy": None,
-    }
-    if not tail:
-        return result
-
-    estep_re = re.compile(
-        r"^\s*(CG|RMM|DAV|PMM|Mixed)\s*:\s*(\d+)\s+"
-        r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
-    )
-
-    for line in reversed(tail.splitlines()):
-        m = estep_re.match(line)
-        if m:
-            result["scf_algorithm"] = m.group(1)
-            try:
-                result["electronic_step_current"] = int(m.group(2))
-                result["last_energy"] = float(m.group(3))
-            except ValueError:
-                pass
-            break
-
-    return result
 
 
 def get_job_progress(
@@ -1799,6 +1652,10 @@ def _parse_qdyn_scf_log_text(
     return total_steps, records
 
 
+_SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
+_SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
+
+
 def _parse_scf_global_index(frame_name: str) -> int:
     """Extract the numeric index from an scf_* frame name."""
     try:
@@ -1807,34 +1664,28 @@ def _parse_scf_global_index(frame_name: str) -> int:
         return 0
 
 
-def _infer_next_scf_frame_name(frame_name: str) -> str | None:
-    """Infer the next scf_* frame name while preserving zero padding."""
-    import re
-
-    match = re.match(r"^(.*?)(\d+)$", frame_name)
-    if match is None:
-        return None
-
-    prefix, index_text = match.groups()
-    return f"{prefix}{int(index_text) + 1:0{len(index_text)}d}"
-
-
 def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
-    """Build SCF progress from qdyn_scf.log without software-specific files."""
+    """Build SCF progress from qdyn_scf.log categories.
+
+    Frames with a completed category (normal/posthamgnn/overlap) are ENDED.
+    Frames with only intermediate categories (prehamgnn/hamgnn) are RUNNING.
+    ENDED takes priority over RUNNING for the same frame.
+    Frames with no log record are PENDING.
+    """
     total_steps, records = _parse_qdyn_scf_log_text(log_text)
 
-    seen_frames: set[str] = set()
-    completed_records: list[tuple[int, str, str]] = []
-    for record in records:
-        _, global_idx, _ = record
-        # A frame may emit multiple category rows; progress counts frames.
-        if global_idx in seen_frames:
-            continue
-        seen_frames.add(global_idx)
-        completed_records.append(record)
+    # Reduce records to per-frame final status: ENDED > RUNNING.
+    frame_status: dict[str, str] = {}
+    for _, global_idx, category in records:
+        if category in _SCF_COMPLETED_LOG_CATEGORIES:
+            frame_status[global_idx] = "ENDED"
+        elif category in _SCF_RUNNING_LOG_CATEGORIES:
+            if frame_status.get(global_idx) != "ENDED":
+                frame_status[global_idx] = "RUNNING"
 
-    completed = min(len(completed_records), total_steps)
-    running = 1 if total_steps > 0 and completed < total_steps else 0
+    completed = sum(1 for s in frame_status.values() if s == "ENDED")
+    running_frames = [idx for idx, s in frame_status.items() if s == "RUNNING"]
+    running = len(running_frames)
     pending = max(0, total_steps - completed - running)
     percent = (
         round(completed / total_steps * 100, 2)
@@ -1851,19 +1702,18 @@ def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
     )
 
     current_frame: SCFCurrentFrame | None = None
-    if running and completed_records:
-        _, last_global_idx, _ = completed_records[-1]
-        next_frame_name = _infer_next_scf_frame_name(last_global_idx)
-        if next_frame_name is not None:
-            current_frame = SCFCurrentFrame(
-                name=next_frame_name,
-                global_index=_parse_scf_global_index(next_frame_name),
-                status="RUNNING",
-                electronic_step_current=None,
-                electronic_step_limit=None,
-                scf_algorithm=None,
-                converged=None,
-            )
+    if running_frames:
+        # Use the last RUNNING frame (preserving log order).
+        last_running = running_frames[-1]
+        current_frame = SCFCurrentFrame(
+            name=last_running,
+            global_index=_parse_scf_global_index(last_running),
+            status="RUNNING",
+            electronic_step_current=None,
+            electronic_step_limit=None,
+            scf_algorithm=None,
+            converged=None,
+        )
 
     return JobProgressResponse(
         available=True,
@@ -1877,11 +1727,13 @@ def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
     )
 
 
-def _get_scf_progress_from_status_scan(access: RunDirAccess) -> JobProgressResponse:
-    """
-    Get SCF batch progress driven by status files (RUNNING/ENDED/FAIL).
+def _get_scf_progress_from_status_scan(
+    access: RunDirAccess,
+) -> JobProgressResponse:
+    """Get SCF batch progress from log-derived status scan.
 
-    This is the legacy fallback for tasks that do not have qdyn_scf.log.
+    Fallback used when qdyn_scf.log is absent or unreadable.  The scan
+    itself is also log-only; frames without a log record are PENDING.
     """
     scf_map = access.scan_scf_status()
     if not scf_map:
@@ -1889,81 +1741,44 @@ def _get_scf_progress_from_status_scan(access: RunDirAccess) -> JobProgressRespo
 
     total = len(scf_map)
     completed = 0  # ENDED
-    failed = 0  # FAIL
     running = 0  # RUNNING
     running_subdir: str | None = None
-    failed_frames: List[str] = []
 
     for subdir_name, info in scf_map.items():
         if info.status == "ENDED":
             completed += 1
-        elif info.status == "FAIL":
-            failed += 1
-            failed_frames.append(subdir_name)
         elif info.status == "RUNNING":
             running += 1
             running_subdir = subdir_name
 
-    pending = max(0, total - completed - failed - running)
-    current_step = completed  # completed frames so far
+    pending = max(0, total - completed - running)
+    current_step = completed
     percent = round(current_step / total * 100, 2) if total > 0 else None
 
     batch_info = SCFBatchInfo(
         completed=completed,
-        converged=completed,  # ENDED implies validated convergence
-        failed=failed,
+        converged=completed,
+        failed=0,
         running=running,
         pending=pending,
     )
 
-    # Build current_frame if a RUNNING subdirectory exists
     current_frame: SCFCurrentFrame | None = None
     if running_subdir is not None:
-        frame_name = running_subdir  # e.g. "scf_017"
-        # Extract global index from directory name: "scf_017" -> 17
+        frame_name = running_subdir
         global_index = 0
         try:
             global_index = int(frame_name.split("_", 1)[1])
         except (ValueError, IndexError):
             pass
-
-        # Parse electronic step from OSZICAR tail (targeted read)
-        estep_info = {
-            "electronic_step_current": None,
-            "scf_algorithm": None,
-            "last_energy": None,
-        }
-        try:
-            oszicar_tail = access.read_subdir_tail(
-                running_subdir, "OSZICAR", max_bytes=4096
-            )
-            estep_info = _parse_oszicar_tail_text(oszicar_tail)
-        except Exception:
-            pass
-
-        # Read NELM from INCAR (try frame INCAR first, then parent)
-        nelm: int | None = None
-        try:
-            incar_text = access.read_subdir_text(running_subdir, "INCAR")
-            nelm = _parse_nelm_from_text(incar_text)
-        except Exception:
-            pass
-        if nelm is None:
-            try:
-                root_texts = access.read_multiple_root_texts(["INCAR"])
-                if "INCAR" in root_texts:
-                    nelm = _parse_nelm_from_text(root_texts["INCAR"])
-            except Exception:
-                pass
-
         current_frame = SCFCurrentFrame(
             name=frame_name,
             global_index=global_index,
             status="RUNNING",
-            electronic_step_current=estep_info["electronic_step_current"],
-            electronic_step_limit=nelm,
-            scf_algorithm=estep_info["scf_algorithm"],
-            converged=None,  # still running
+            electronic_step_current=None,
+            electronic_step_limit=None,
+            scf_algorithm=None,
+            converged=None,
         )
 
     return JobProgressResponse(
@@ -1974,16 +1789,16 @@ def _get_scf_progress_from_status_scan(access: RunDirAccess) -> JobProgressRespo
         percent=percent,
         batch=batch_info,
         current_frame=current_frame,
-        failed_frames=failed_frames,
+        failed_frames=[],
     )
 
 
 def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
-    """
-    Get SCF batch progress, preferring the software-neutral qdyn_scf.log.
+    """Get SCF batch progress with qdyn_scf.log as the primary source.
 
-    Falls back to legacy scf_* status scanning for older tasks that do not
-    have the log file, or when the log cannot be parsed.
+    If qdyn_scf.log exists and parses successfully, returns log-derived
+    progress directly.  Falls back to a log-based status scan when the log
+    is absent or unreadable (scan itself also uses log categories only).
     """
     try:
         if access.root_file_exists("qdyn_scf.log"):
@@ -2559,10 +2374,12 @@ def _enrich_with_layer_constraints(preview, task_id: str):
         from copy import deepcopy
 
         from ..input import SelDynInputT
-        from ..tools.seldyn import add_constraints, extract_constraint_mask
+        from ..tools.seldyn import add_constraints
 
         # Reconstruct Atoms from preview data
         from ase import Atoms
+        from .structure_preview import build_preview_from_atoms
+
         atoms = Atoms(
             symbols=preview.species,
             positions=preview.cart_coords,
@@ -2577,7 +2394,7 @@ def _enrich_with_layer_constraints(preview, task_id: str):
         )
         atoms_copy = deepcopy(atoms)
         add_constraints(atoms_copy, sel)
-        preview.constraint_mask = extract_constraint_mask(atoms_copy)
+        return build_preview_from_atoms(atoms_copy)
     except Exception:
         logger.debug(
             "Failed to compute layer constraints for task %s", task_id,
@@ -2847,13 +2664,10 @@ def _preview_from_job_kwargs(
 
     Returns StructurePreviewPayload or None.
     """
-    import io
-
-    import ase.io
     from ase import Atoms
 
-    from ..params import STRU_FORMAT_MAPPING, TRAJ_FORMAT_MAPPING
-    from .structure_preview import build_preview
+    from ..params import TRAJ_FORMAT_MAPPING
+    from .structure_preview import build_preview_from_atoms
 
     try:
         jc = manager._ensure_job_controller()
@@ -2876,10 +2690,7 @@ def _preview_from_job_kwargs(
                 if isinstance(stru_dict[key], list):
                     stru_dict[key] = np.array(stru_dict[key])
             atoms = Atoms.fromdict(stru_dict)
-            buf = io.StringIO()
-            ase_fmt = STRU_FORMAT_MAPPING.get(software, software)
-            ase.io.write(buf, atoms, format=ase_fmt)
-            return build_preview(buf.getvalue(), fmt=ase_fmt)
+            return build_preview_from_atoms(atoms)
 
         # --- Case 2: Trajectory file path (SCF jobs) ---
         traj_path = kwargs.get("traj_path")
@@ -2889,11 +2700,8 @@ def _preview_from_job_kwargs(
             traj_path = Path(traj_path)
             if traj_path.is_file():
                 ase_fmt = TRAJ_FORMAT_MAPPING.get(traj_format, traj_format)
-                atoms = read_stru(ase_fmt, str(traj_path))
-                buf = io.StringIO()
-                stru_fmt = STRU_FORMAT_MAPPING.get(software, software)
-                ase.io.write(buf, atoms, format=stru_fmt)
-                return build_preview(buf.getvalue(), fmt=stru_fmt)
+                atoms = read_strus(ase_fmt, str(traj_path), first_only=True)[0]
+                return build_preview_from_atoms(atoms)
     except Exception:
         logger.warning(
             "Failed to build preview from job kwargs for %s", job_uuid
@@ -2911,12 +2719,8 @@ def _preview_from_traj_hash(
 
     Returns a StructurePreviewPayload or None on failure.
     """
-    import io
-
-    import ase.io
-
     from ..params import TRAJ_FORMAT_MAPPING
-    from .structure_preview import build_preview
+    from .structure_preview import build_preview_from_atoms
 
     pool = manager.get_task_pool(task_id)
     traj_path = Path(pool.get_user_file_path('trajectory', stru_hash))
@@ -2925,11 +2729,8 @@ def _preview_from_traj_hash(
 
     try:
         ase_fmt = TRAJ_FORMAT_MAPPING.get(stru_format, stru_format)
-        atoms = read_stru(ase_fmt, str(traj_path))
-        # Convert back to text for build_preview (to get constraint handling)
-        buf = io.StringIO()
-        ase.io.write(buf, atoms, format=stru_format)
-        return build_preview(buf.getvalue(), fmt=stru_format)
+        atoms = read_strus(ase_fmt, str(traj_path), first_only=True)[0]
+        return build_preview_from_atoms(atoms)
     except Exception:
         logger.warning(
             "Failed to parse trajectory hash %s for preview", stru_hash

@@ -8,11 +8,47 @@ StructurePreviewPayload suitable for frontend 3D visualization.
 import io
 import logging
 
+import ase.io
+from ase import Atoms
+
 from ..calc_common import read_stru
 from ..tools.seldyn import extract_constraint_mask
 from .models import StructurePreviewPayload
 
 logger = logging.getLogger(__name__)
+
+
+def atoms_to_vasp_text(atoms: Atoms) -> str:
+    """Serialize ASE atoms to POSCAR/VASP text without reordering atoms."""
+    buf = io.StringIO()
+    ase.io.write(
+        buf,
+        atoms,
+        format="vasp",
+        direct=True,
+        vasp5=True,
+        sort=False,
+    )
+    return buf.getvalue()
+
+
+def build_preview_from_atoms(atoms: Atoms) -> StructurePreviewPayload:
+    """Build the additive preview payload from an ASE Atoms object."""
+    species: list[str] = atoms.get_chemical_symbols()
+    cart_coords: list[list[float]] = atoms.get_positions().tolist()
+    lattice: list[list[float]] = atoms.cell.tolist()
+    pbc: list[bool] = atoms.pbc.tolist()
+    constraint_mask = extract_constraint_mask(atoms)
+
+    return StructurePreviewPayload(
+        species=species,
+        cart_coords=cart_coords,
+        lattice=lattice,
+        pbc=pbc,
+        constraint_mask=constraint_mask,
+        format="vasp",
+        content=atoms_to_vasp_text(atoms),
+    )
 
 
 def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
@@ -45,18 +81,4 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
     if atoms is None:
         raise ValueError("Failed to parse structure: ASE returned None")
 
-    species: list[str] = atoms.get_chemical_symbols()
-    cart_coords: list[list[float]] = atoms.get_positions().tolist()
-    lattice: list[list[float]] = atoms.cell.tolist()
-    pbc: list[bool] = atoms.pbc.tolist()
-
-    # Extract constraint mask from ASE constraints
-    constraint_mask = extract_constraint_mask(atoms)
-
-    return StructurePreviewPayload(
-        species=species,
-        cart_coords=cart_coords,
-        lattice=lattice,
-        pbc=pbc,
-        constraint_mask=constraint_mask,
-    )
+    return build_preview_from_atoms(atoms)

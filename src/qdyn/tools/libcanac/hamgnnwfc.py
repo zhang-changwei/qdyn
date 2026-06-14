@@ -67,8 +67,7 @@ class hamngnnwfc(object):
         # energy
         self._bands = eigenvalues.reshape(self._nspin, self._nkpts, -1) # shape: (nspin, nkpts, norbitals)
         # huge mode
-        if self._nbands < self._norbs:
-            self._huge_mode = True
+        self._huge_mode = self._nbands < self._norbs
 
     def readBandCoeffs(self, iband : slice):
         '''

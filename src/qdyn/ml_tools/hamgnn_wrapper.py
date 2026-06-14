@@ -299,7 +299,7 @@ def _set_spawn_worker_cpu_affinity(nproc: int, threads_per_proc: int):
             "Unable to determine spawn worker identity for CPU affinity."
         )
 
-    worker_index = worker_identity[0] % nproc
+    worker_index = (worker_identity[0] - 1) % nproc
     start_cpu = worker_index * threads_per_proc
     # This binds consecutive logical CPUs only; with SMT/Hyper-Threading
     # enabled, these IDs may not map to consecutive physical cores.
@@ -497,40 +497,22 @@ class MLSCFSolver:
     ):
         self.software = software
         self.logger = logger
+        self._closed = False
 
         model_path_ = Path(model_path).expanduser().resolve()
         if not model_path_.is_file():
             raise FileNotFoundError(f"Model file not found at {model_path_}")
+        self.model_path = model_path_
 
-        batch_per_proc = max(1, mlh_input.batch_size // nproc)
-        self.batch_size = batch_per_proc * nproc
+        self.batch_per_proc = max(1, mlh_input.batch_size // nproc)
+        self.batch_size = self.batch_per_proc * nproc
         mlh_input.batch_size = self.batch_size
         self.nproc = nproc
         self.threads_per_proc = threads_per_proc
-
-        self._ctx = multiprocessing.get_context("spawn")
-        worker_mlh_input = deepcopy(mlh_input)
-        with _thread_env_context(threads_per_proc):
-            self._manager = self._ctx.Manager()
-            self.progress_queue = self._manager.Queue()
-            self.pool = self._ctx.Pool(
-                processes=nproc,
-                initializer=init_spawn_worker,
-                initargs=(
-                    self.software,
-                    worker_mlh_input,
-                    str(model_path_),
-                    nproc,
-                    threads_per_proc,
-                    batch_per_proc,
-                    (np.float64 if mlh_input.adv.eigen_dtype == 'float64' 
-                                else np.float32),
-                ),
-            )
-        self._pool_terminated = False
+        self.worker_mlh_input = deepcopy(mlh_input)
         self.tasks = []
         self.task_count = 0
-        
+
         self.add_H0 = mlh_input.add_H0
         self.eigen_solver = eigen_solver
         self.eigen_dtype = (np.float64 
@@ -540,6 +522,42 @@ class MLSCFSolver:
         if save_lmdb:
             self.save_lmdb = True
 
+    def __enter__(self):
+        if self._closed:
+            raise RuntimeError("Cannot enter a closed MLSCFSolver.")
+        if (
+            getattr(self, "pool", None) is not None
+            or getattr(self, "_manager", None) is not None
+        ):
+            raise RuntimeError("MLSCFSolver context has already been entered.")
+
+        ctx = multiprocessing.get_context("spawn")
+        try:
+            with _thread_env_context(self.threads_per_proc):
+                self._manager = ctx.Manager()
+                self.progress_queue = self._manager.Queue()
+                self.pool = ctx.Pool(
+                    processes=self.nproc,
+                    initializer=init_spawn_worker,
+                    initargs=(
+                        self.software,
+                        self.worker_mlh_input,
+                        str(self.model_path),
+                        self.nproc,
+                        self.threads_per_proc,
+                        self.batch_per_proc,
+                        self.eigen_dtype,
+                    ),
+                )
+        except Exception:
+            self._cleanup_resources(terminate=True)
+            raise
+
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._cleanup_resources(terminate=exc_type is not None)
+        return False
 
     def add(self, step: int, job_dir: Path, stru: Atoms):
         self.tasks.append((step, job_dir, stru))
@@ -548,17 +566,45 @@ class MLSCFSolver:
             self.run()
 
     def close(self):
-        if self._pool_terminated:
-            self.pool.join()
-        else:
-            self.pool.close()
-            self.pool.join()
-        self._manager.shutdown()
+        self._cleanup_resources(terminate=False)
 
-    def _terminate_pool(self):
-        if not self._pool_terminated:
-            self.pool.terminate()
-            self._pool_terminated = True
+    def _cleanup_resources(self, *, terminate: bool) -> None:
+        if self._closed:
+            return
+
+        errors: list[BaseException] = []
+        pool = getattr(self, "pool", None)
+        if pool is not None:
+            if terminate:
+                try:
+                    pool.terminate()
+                except Exception as exc:
+                    errors.append(exc)
+            else:
+                try:
+                    pool.close()
+                except Exception as exc:
+                    errors.append(exc)
+                    try:
+                        pool.terminate()
+                    except Exception as terminate_exc:
+                        errors.append(terminate_exc)
+
+            try:
+                pool.join()
+            except Exception as exc:
+                errors.append(exc)
+
+        manager = getattr(self, "_manager", None)
+        if manager is not None:
+            try:
+                manager.shutdown()
+            except Exception as exc:
+                errors.append(exc)
+
+        self._closed = True
+        if errors:
+            raise RuntimeError("Failed to clean up MLSCFSolver resources.") from errors[0]
 
     @staticmethod
     def _chunk_tasks(
@@ -592,7 +638,11 @@ class MLSCFSolver:
     def run(self):
         if not self.task_count:
             return
-        
+        pool = getattr(self, "pool", None)
+        progress_queue = getattr(self, "progress_queue", None)
+        if pool is None or progress_queue is None:
+            raise RuntimeError("MLSCFSolver must be used as a context manager before run().")
+
         results: list[AsyncResult] = []
         chunks = self._chunk_tasks(self.tasks, self.nproc)
 
@@ -600,13 +650,13 @@ class MLSCFSolver:
             steps = [step for step, _, _ in chunk]
             task_dirs = [str(task_dir) for _, task_dir, _ in chunk]
             strus = [stru for _, _, stru in chunk]
-            result = self.pool.apply_async(
-                n2amd_workflow, 
+            result = pool.apply_async(
+                n2amd_workflow,
                 (
                     steps,
                     strus,
                     task_dirs,
-                    self.progress_queue,
+                    progress_queue,
                 )
             )
             results.append(result)
@@ -614,7 +664,7 @@ class MLSCFSolver:
         try:
             pending = set(range(len(results)))
             while pending:
-                time.sleep(1)
+                time.sleep(0.5)
                 self._drain_progress_queue()
                 for idx in list(pending):
                     if results[idx].ready():
@@ -623,7 +673,14 @@ class MLSCFSolver:
                         results[idx].get()
             self._drain_progress_queue()
         except Exception as exc:
-            self._terminate_pool()
+            try:
+                self._drain_progress_queue()
+            except Exception as drain_exc:
+                warnings.warn(
+                    f"Failed to drain MLSCFSolver progress queue during cleanup: "
+                    f"{drain_exc}",
+                    RuntimeWarning,
+                )
             raise RuntimeError(f"MLSCFSolver.run failed: {exc}") from exc
         finally:
             self.tasks.clear()

@@ -495,6 +495,7 @@ def test_step_scf_uses_nve_output_software_for_traj_format(monkeypatch):
 
     jobs = manager.step_scf(
         input=SCFInputT(),
+        nve_software="mace",
         jobs={"nve": [SimpleNamespace(output={"traj_path": "/tmp/traj.xyz", "software": "mace"})]},
         is_first_step=False,
         stru_format="vasp",

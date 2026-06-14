@@ -241,8 +241,8 @@
         v-for="group in groupFilesByCategory(rowState.files!.files)"
         :key="group.label"
       >
-        <el-divider content-position="left">
-          {{ group.label }}
+        <div class="section-header">
+          <span class="section-header-label">{{ group.label }}</span>
           <el-checkbox
             v-if="group.category !== 'image'"
             size="small"
@@ -251,7 +251,7 @@
             @update:model-value="$emit('toggle-group-selection', row.uuid, group.files)"
             @click.stop
           />
-        </el-divider>
+        </div>
 
         <!-- Images: inline preview grid with download -->
         <div v-if="group.category === 'image'" class="images-grid">
@@ -351,9 +351,9 @@
         v-for="sdGroup in groupSubdirsByPrefix(rowState.files!.subdirs)"
         :key="sdGroup.prefix"
       >
-        <el-divider content-position="left">
+        <div class="section-header">
           <el-icon><FolderOpened /></el-icon>
-          {{ sdGroup.label }} ({{ sdGroup.subdirs.length }})
+          <span class="section-header-label">{{ sdGroup.label }} ({{ sdGroup.subdirs.length }})</span>
           <el-checkbox
             size="small"
             class="group-select-checkbox"
@@ -361,7 +361,7 @@
             @update:model-value="$emit('toggle-sd-group-select-all', row.uuid, sdGroup.subdirs)"
             @click.stop
           />
-        </el-divider>
+        </div>
 
         <el-collapse class="subdir-collapse" accordion>
           <el-collapse-item
@@ -726,7 +726,20 @@ function subdirStatusType(status: string): string {
 
 /* Files section in expand row */
 .files-section {
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
+  padding-left: 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg-secondary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin-bottom: var(--space-2);
 }
 
 .group-select-checkbox {
@@ -808,7 +821,8 @@ function subdirStatusType(status: string): string {
 
 /* Subdirectory section styles */
 .subdirs-section {
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
+  padding-left: 0;
 }
 
 .subdir-collapse {
@@ -820,6 +834,7 @@ function subdirStatusType(status: string): string {
   line-height: 36px;
   font-size: var(--fs-13);
   background-color: transparent;
+  padding-left: 40px;
 }
 
 .subdir-collapse :deep(.el-collapse-item__wrap) {
@@ -855,6 +870,6 @@ function subdirStatusType(status: string): string {
 }
 
 .subdir-files-content {
-  padding: 0 var(--space-2) var(--space-2);
+  padding: 0 var(--space-2) var(--space-2) var(--space-6);
 }
 </style>

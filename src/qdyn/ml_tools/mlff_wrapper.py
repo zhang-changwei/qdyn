@@ -11,7 +11,9 @@ from ..params import MACE_PRETRAINED_MODEL_URLS
 from ..pool import WorkerPool
 
 def nequip_pretrained_model_filename(model_name: str, device: str) -> str:
-    return f"{model_name.replace('/', '__')}_{device}__0.1.nequip.pt2"
+    # TorchScript (.nequip.pth) artifacts: loadable on torch 2.5.x, unlike
+    # AOTInductor (.nequip.pt2) which requires torch >= 2.6.
+    return f"{model_name.replace('/', '__')}_{device}__0.1.nequip.pth"
 
 def mace_pretrained_model_filename(model_name: str) -> str:
     return Path(MACE_PRETRAINED_MODEL_URLS[model_name]).name

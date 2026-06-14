@@ -157,9 +157,8 @@ class MainWorkflow:
         """Get execution config for the active pool and software."""
         return self.active_pool.worker_cfg[key][software]
 
-    def _get_first_step(
-        self, steps: Sequence[str], method: Literal['namd', 'n2amd']
-    ) -> str:
+    @staticmethod
+    def _get_first_step(steps: Sequence[str], method: str):
         if method != 'namd':
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
         key_map = {
@@ -415,13 +414,13 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
+            traj_format = nve_output['traj_format']
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']]
+                traj_format = nve_output['traj_format']
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
@@ -473,7 +472,7 @@ class MainWorkflow:
             pp_path=pp_path,
             orb_path=orb_path,
             traj_path=traj_path, # type: ignore
-            traj_format=traj_format,
+            traj_format=traj_format, # type: ignore
             model_path=model_path,
             nodes=nodes,
             processes_per_node=processes_per_node,
@@ -521,13 +520,13 @@ class MainWorkflow:
         if 'nve' in jobs:
             nve_output = jobs['nve'][0].output
             traj_path = nve_output['traj_path']
-            traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']] # type: ignore[index]
+            traj_format = nve_output['traj_format']
         elif is_first_step and resume:
             try:
                 prev_job_uuid = self.job_ids[prev_task_id]['nve'][0]
                 nve_output = self.get_job_output(prev_job_uuid)
                 traj_path = nve_output['traj_path']
-                traj_format = TRAJ_FORMAT_MAPPING[nve_output['software']]
+                traj_format = nve_output['traj_format']
             except Exception as exc:
                 raise ResumeError(
                     "Previous job for step 'nve' not found or has no output. "
@@ -585,7 +584,7 @@ class MainWorkflow:
             pp_path=pp_path,
             orb_path=orb_path,
             traj_path=traj_path, # type: ignore
-            traj_format=traj_format,
+            traj_format=traj_format, # type: ignore
             model_path=model_path,
             nodes=nodes,
             ncpus=ncpus,
@@ -764,7 +763,7 @@ class MainWorkflow:
     def main_workflow(
         self,
         input: InputT,
-        method: Literal['namd', 'n2amd'] = 'namd',
+        method: Literal['namd'] = 'namd',
         stru: str = '',
         stru_format: str = 'vasp',
         stru_hash: str = '',
@@ -913,7 +912,7 @@ class MainWorkflow:
     def submit(
         self,
         input: InputT,
-        method: Literal['namd', 'n2amd'] = 'namd',
+        method: Literal['namd'] = 'namd',
         stru: str = '',
         stru_format: str = 'vasp',
         stru_hash: str = '',

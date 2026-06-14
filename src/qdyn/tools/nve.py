@@ -9,7 +9,7 @@ import numpy as np
 from ..calc_common import write_stru, xc_mapping, select_orbitals
 from ..input import NVEInputT, DFTBaseInputT
 from ..params import (
-    PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, 
+    PARAMS_DEFAULT, TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING,
     STRU_FNAME_MAPPING, STRU2_FNAME_MAPPING, 
     STRU_FORMAT_MAPPING, STRU2_FORMAT_MAPPING,
     ORBITAL_BASIS,
@@ -139,6 +139,7 @@ def qdyn_nve(
         'traj_path': str(
             Path.cwd() / TRAJ_FNAME_MAPPING[software_lower]
         ),  # constraints information may also remain in some software's trajectory files, may raise error when changing to dict.
+        'traj_format': TRAJ_FORMAT_MAPPING[software_lower],
     }
 
 
