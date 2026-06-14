@@ -582,11 +582,11 @@ async def upload(
 
     # For trajectory files, validate against the selected format and extract a
     # summary. If the file cannot be parsed as that format, delete the temp file
-    # and return an error — don't keep garbage files on disk.
+    # and return an error - don't keep garbage files on disk.
     summary = {}
     if file_type == "trajectory":
         from .calc_common import count_trajectory_frames, read_strus
-        from .params import SUPPORTED_TRAJECTORY_FORMATS
+        from .params import SUPPORTED_TRAJ_FORMATS
 
         if not stru_format:
             if os.path.exists(tmp_path):
@@ -596,10 +596,10 @@ async def upload(
                 detail="Trajectory upload requires stru_format.",
             )
 
-        if stru_format not in SUPPORTED_TRAJECTORY_FORMATS:
+        if stru_format not in SUPPORTED_TRAJ_FORMATS:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-            supported = ", ".join(sorted(SUPPORTED_TRAJECTORY_FORMATS))
+            supported = ", ".join(sorted(SUPPORTED_TRAJ_FORMATS))
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -664,7 +664,7 @@ def check_hash(
     summary = {}
     if exists and file_type == "trajectory":
         from .calc_common import read_trajectory_summary
-        from .params import SUPPORTED_TRAJECTORY_FORMATS
+        from .params import SUPPORTED_TRAJ_FORMATS
 
         if not stru_format:
             raise HTTPException(
@@ -672,8 +672,8 @@ def check_hash(
                 detail="Trajectory hash check requires stru_format.",
             )
 
-        if stru_format not in SUPPORTED_TRAJECTORY_FORMATS:
-            supported = ", ".join(sorted(SUPPORTED_TRAJECTORY_FORMATS))
+        if stru_format not in SUPPORTED_TRAJ_FORMATS:
+            supported = ", ".join(sorted(SUPPORTED_TRAJ_FORMATS))
             raise HTTPException(
                 status_code=422,
                 detail=(
