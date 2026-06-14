@@ -1,56 +1,88 @@
 <template>
-  <div
-    class="poscar-uploader"
-    :class="{ 'is-dragover': isDragover }"
-    @dragenter.prevent="handleDragEnter"
-    @dragover.prevent="handleDragOver"
-    @dragleave.prevent="handleDragLeave"
-    @drop.prevent="handleDrop"
-    @click="triggerFileInput"
-  >
-    <input
-      ref="fileInputRef"
-      type="file"
-      accept="*/*"
-      hidden
-      @change="handleFileChange"
-    />
-
-    <div v-if="!fileName" class="upload-prompt">
-      <el-icon class="upload-icon"><Upload /></el-icon>
-      <div class="upload-text">
-        <span>Drag POSCAR file here or</span>
-        <el-button type="primary" link>click to upload</el-button>
-      </div>
-      <div class="upload-hint">
-        Supports .poscar, .vasp, or POSCAR format
-      </div>
+  <div class="structure-uploader-wrap">
+    <div class="format-row">
+      <span class="format-label">Format</span>
+      <FormatSelect
+        :model-value="format"
+        :options="STRUCTURE_FORMAT_OPTIONS"
+        placeholder="Select format"
+        @update:model-value="(val: string) => emit('update:format', val)"
+      />
     </div>
 
-    <div v-else class="upload-success">
-      <el-icon class="success-icon"><Document /></el-icon>
-      <div class="file-info">
-        <span class="file-name">{{ fileName }}</span>
-        <el-button
-          type="danger"
-          link
-          size="small"
-          @click.stop="clearFile"
-        >
-          Clear
-        </el-button>
+    <div
+      class="structure-uploader"
+      :class="{ 'is-dragover': isDragover }"
+      @dragenter.prevent="handleDragEnter"
+      @dragover.prevent="handleDragOver"
+      @dragleave.prevent="handleDragLeave"
+      @drop.prevent="handleDrop"
+      @click="triggerFileInput"
+    >
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept="*/*"
+        hidden
+        @change="handleFileChange"
+      />
+
+      <div v-if="!fileName" class="upload-prompt">
+        <el-icon class="upload-icon"><Upload /></el-icon>
+        <div class="upload-text">
+          <span>Drag structure file here or</span>
+          <el-button type="primary" link>click to upload</el-button>
+        </div>
+        <div class="upload-hint">
+          {{ uploadHint }}
+        </div>
+      </div>
+
+      <div v-else class="upload-success">
+        <el-icon class="success-icon"><Document /></el-icon>
+        <div class="file-info">
+          <span class="file-name">{{ fileName }}</span>
+          <el-button
+            type="danger"
+            link
+            size="small"
+            @click.stop="clearFile"
+          >
+            Clear
+          </el-button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Upload, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import FormatSelect, { type FormatOption } from './FormatSelect.vue'
+
+/**
+ * Single-frame structure upload options.
+ *
+ * The value is the ASE `format=` string passed to the backend `read_stru()`.
+ * This value domain is distinct from the trajectory uploader's options
+ * (see TrajectoryUploader.vue) and must not be shared.
+ */
+const STRUCTURE_FORMAT_OPTIONS: FormatOption[] = [
+  { label: 'VASP (POSCAR)', value: 'vasp' },
+  { label: 'CIF', value: 'cif' },
+  { label: 'extxyz', value: 'extxyz' },
+  { label: 'OpenMX (.dat)', value: 'openmx-dat' },
+]
+
+const props = defineProps<{
+  format: string
+}>()
 
 const emit = defineEmits<{
-  (e: 'file-loaded', content: string): void
+  (e: 'file-loaded', content: string, format: string): void
+  (e: 'update:format', value: string): void
   (e: 'clear'): void
 }>()
 
@@ -58,6 +90,21 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragover = ref(false)
 const fileName = ref('')
 const currentFileToken = ref<string | null>(null) // Track current file to prevent race condition
+
+const uploadHint = computed((): string => {
+  switch (props.format) {
+    case 'vasp':
+      return 'Supports POSCAR / CONTCAR / .vasp'
+    case 'cif':
+      return 'Supports .cif'
+    case 'extxyz':
+      return 'Supports .extxyz (with cell)'
+    case 'openmx-dat':
+      return 'Supports OpenMX .dat'
+    default:
+      return 'Select a format above, then drop a structure file'
+  }
+})
 
 function triggerFileInput(): void {
   fileInputRef.value?.click()
@@ -99,8 +146,8 @@ function processFile(file: File): void {
   const fileToken = Date.now().toString()
   currentFileToken.value = fileToken
 
-  if (!isValidPoscarFile(file)) {
-    ElMessage.error('Please upload a valid POSCAR file')
+  if (!isValidStructureFile(file)) {
+    ElMessage.error('Please upload a non-empty structure file')
     // Clear local state immediately for invalid files
     fileName.value = ''
     if (fileInputRef.value) {
@@ -130,8 +177,8 @@ function processFile(file: File): void {
     }
 
     fileName.value = file.name
-    emit('file-loaded', content)
-    ElMessage.success('POSCAR file loaded successfully')
+    emit('file-loaded', content, props.format)
+    ElMessage.success('Structure file loaded successfully')
   }
 
   reader.onerror = (): void => {
@@ -150,21 +197,12 @@ function processFile(file: File): void {
   reader.readAsText(file)
 }
 
-function isValidPoscarFile(file: File): boolean {
-  const validExtensions = ['.poscar', '.vasp']
-  const validNames = ['poscar', 'contcar']
-  const name = file.name.toLowerCase()
-
-  // Accept known POSCAR extensions or filenames
-  if (validExtensions.some(ext => name.endsWith(ext))) return true
-  if (validNames.some(n => name.startsWith(n))) return true
-  // Accept text files
-  if (file.type.startsWith('text/')) return true
-  // Accept files with no extension (browsers report empty type for
-  // extensionless files like "POSCAR") — backend validates content
-  if (!name.includes('.') || file.type === '') return true
-
-  return false
+// Format correctness is validated server-side per the selected format,
+// so only coarse-filter here: reject empty files; accept text-like or
+// extensionless files (browsers report empty type for POSCAR/.vasp/.dat).
+function isValidStructureFile(file: File): boolean {
+  if (file.size === 0) return false
+  return true
 }
 
 function clearFile(): void {
@@ -178,7 +216,24 @@ function clearFile(): void {
 </script>
 
 <style scoped>
-.poscar-uploader {
+.structure-uploader-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.format-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.format-label {
+  font: var(--text-body-strong);
+  color: var(--fg-secondary);
+}
+
+.structure-uploader {
   border: 2px dashed var(--border-default);
   border-radius: var(--radius-lg);
   padding: 40px 20px;
@@ -189,12 +244,12 @@ function clearFile(): void {
   background-color: var(--bg-surface);
 }
 
-.poscar-uploader:hover {
+.structure-uploader:hover {
   border-color: var(--brand-primary);
   background-color: var(--bg-surface-alt);
 }
 
-.poscar-uploader.is-dragover {
+.structure-uploader.is-dragover {
   border-color: var(--brand-primary);
   background-color: var(--brand-primary-soft);
 }

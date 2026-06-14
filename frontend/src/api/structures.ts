@@ -22,13 +22,18 @@ function unwrapResponse<T>(response: ApiResponse<T>): T {
 }
 
 /**
- * Validate POSCAR file content
+ * Validate structure file content against the selected single-frame format.
  *
- * @param content - Raw POSCAR file content as string
+ * @param content - Raw structure file content as string
+ * @param struFormat - ASE single-frame format (vasp/cif/extxyz/openmx-dat);
+ *                      defaults to "vasp" when omitted (backward compatible)
  * @returns Validation result with structure info if valid
  */
-export async function validatePoscar(content: string): Promise<ValidatePoscarResponse> {
-  const payload: ValidatePoscarRequest = { content }
+export async function validateStructure(
+  content: string,
+  struFormat = 'vasp'
+): Promise<ValidatePoscarResponse> {
+  const payload: ValidatePoscarRequest = { content, stru_format: struFormat }
   const response = await http.post<ApiResponse<ValidatePoscarResponse>>(
     '/frontend/structures/validate',
     payload
@@ -37,14 +42,18 @@ export async function validatePoscar(content: string): Promise<ValidatePoscarRes
 }
 
 /**
- * Validate POSCAR from File object (for file upload scenarios)
+ * Validate a structure from a File object (for file upload scenarios)
  *
  * @param file - File object to read and validate
+ * @param struFormat - ASE single-frame format; defaults to "vasp"
  * @returns Validation result with structure info if valid
  */
-export async function validatePoscarFile(file: File): Promise<ValidatePoscarResponse> {
+export async function validateStructureFile(
+  file: File,
+  struFormat = 'vasp'
+): Promise<ValidatePoscarResponse> {
   const content = await file.text()
-  return validatePoscar(content)
+  return validateStructure(content, struFormat)
 }
 
 /**

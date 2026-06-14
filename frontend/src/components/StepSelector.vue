@@ -50,7 +50,7 @@
         <span v-else-if="resume">
           Resume mode: Select contiguous steps to run.
         </span>
-        <span v-else>Select contiguous steps starting from NVT or SCF (e.g. nvt + nve + scf, or scf + pre_namd + namd).</span>
+        <span v-else>Select contiguous steps starting from NVT, NVE, or SCF (e.g. nvt + nve + scf, nve + scf, or scf + pre_namd + namd).</span>
       </el-text>
     </div>
   </div>
@@ -165,8 +165,11 @@ function isStepSelectable(step: string): boolean {
     return stepIndex === selectedIndices[selectedIndices.length - 1] + 1
   }
 
-  // Normal (new task) mode — allow starting from nvt, scf, or fused_scf_prenamd
-  const allowedFirstSteps = ['nvt', 'scf', FUSED_SCF_PRENAMD]
+  // Normal (new task) mode — allow starting from nvt, nve, scf, or fused_scf_prenamd.
+  // NVE-first is valid: the backend contiguity rule already permits any
+  // contiguous suffix start, and NVE-first reads the uploaded single-frame
+  // structure via the POSCAR path.
+  const allowedFirstSteps = ['nvt', 'nve', 'scf', FUSED_SCF_PRENAMD]
   if (props.modelValue.length === 0) {
     return allowedFirstSteps.includes(step)
   }

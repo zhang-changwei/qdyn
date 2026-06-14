@@ -9,8 +9,6 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Literal
 
-import ase
-import ase.io
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi import status as http_status
 from fastapi.middleware.cors import CORSMiddleware
@@ -544,6 +542,7 @@ def get_job_output(
 async def upload(
     file: UploadFile = File(...),
     file_type: Literal["trajectory", "model"] = Form(...),
+    stru_format: str = Form(""),
     user: str = Depends(get_current_user),
 ):
     m = _manager()
@@ -581,39 +580,52 @@ async def upload(
             os.unlink(tmp_path)
         raise
 
-    # For trajectory files, validate format and extract summary.
-    # If the file cannot be parsed as any supported trajectory format,
-    # delete it and return an error — don't keep garbage files on disk.
+    # For trajectory files, validate against the selected format and extract a
+    # summary. If the file cannot be parsed as that format, delete the temp file
+    # and return an error — don't keep garbage files on disk.
     summary = {}
     if file_type == "trajectory":
-        from .calc_common import count_trajectory_frames
-        from .params import TRAJ_FORMAT_MAPPING
-        parsed = False
-        for fmt in TRAJ_FORMAT_MAPPING.values():
-            try:
-                atoms = ase.io.read(str(tmp_path), format=fmt, index=0)
-                summary = {
-                    "formula": atoms.get_chemical_formula(),
-                    "num_atoms": len(atoms),
-                    "num_frames": count_trajectory_frames(
-                        str(tmp_path), fmt
-                    ),
-                }
-                parsed = True
-                break
-            except Exception:
-                continue
-        if not parsed:
+        from .calc_common import count_trajectory_frames, read_strus
+        from .params import SUPPORTED_TRAJECTORY_FORMATS
+
+        if not stru_format:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise HTTPException(
+                status_code=422,
+                detail="Trajectory upload requires stru_format.",
+            )
+
+        if stru_format not in SUPPORTED_TRAJECTORY_FORMATS:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            supported = ", ".join(sorted(SUPPORTED_TRAJECTORY_FORMATS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Trajectory format '{stru_format}' is not supported. "
+                    f"Supported formats: {supported}."
+                ),
+            )
+
+        try:
+            atoms = read_strus(stru_format, str(tmp_path), first_only=True)[0]
+            summary = {
+                "formula": atoms.get_chemical_formula(),
+                "num_atoms": len(atoms),
+                "num_frames": count_trajectory_frames(str(tmp_path), stru_format),
+                "format": stru_format,
+            }
+        except Exception as exc:
             # Unrecognizable file — clean up and reject
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-            tried = ', '.join(f'{k} ({v})' for k, v in TRAJ_FORMAT_MAPPING.items())
             raise HTTPException(
                 status_code=422,
-                detail=f"File is not a valid trajectory. "
-                       f"Tried parsing as: {tried}. "
-                       f"Please upload a trajectory file (e.g. XDATCAR for VASP).",
-            )
+                detail=(
+                    f"File is not a valid trajectory in format '{stru_format}': {exc}"
+                ),
+            ) from exc
 
     # upload tmp file to final_path on local/remote worker
     try:
@@ -633,6 +645,7 @@ async def upload(
 def check_hash(
     hash: str,
     file_type: Literal["trajectory", "model"],
+    stru_format: str = "",
     user: str = Depends(get_current_user),
 ):
     # Validate hash format to prevent path traversal
@@ -644,23 +657,39 @@ def check_hash(
     pool = m.active_pool
     exists = pool.user_file_exists(file_type, hash)
 
-    # If file exists and is a trajectory, validate format and return summary.
-    # If the file is invalid (e.g. leftover from before validation was added),
-    # delete it and report as not existing — forces a clean re-upload.
+    # If file exists and is a trajectory, validate it under the selected format
+    # and return its summary. If it is not parseable under that format, report it
+    # as not existing (without deleting it, since another format may still reuse
+    # the same file) so the client re-uploads or picks the correct format.
     summary = {}
     if exists and file_type == "trajectory":
         from .calc_common import read_trajectory_summary
-        from .params import TRAJ_FORMAT_MAPPING
+        from .params import SUPPORTED_TRAJECTORY_FORMATS
+
+        if not stru_format:
+            raise HTTPException(
+                status_code=422,
+                detail="Trajectory hash check requires stru_format.",
+            )
+
+        if stru_format not in SUPPORTED_TRAJECTORY_FORMATS:
+            supported = ", ".join(sorted(SUPPORTED_TRAJECTORY_FORMATS))
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Trajectory format '{stru_format}' is not supported. "
+                    f"Supported formats: {supported}."
+                ),
+            )
 
         parsed, summary = read_trajectory_summary(
             pool=pool,
             file_hash=hash,
-            formats=list(TRAJ_FORMAT_MAPPING.values()),
+            formats=[stru_format],
         )
 
         if not parsed:
-            # Stale invalid file — clean up
-            pool.delete_user_file(file_type=file_type, file_hash=hash)
+            # The hash exists, but it is not reusable under the selected format.
             exists = False
 
     return {"exists": exists, "pool_name": pool.name, **summary}

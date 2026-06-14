@@ -11,6 +11,8 @@ from qdyn.input import (
     InputT,
     MACEInputT,
     NVEInputT,
+    NVTInputT,
+    PreNAMDInputT,
     SCFInputT,
     SchedulerConfigT,
 )
@@ -133,6 +135,62 @@ def _make_manager() -> MainWorkflow:
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+_SIMPLE_POSCAR = "\n".join(
+    [
+        "Si",
+        "1.0",
+        "3.0 0.0 0.0",
+        "0.0 3.0 0.0",
+        "0.0 0.0 3.0",
+        "Si",
+        "1",
+        "Direct",
+        "0.0 0.0 0.0",
+    ]
+)
+
+
+def _validate_steps_with_structure(tmp_path: Path, steps: list[str], **fields):
+    payload = InputT(
+        scheduler_config=SchedulerConfigT(),
+        steps=steps,
+        **fields,
+    )
+    worker_cfg = {
+        "installed": {
+            "vasp": True,
+            "vasp_ae": False,
+            "abacus": False,
+            "python": True,
+            "namd": True,
+        }
+    }
+    config = {
+        "active_pool": "local_slurm",
+        "worker_pools": {
+            "local_slurm": {
+                "pool": {"user_data": str(tmp_path)},
+                "worker": {"type": "local"},
+            }
+        },
+    }
+    active_pool = SimpleNamespace(user_file_exists=lambda *_: False)
+
+    return validate_workflow_input(
+        payload,
+        method="namd",
+        stru=_SIMPLE_POSCAR,
+        stru_format="vasp",
+        stru_hash="",
+        resume=False,
+        prev_task_id="",
+        known_task_ids=[],
+        config=config,
+        worker_cfg=worker_cfg,
+        active_pool=active_pool,
+    )
 
 
 def test_get_pool_returns_active_pool_instance():
@@ -440,6 +498,53 @@ def test_validate_workflow_input_rejects_hash_when_stru_format_mismatches(monkey
             config=config,
             worker_cfg=worker_cfg,
             active_pool=active_pool,
+        )
+
+
+def test_validate_workflow_input_allows_nve_first(tmp_path: Path):
+    _validate_steps_with_structure(
+        tmp_path,
+        ["nve"],
+        nve_input=NVEInputT(),
+    )
+
+
+def test_validate_workflow_input_allows_nve_then_scf(tmp_path: Path):
+    _validate_steps_with_structure(
+        tmp_path,
+        ["nve", "scf"],
+        nve_input=NVEInputT(),
+        scf_input=SCFInputT(),
+    )
+
+
+def test_validate_workflow_input_rejects_nvt_then_scf_gap(tmp_path: Path):
+    with pytest.raises(ValidationError, match="Steps must be contiguous"):
+        _validate_steps_with_structure(
+            tmp_path,
+            ["nvt", "scf"],
+            nvt_input=NVTInputT(),
+            scf_input=SCFInputT(),
+        )
+
+
+def test_validate_workflow_input_rejects_nve_then_prenamd_gap(tmp_path: Path):
+    with pytest.raises(ValidationError, match="Steps must be contiguous"):
+        _validate_steps_with_structure(
+            tmp_path,
+            ["nve", "pre_namd"],
+            nve_input=NVEInputT(),
+            prenamd_input=PreNAMDInputT(),
+        )
+
+
+def test_validate_workflow_input_rejects_fused_scf_conflict(tmp_path: Path):
+    with pytest.raises(ValidationError, match="cannot be used together"):
+        _validate_steps_with_structure(
+            tmp_path,
+            ["fused_scf_prenamd", "scf"],
+            scf_input=SCFInputT(),
+            prenamd_input=PreNAMDInputT(),
         )
 
 
