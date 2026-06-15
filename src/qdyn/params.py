@@ -184,10 +184,21 @@ TRAJ_FORMAT_MAPPING = {
     'vasp': 'vasp-xdatcar',
     # COMPATIBLE USES BELOW
     'extxyz': 'extxyz',
-    'xyz': 'xyz',
     'nequip': 'extxyz',
     'mace': 'extxyz',
     'openmx': 'openmx-md',
+}
+
+SUPPORTED_STRU_FORMATS = {
+    'vasp',
+    'cif',
+    'extxyz',
+    'openmx-dat',
+}
+SUPPORTED_TRAJ_FORMATS = {
+    'vasp-xdatcar',
+    'extxyz',
+    'openmx-md',
 }
 
 # MLFFs

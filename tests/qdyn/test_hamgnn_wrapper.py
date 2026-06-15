@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue
 from types import ModuleType, SimpleNamespace
@@ -27,6 +28,15 @@ def hamgnn_wrapper_module(monkeypatch):
             or name == "torch"
             or name.startswith("torch_geometric")
             or name.startswith("pytorch_lightning")
+            or name == "pymatgen"
+            or name.startswith("pymatgen.")
+            or name == "scipy"
+            or name.startswith("scipy.")
+            or name == "qdyn.calc_common"
+            or name == "qdyn.output_postprocess"
+            or name == "qdyn.input"
+            or name == "qdyn.tools.run_software"
+            or name == "qdyn.tools.scf"
         ):
             sys.modules.pop(name, None)
 
@@ -50,6 +60,39 @@ def hamgnn_wrapper_module(monkeypatch):
     pl_module = ModuleType("pytorch_lightning")
     pl_module.seed_everything = lambda seed: None
     monkeypatch.setitem(sys.modules, "pytorch_lightning", pl_module)
+
+    scipy_module = ModuleType("scipy")
+    scipy_linalg = ModuleType("scipy.linalg")
+    scipy_linalg.eigh = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "scipy", scipy_module)
+    monkeypatch.setitem(sys.modules, "scipy.linalg", scipy_linalg)
+
+    calc_common = ModuleType("qdyn.calc_common")
+
+    @contextmanager
+    def change_dir(path):
+        yield
+
+    calc_common.change_dir = change_dir
+    calc_common.select_orbitals = lambda software, nao_max: {"S": [0]}
+    monkeypatch.setitem(sys.modules, "qdyn.calc_common", calc_common)
+
+    output_postprocess = ModuleType("qdyn.output_postprocess")
+    output_postprocess.read_scfout = lambda path: {}
+    output_postprocess.calc_openmx_HK_SK_gamma = lambda data, tdt=False: None
+    monkeypatch.setitem(sys.modules, "qdyn.output_postprocess", output_postprocess)
+
+    input_module = ModuleType("qdyn.input")
+    input_module.HamGNNInputT = object
+    monkeypatch.setitem(sys.modules, "qdyn.input", input_module)
+
+    run_software_module = ModuleType("qdyn.tools.run_software")
+    run_software_module.run_software = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "qdyn.tools.run_software", run_software_module)
+
+    scf_module = ModuleType("qdyn.tools.scf")
+    scf_module.SCFLogger = object
+    monkeypatch.setitem(sys.modules, "qdyn.tools.scf", scf_module)
 
     hamgnn_main = ModuleType("hamgnn.main")
     hamgnn_main.build_hamgnn_model = lambda config: (None, None, None)
@@ -83,6 +126,7 @@ def hamgnn_wrapper_module(monkeypatch):
 
     psutil_module = ModuleType("psutil")
     psutil_module.Process = DummyPsutilProcess
+    psutil_module.pid_exists = lambda pid: False
 
     monkeypatch.setitem(
         sys.modules,
@@ -96,12 +140,37 @@ def hamgnn_wrapper_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "hamgnn.models.Model", hamgnn_model)
     monkeypatch.setitem(sys.modules, "hamgnn.models.hamgnn_output", hamgnn_output)
     monkeypatch.setitem(sys.modules, "psutil", psutil_module)
+    element_symbols = {
+        1: "H",
+        6: "C",
+        7: "N",
+        8: "O",
+        14: "Si",
+    }
+    element_numbers = {
+        symbol: number for number, symbol in element_symbols.items()
+    }
+
+    class DummyElement:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            self.Z = element_numbers[symbol]
+
+        @classmethod
+        def from_Z(cls, number):
+            return cls(element_symbols[number])
+
+    pymatgen_module = ModuleType("pymatgen")
+    pymatgen_core = ModuleType("pymatgen.core")
+    pymatgen_core.Element = DummyElement
+    monkeypatch.setitem(sys.modules, "pymatgen", pymatgen_module)
+    monkeypatch.setitem(sys.modules, "pymatgen.core", pymatgen_core)
 
     module = importlib.import_module("qdyn.ml_tools.hamgnn_wrapper")
     return module
 
 
-def test_mlscfsolver_uses_spawn_and_preserves_input_batch_size(
+def test_mlscfsolver_uses_spawn_and_aligns_input_batch_size(
     monkeypatch, tmp_path: Path, hamgnn_wrapper_module
 ):
     MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
@@ -150,18 +219,514 @@ def test_mlscfsolver_uses_spawn_and_preserves_input_batch_size(
         nproc=2,
         threads_per_proc=3,
     )
-    solver.close()
+
+    assert context_calls == []
+    with solver:
+        pass
 
     assert context_calls == ["spawn"]
-    assert mlh_input.batch_size == 5
+    assert mlh_input.batch_size == 4
     assert solver.batch_size == 4
     assert dummy_ctx.pool_kwargs["processes"] == 2
     assert dummy_ctx.pool_kwargs["initializer"] is hamgnn_wrapper_module.init_spawn_worker
     assert dummy_ctx.pool_kwargs["initargs"][0] == "openmx"
     assert dummy_ctx.pool_kwargs["initargs"][1] is not mlh_input
-    assert dummy_ctx.pool_kwargs["initargs"][1].batch_size == 5
-    assert dummy_ctx.pool_kwargs["initargs"][3] == 3
-    assert dummy_ctx.pool_kwargs["initargs"][4] == 2
+    assert dummy_ctx.pool_kwargs["initargs"][1].batch_size == 4
+    assert dummy_ctx.pool_kwargs["initargs"][3] == 2
+    assert dummy_ctx.pool_kwargs["initargs"][4] == 3
+    assert dummy_ctx.pool_kwargs["initargs"][5] == 2
+
+
+def test_mlscfsolver_close_is_idempotent(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    )
+
+    solver.__enter__()
+    solver.close()
+    solver.close()
+
+    assert dummy_ctx.pool.close_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.pool.terminate_calls == 0
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_mlscfsolver_init_failure_shuts_down_manager(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            raise RuntimeError("pool boom")
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    )
+
+    with pytest.raises(RuntimeError, match="pool boom"):
+        with solver:
+            pass
+
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_mlscfsolver_run_requires_context(
+    tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    )
+    solver.task_count = 1
+
+    with pytest.raises(RuntimeError, match="must be used as a context manager"):
+        solver.run()
+
+
+def test_mlscfsolver_context_exit_closes_pool(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    with MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    ):
+        pass
+
+    assert dummy_ctx.pool.close_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.pool.terminate_calls == 0
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_mlscfsolver_context_exit_terminates_pool_on_error(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    with pytest.raises(ValueError, match="context boom"):
+        with MLSCFSolver(
+            software="openmx",
+            mlh_input=_make_hamgnn_input(batch_size=4),
+            model_path=str(model_path),
+            logger=SimpleNamespace(),
+            nproc=2,
+            threads_per_proc=1,
+        ):
+            raise ValueError("context boom")
+
+    assert dummy_ctx.manager.shutdown_calls == 1
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.pool.close_calls == 0
+
+
+def test_mlscfsolver_context_exit_raises_cleanup_error_on_error(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+            raise RuntimeError("terminate boom")
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to clean up MLSCFSolver resources") as exc_info:
+        with MLSCFSolver(
+            software="openmx",
+            mlh_input=_make_hamgnn_input(batch_size=4),
+            model_path=str(model_path),
+            logger=SimpleNamespace(),
+            nproc=2,
+            threads_per_proc=1,
+        ):
+            raise ValueError("context boom")
+
+    assert isinstance(exc_info.value.__context__, ValueError)
+    assert str(exc_info.value.__context__) == "context boom"
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_mlscfsolver_close_failure_terminates_and_shutdowns_manager(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+            raise RuntimeError("close boom")
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    )
+    solver.__enter__()
+
+    with pytest.raises(RuntimeError, match="Failed to clean up MLSCFSolver resources"):
+        solver.close()
+
+    assert dummy_ctx.pool.close_calls == 1
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+    solver.close()
+
+    assert dummy_ctx.pool.close_calls == 1
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_mlscfsolver_terminate_failure_still_joins_and_shutdowns_manager(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+            raise RuntimeError("terminate boom")
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, **kwargs):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=4),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=2,
+        threads_per_proc=1,
+    )
+    solver.__enter__()
+
+    with pytest.raises(RuntimeError, match="Failed to clean up MLSCFSolver resources"):
+        solver._cleanup_resources(terminate=True)
+
+    assert dummy_ctx.pool.close_calls == 0
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1
+
+    solver.close()
+
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1
 
 
 def test_init_spawn_worker_populates_orbital_basis(
@@ -185,6 +750,7 @@ def test_init_spawn_worker_populates_orbital_basis(
         software="openmx",
         mlh_input=mlh_input,
         model_path=str(model_path),
+        nproc=1,
         threads_per_proc=1,
         batch_per_proc=2,
         eigen_dtype=hamgnn_wrapper_module.np.float32,
@@ -213,7 +779,7 @@ def test_set_spawn_worker_cpu_affinity_uses_pool_worker_index(
         lambda: SimpleNamespace(_identity=(2,)),
     )
 
-    hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(threads_per_proc=2)
+    hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(nproc=3, threads_per_proc=2)
 
     assert affinity_calls == [[2, 3]]
 
@@ -236,7 +802,10 @@ def test_set_spawn_worker_cpu_affinity_raises_when_cpu_range_exceeds_available(
     )
 
     with pytest.raises(RuntimeError, match="Failed to bind HamGNN spawn worker 2"):
-        hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(threads_per_proc=2)
+        hamgnn_wrapper_module._set_spawn_worker_cpu_affinity(
+            nproc=3,
+            threads_per_proc=2,
+        )
 
 
 def test_mlscfsolver_run_chunks_tasks_and_logs_progress(
@@ -344,7 +913,8 @@ def test_mlscfsolver_run_chunks_tasks_and_logs_progress(
     ]
     solver.task_count = 4
 
-    solver.run()
+    with solver:
+        solver.run()
 
     assert len(dummy_pool.calls) == 2
     first_steps = dummy_pool.calls[0][1][0]
@@ -361,3 +931,97 @@ def test_mlscfsolver_run_chunks_tasks_and_logs_progress(
         (3, "scf_0004", "prehamgnn"),
         (3, "scf_0004", "posthamgnn"),
     ]
+
+
+def test_mlscfsolver_run_error_terminates_pool_and_shutdowns_manager(
+    monkeypatch, tmp_path: Path, hamgnn_wrapper_module
+):
+    from ase import Atoms
+    MLSCFSolver = hamgnn_wrapper_module.MLSCFSolver
+
+    model_path = tmp_path / "model.ckpt"
+    model_path.write_text("stub", encoding="utf-8")
+
+    class DummyResult:
+        def ready(self):
+            return True
+
+        def get(self):
+            raise ValueError("worker boom")
+
+    class DummyPool:
+        def __init__(self):
+            self.close_calls = 0
+            self.join_calls = 0
+            self.terminate_calls = 0
+
+        def apply_async(self, func, args):
+            return DummyResult()
+
+        def close(self):
+            self.close_calls += 1
+
+        def join(self):
+            self.join_calls += 1
+
+        def terminate(self):
+            self.terminate_calls += 1
+
+    class DummyManager:
+        def __init__(self):
+            self.shutdown_calls = 0
+
+        def Queue(self):
+            return Queue()
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class DummyCtx:
+        def __init__(self):
+            self.pool = DummyPool()
+            self.manager = DummyManager()
+
+        def Manager(self):
+            return self.manager
+
+        def Pool(self, processes, initializer=None, initargs=()):
+            return self.pool
+
+    dummy_ctx = DummyCtx()
+    monkeypatch.setattr(
+        "qdyn.ml_tools.hamgnn_wrapper.multiprocessing.get_context",
+        lambda method: dummy_ctx,
+    )
+    monkeypatch.setattr("qdyn.ml_tools.hamgnn_wrapper.time.sleep", lambda _: None)
+
+    solver = MLSCFSolver(
+        software="openmx",
+        mlh_input=_make_hamgnn_input(batch_size=2),
+        model_path=str(model_path),
+        logger=SimpleNamespace(),
+        nproc=1,
+        threads_per_proc=1,
+    )
+
+    solver.tasks = [
+        (0, tmp_path / "scf_0001", Atoms("H", positions=[[0.0, 0.0, 0.0]])),
+    ]
+    solver.task_count = 1
+
+    with pytest.raises(RuntimeError, match="MLSCFSolver.run failed: worker boom"):
+        with solver:
+            solver.run()
+
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.pool.close_calls == 0
+    assert dummy_ctx.manager.shutdown_calls == 1
+    assert solver.tasks == []
+    assert solver.task_count == 0
+
+    solver.close()
+
+    assert dummy_ctx.pool.terminate_calls == 1
+    assert dummy_ctx.pool.join_calls == 1
+    assert dummy_ctx.manager.shutdown_calls == 1

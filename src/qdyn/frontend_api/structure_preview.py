@@ -8,11 +8,49 @@ StructurePreviewPayload suitable for frontend 3D visualization.
 import io
 import logging
 
-from ..calc_common import read_stru
+import ase.io
+import numpy as np
+from ase import Atoms
+
+from ..calc_common import has_valid_cell, read_stru
 from ..tools.seldyn import extract_constraint_mask
 from .models import StructurePreviewPayload
 
 logger = logging.getLogger(__name__)
+
+def atoms_to_vasp_text(atoms: Atoms) -> str:
+    """Serialize ASE atoms to POSCAR/VASP text without reordering atoms."""
+    buf = io.StringIO()
+    ase.io.write(
+        buf,
+        atoms,
+        format="vasp",
+        direct=True,
+        vasp5=True,
+        sort=False,
+    )
+    return buf.getvalue()
+
+
+def build_preview_from_atoms(atoms: Atoms) -> StructurePreviewPayload:
+    """Build the additive preview payload from an ASE Atoms object."""
+    preview_atoms = atoms
+
+    species: list[str] = preview_atoms.get_chemical_symbols()
+    cart_coords: list[list[float]] = preview_atoms.get_positions().tolist()
+    lattice: list[list[float]] = preview_atoms.cell.tolist()
+    pbc: list[bool] = atoms.pbc.tolist()
+    constraint_mask = extract_constraint_mask(preview_atoms)
+
+    return StructurePreviewPayload(
+        species=species,
+        cart_coords=cart_coords,
+        lattice=lattice,
+        pbc=pbc,
+        constraint_mask=constraint_mask,
+        format="vasp",
+        content=atoms_to_vasp_text(preview_atoms),
+    )
 
 
 def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
@@ -24,8 +62,9 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
     - No constraints -> constraint_mask = None
 
     Non-periodic structures:
-    - pbc from atoms.pbc
-    - If all pbc=False, lattice may be zero matrix; renderer skips cell wireframe
+    - pbc is preserved from the source atoms.
+    - If the source has no valid cell, a display-only bounding cell is used
+      for legacy coordinates/lattice and VASP preview content.
 
     Args:
         content: Structure file content as a string.
@@ -45,18 +84,4 @@ def build_preview(content: str, fmt: str = "vasp") -> StructurePreviewPayload:
     if atoms is None:
         raise ValueError("Failed to parse structure: ASE returned None")
 
-    species: list[str] = atoms.get_chemical_symbols()
-    cart_coords: list[list[float]] = atoms.get_positions().tolist()
-    lattice: list[list[float]] = atoms.cell.tolist()
-    pbc: list[bool] = atoms.pbc.tolist()
-
-    # Extract constraint mask from ASE constraints
-    constraint_mask = extract_constraint_mask(atoms)
-
-    return StructurePreviewPayload(
-        species=species,
-        cart_coords=cart_coords,
-        lattice=lattice,
-        pbc=pbc,
-        constraint_mask=constraint_mask,
-    )
+    return build_preview_from_atoms(atoms)

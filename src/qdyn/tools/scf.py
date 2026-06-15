@@ -1,4 +1,4 @@
-"""
+﻿"""
 SCF (Self-Consistent Field) calculation module for NAMD workflow.
 
 This module handles static SCF calculations on structures extracted from NVE
@@ -13,11 +13,11 @@ import re
 import shutil
 from copy import deepcopy
 from pathlib import Path
+from typing import TypedDict
 
 from ase import Atoms
 from jobflow.core.job import job, Job
 import numpy as np
-from pydantic import BaseModel
 
 from ..calc_common import (
     write_stru, read_strus, 
@@ -91,6 +91,12 @@ class DFTSCFSolver:
         self.task_count = 0
         pass
 
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc, tb):
+        pass
+
     def add(self, step: int, job_dir: Path, stru: Atoms):
         self.tasks.append((step, job_dir, stru))
         self.task_count += 1
@@ -118,7 +124,7 @@ class DFTSCFSolver:
         self.task_count = 0
 
 
-class TrajInfo(BaseModel):
+class TrajInfo(TypedDict):
     path: str
     format: str
     start: int
@@ -269,11 +275,13 @@ def qdyn_scf_cpu(
     software = software.lower()
     calc = parameters.calculator
     scf_step = parameters.scf_step
-    frame_start = traj.start
+    frame_start = traj['start']
 
-    strus = read_strus(traj.format, traj.path)
+    strus = read_strus(traj['format'], traj['path'])
     strus = strus[-scf_step:]
-    strus = strus[traj.start:traj.stop]
+    strus = strus[traj['start']:traj['stop']]
+    if not strus:
+        raise ValueError("SCF trajectory selection contains no frames.")
     n_frames = len(strus)
     nstep = n_frames - 1 # nstep >= 0
     scf_end = nstep if not has_tail else n_frames
@@ -344,12 +352,13 @@ def qdyn_scf_cpu(
     dftinputs.write(stru=False)
 
     if prepare_input_only:
+        scf_logger.close()
         return {
             'run_dir': str(Path.cwd()),
             'software': software,
             'software_dft': software_dft,
         }
-
+    
     # Task working directory
     task_dir = Path.cwd()
     numdigit = len(str(scf_step))
@@ -358,41 +367,41 @@ def qdyn_scf_cpu(
     chgcar = CHG_FNAME[software_dft]
     files_to_copy = INPUT_FNAMES[software_dft].difference({STRU_FNAME_MAPPING[software_dft]})
 
-    # Run SCF calculations sequentially with CHGCAR passing
-    for idx, stru in enumerate(strus[:scf_end]):
-        if idx <= last_step:
-            # Skip already completed steps
-            # TODO: retry hasn't completed yet
-            continue
+    with scf_solver:
+        # Run SCF calculations sequentially with CHGCAR passing
+        for idx, stru in enumerate(strus[:scf_end]):
+            if idx <= last_step:
+                # Skip already completed steps
+                # TODO: retry hasn't completed yet
+                continue
 
-        # Create subdir, copy input files and write structure file
-        global_idx = frame_start + idx + 1
-        subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
-        if subdir.is_dir(): # optional
-            shutil.rmtree(subdir)
-        subdir.mkdir(exist_ok=True)
-        for fname in files_to_copy:
-            shutil.copy2(task_dir / fname, subdir / fname)
-        write_stru(
-            subdir / STRU_FNAME_MAPPING[software_dft],
-            stru,
-            stru_format=STRU_FORMAT_MAPPING[software_dft],
-            extras=dftinputs.stru_extras
-        )
+            # Create subdir, copy input files and write structure file
+            global_idx = frame_start + idx + 1
+            subdir = task_dir / f"scf_{global_idx:0{numdigit}d}"
+            if subdir.is_dir(): # optional
+                shutil.rmtree(subdir)
+            subdir.mkdir(exist_ok=True)
+            for fname in files_to_copy:
+                shutil.copy2(task_dir / fname, subdir / fname)
+            write_stru(
+                subdir / STRU_FNAME_MAPPING[software_dft],
+                stru,
+                stru_format=STRU_FORMAT_MAPPING[software_dft],
+                extras=dftinputs.stru_extras
+            )
 
-        # Copy CHGCAR from previous successful calculation for faster convergence
-        if prev_chgcar and prev_chgcar.is_file():
-            shutil.copy2(prev_chgcar, subdir / chgcar)
+            # Copy CHGCAR from previous successful calculation for faster convergence
+            if prev_chgcar and prev_chgcar.is_file():
+                shutil.copy2(prev_chgcar, subdir / chgcar)
 
-        # run scf solver
-        scf_solver.add(idx, subdir, stru)
+            # run scf solver
+            scf_solver.add(idx, subdir, stru)
 
-        # Update CHGCAR
-        prev_chgcar = subdir / chgcar
-    
-    # run solver for tail frames
-    scf_solver.run()
-    scf_solver.close()
+            # Update CHGCAR
+            prev_chgcar = subdir / chgcar
+
+        # run solver for tail frames
+        scf_solver.run()
     del scf_solver
 
 
@@ -425,7 +434,7 @@ def qdyn_scf_cpu(
                 )
                 results.append(
                     pool.apply_async(
-                        overlap_run_software, 
+                        overlap_run_software,
                         args=(subdir, olapdir, software_dft, threads_per_process)
                     )
                 )
@@ -437,7 +446,8 @@ def qdyn_scf_cpu(
                 result.get()
 
                 scf_logger(step=idx, global_idx=subdir.name, category='overlap')
-    
+
+    # cleanup
     scf_logger.close()
 
     return {

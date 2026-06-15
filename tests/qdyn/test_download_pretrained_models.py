@@ -13,7 +13,7 @@ from scripts import download_pretrained_models as script
 def test_pretrained_model_filenames_match_params():
     assert script.nequip_pretrained_model_filename(
         "mir-group/NequIP-OAM-L", "cuda"
-    ) == "mir-group__NequIP-OAM-L_cuda__0.1.nequip.pt2"
+    ) == "mir-group__NequIP-OAM-L_cuda__0.1.nequip.pth"
     assert script.mace_pretrained_model_filename("small") == "2023-12-10-mace-128-L0_energy_epoch-249.model"
 
 
@@ -51,7 +51,7 @@ def test_download_script_downloads_selected_targets(monkeypatch, tmp_path: Path)
     ])
 
     assert rc == 0
-    assert (root / "mir-group__NequIP-OAM-L_cpu__0.1.nequip.pt2").is_file()
+    assert (root / "mir-group__NequIP-OAM-L_cpu__0.1.nequip.pth").is_file()
     assert (root / "2023-12-10-mace-128-L0_energy_epoch-249.model").is_file()
     assert calls == [
         ("mir-group/NequIP-OAM-L", "cpu"),

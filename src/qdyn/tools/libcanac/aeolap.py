@@ -234,7 +234,7 @@ def test(bmin=5,bmax=40,dir0='./'):
         print ("Please check NormalCAR, POTCAR or WAVECAR")
         print ("Pseudo Overlap \n",td_olap)
         print ("AE Overlap \n",td_olap+aug_olap)
-        sys.exit(1)
+        raise
     else:
         print ("Qij checking completed")
         
@@ -251,7 +251,7 @@ def realtime_checking(s_olap,dir):
         print ("S_overlap is not a identity matrix")
         print ("Please check NormalCAR, POTCAR or WAVECAR")
         print ("Please check covergency in SCF calculation")
-        sys.exit(1)
+        raise
 
     
      

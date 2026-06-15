@@ -14,7 +14,8 @@ from .ml_tools.mlff_wrapper import (
     nequip_pretrained_model_filename,
     hamgnn_pretrained_model_filename,
 )
-from .calc_common import read_stru
+from .calc_common import has_valid_cell, read_stru
+from .params import SUPPORTED_STRU_FORMATS, SUPPORTED_TRAJ_FORMATS
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -61,6 +62,11 @@ ML_SOFTWARE_PAIRS = {
     "mace": MACEInputT,
     "hamgnn": HamGNNInputT,
 }
+_STEP_ORDER_INDEX = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
+
+
+def _format_list(formats: Collection[str]) -> str:
+    return ", ".join(sorted(formats))
 
 
 def _expand_steps_for_validation(steps: Collection[str]) -> list[str]:
@@ -494,9 +500,8 @@ def validate_workflow_input(
 
     # step contiguity check (namd only; other methods reserved for future use)
     if method == "namd":
-        key_map = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
         expanded_steps = _expand_steps_for_validation(input.steps)
-        step_int = sorted(key_map[s] for s in expanded_steps)
+        step_int = sorted(_STEP_ORDER_INDEX[s] for s in expanded_steps)
         for i in range(1, len(step_int)):
             if step_int[i] != step_int[i - 1] + 1:
                 raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")
@@ -519,16 +524,34 @@ def validate_workflow_input(
 
     # stru / stru_hash check
     elif stru:
+        if stru_format not in SUPPORTED_STRU_FORMATS:
+            raise ValidationError(
+                f"Structure format '{stru_format}' is not supported for "
+                "single-frame structure input. Supported formats: "
+                f"{_format_list(SUPPORTED_STRU_FORMATS)}."
+            )
         try:
             with io.StringIO(stru) as s:
-                read_stru(stru_format, s)
+                atoms = read_stru(stru_format, s)
         except Exception as exc:
             raise ValidationError(
                 f"Provided structure string could not be parsed "
                 f"by ASE with format '{stru_format}'."
             ) from exc
+        if not has_valid_cell(atoms):
+            raise ValidationError(
+                "Provided structure has no valid periodic cell. Please upload "
+                "a structure format that includes real lattice vectors, such as "
+                "vasp, cif, extxyz with cell, or openmx-dat."
+            )
 
     elif stru_hash:
+        if stru_format not in SUPPORTED_TRAJ_FORMATS:
+            raise ValidationError(
+                f"Trajectory format '{stru_format}' is not supported for "
+                "trajectory hash input. Supported formats: "
+                f"{_format_list(SUPPORTED_TRAJ_FORMATS)}."
+            )
         if not active_pool.user_file_exists("trajectory", stru_hash):
             raise ValidationError(
                 f"Structure with hash '{stru_hash}' not found in the active pool."

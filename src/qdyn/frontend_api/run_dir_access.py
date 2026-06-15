@@ -27,10 +27,59 @@ class FileInfo:
 
 @dataclass
 class ScfSubdirStatus:
-    """Status of a single scf_* subdirectory."""
+    """Status of a single scf_* subdirectory.
 
-    status: str  # "ENDED", "FAIL", "RUNNING", "PENDING"
+    Status is derived exclusively from root-level qdyn_scf.log categories:
+    ENDED (normal/posthamgnn/overlap), RUNNING (prehamgnn/hamgnn), or PENDING.
+    """
+
+    status: str  # "ENDED", "RUNNING", "PENDING"
     file_count: int
+
+
+_SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
+_SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
+
+
+def _scf_statuses_from_log(log_path: Path) -> dict[str, str]:
+    """Parse qdyn_scf.log and return per-frame status dict.
+
+    Reads data rows (skipping the 2-line header) and maps each global_idx to
+    its final status.  ENDED takes priority over RUNNING for the same frame.
+
+    Returns an empty dict if the log is missing, unreadable, or malformed.
+    """
+    statuses: dict[str, str] = {}
+    if not log_path.is_file():
+        return statuses
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            lines = f.readlines()
+        for line in lines[2:]:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            global_idx = parts[1]
+            category = parts[2]
+            if category in _SCF_COMPLETED_LOG_CATEGORIES:
+                statuses[global_idx] = "ENDED"
+            elif category in _SCF_RUNNING_LOG_CATEGORIES:
+                if statuses.get(global_idx) != "ENDED":
+                    statuses[global_idx] = "RUNNING"
+    except OSError:
+        return {}
+    return statuses
+
+
+def _infer_local_scf_status(
+    subdir: Path,
+    status_from_log: dict[str, str],
+) -> str:
+    """Look up a frame's status from the log-derived status map.
+
+    Returns PENDING for any frame not present in the map.
+    """
+    return status_from_log.get(subdir.name, "PENDING")
 
 
 class RunDirAccess(ABC):
@@ -96,14 +145,16 @@ class RunDirAccess(ABC):
 
     @abstractmethod
     def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
-        """Scan all scf_* subdirs for status markers in one pass.
+        """Scan all scf_* subdirs for SCF frame status from root qdyn_scf.log categories.
 
         Returns a dict keyed by subdirectory name (e.g. "scf_000") with
         ``ScfSubdirStatus`` values containing the detected status
-        (ENDED / FAIL / RUNNING / PENDING) and the file count.
+        (ENDED / RUNNING / PENDING) and the file count.
 
+        Status is derived solely from qdyn_scf.log category records in the
+        root run directory.  No marker files or product files are examined.
         For remote workers this executes a single SSH command instead of
-        O(N) individual ``test -f`` calls.
+        O(N) individual round-trips.
         """
         ...
 
@@ -222,18 +273,11 @@ class LocalRunDirAccess(RunDirAccess):
 
     def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
         result: Dict[str, ScfSubdirStatus] = {}
+        status_from_log = _scf_statuses_from_log(self._dir / "qdyn_scf.log")
         for d in sorted(self._dir.iterdir()):
             if not d.is_dir() or not d.name.startswith("scf_"):
                 continue
-            # Detect status from marker files
-            if (d / "ENDED").is_file():
-                status = "ENDED"
-            elif (d / "FAIL").is_file():
-                status = "FAIL"
-            elif (d / "RUNNING").is_file():
-                status = "RUNNING"
-            else:
-                status = "PENDING"
+            status = _infer_local_scf_status(d, status_from_log)
             file_count = sum(1 for e in d.iterdir() if e.is_file())
             result[d.name] = ScfSubdirStatus(status=status, file_count=file_count)
         return result
@@ -434,21 +478,31 @@ class RemoteRunDirAccess(RunDirAccess):
     def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
         """Scan all scf_* subdirs in a single SSH command.
 
-        Runs a shell loop that checks marker files (ENDED, FAIL,
-        RUNNING) and counts files in each scf_* directory.  Output is
-        parsed from TSV lines: ``name\\tstatus\\tfile_count``.
+        Reads the root-level qdyn_scf.log with awk to derive each frame's
+        status (ENDED/RUNNING/PENDING) from log categories only.  No marker
+        files or product files are examined.  File counts are obtained via
+        ``find -maxdepth 1 -type f``.  Output is parsed from TSV lines:
+        ``name\\tstatus\\tfile_count``.
         """
         qdir = shlex.quote(self._dir)
-        # The shell snippet iterates over scf_* dirs, checks marker files
-        # in priority order, counts regular files, and emits TSV.
+        # awk processes qdyn_scf.log once per directory name; ENDED takes
+        # priority over RUNNING for the same frame.
+        # The awk program is placed in single quotes so shell does not expand $2/$3;
+        # the f-string only interpolates {qdir}.
+        awk_prog = (
+            'NR > 2 && $2 == name { '
+            'if ($3 == "normal" || $3 == "posthamgnn" || $3 == "overlap") { st="ENDED" } '
+            'else if (($3 == "prehamgnn" || $3 == "hamgnn") && st != "ENDED") { st="RUNNING" } '
+            '} END { if (st != "") print st; else print "PENDING" }'
+        )
         cmd = (
+            f'log={qdir}/qdyn_scf.log; '
             f"for d in {qdir}/scf_*/; do "
             f'[ -d "$d" ] || continue; '
             f'name=$(basename "$d"); '
-            f'if [ -f "$d/ENDED" ]; then s=ENDED; '
-            f'elif [ -f "$d/FAIL" ]; then s=FAIL; '
-            f'elif [ -f "$d/RUNNING" ]; then s=RUNNING; '
-            f"else s=PENDING; fi; "
+            f'if [ -f "$log" ]; then '
+            f"s=$(awk -v name=\"$name\" '{awk_prog}' \"$log\"); "
+            f'else s=PENDING; fi; '
             f'c=$(find "$d" -maxdepth 1 -type f 2>/dev/null | wc -l); '
             f'echo "$name\t$s\t$c"; '
             f"done"
@@ -464,7 +518,7 @@ class RemoteRunDirAccess(RunDirAccess):
                 parts = line.split("\t")
                 if len(parts) >= 3:
                     name = parts[0]
-                    status = parts[1]
+                    status = parts[1].strip()
                     try:
                         file_count = int(parts[2].strip())
                     except ValueError:
