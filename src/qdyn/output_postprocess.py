@@ -183,7 +183,7 @@ def _resolve_cache_paths(
     atoms_key = (
         'all'
         if which_atoms is None
-        else '-'.join(map(str, np.asarray(which_atoms, dtype=int).tolist())) # TODO: atoms_key too long
+        else str(sum(which_atoms)) # TODO: use sum as a simple identifier
     )
     cache_suffix = (
         f".{software}.spin{which_spin}.k{which_kpoint}.atoms_{atoms_key}.n{n_run_dirs}"
