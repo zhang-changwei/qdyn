@@ -188,13 +188,13 @@ def plot_ksen_weight(
     dt = parameters.md_dt
     which_spin = parameters.adv.ispin # 1-based
     which_kpoint = parameters.adv.ikpt # 1-based
-    which_atoms = parameters.adv.which_atoms
+    which_atoms = parameters.adv.which_atoms # 1-based
     if which_atoms is not None:
         which_atoms = np.asarray(which_atoms, dtype=int)
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data
-    Enr, Wht = extract_tdeigenvalues_with_weights(
+    enr, wht = extract_tdeigenvalues_with_weights(
         software=software,
         run_dirs=run_dirs,
         which_spin=which_spin,
@@ -203,70 +203,65 @@ def plot_ksen_weight(
         nproc=nproc,
     )
 
-    if Enr.ndim != 2 or Wht.ndim != 2:
+    if enr.shape != wht.shape:
         raise ValueError(
-            f"Expected Enr/Wht to be 2D arrays after spin/k-point selection, got {Enr.shape} and {Wht.shape}."
+            f"enr and wht must have the same shape, got {enr.shape} and {wht.shape}."
         )
-    if Enr.shape != Wht.shape:
-        raise ValueError(
-            f"Enr and Wht must have the same shape, got {Enr.shape} and {Wht.shape}."
-        )
-    if Enr.size == 0:
-        raise ValueError("Enr/Wht is empty; cannot generate KS energy-weight plot.")
+    if enr.size == 0:
+        raise ValueError("enr/wht is empty; cannot generate KS energy-weight plot.")
 
     # Derive dimensions from array shapes
-    nsw, nband = Enr.shape
+    nsw, nband = enr.shape
 
-    # Create a time grid with the exact same shape as Enr/Wht for scatter().
+    # Create a time grid with the exact same shape as enr/wht for scatter().
     T = np.broadcast_to((np.arange(nsw, dtype=float) * dt)[:, np.newaxis], (nsw, nband))
 
-    vbm_idx = vbm -1
-    cbm_idx = cbm -1
+    vbm_idx = vbm - 1
+    cbm_idx = cbm - 1
 
     # Create figure
-    fig = plt.figure()
-    fig.set_size_inches(*figsize)
-
+    fig = plt.figure(figsize=figsize)
     ax = plt.subplot()
 
     # Scatter plot with weight coloring
-    img = ax.scatter(
-        T.ravel(),
-        Enr.ravel(),
-        s=1.0,
-        c=Wht.ravel(),
-        lw=0.0,
-        zorder=1,
-        vmin=Wht.min(),
-        vmax=Wht.max(),
-        cmap='seismic',
-    )
+    if which_atoms is None:
+        img = ax.scatter(
+            T.ravel(), enr.ravel(),
+            s=1.0, c='k', alpha=0.8, lw=0.0, zorder=1,
+        )
+    else:
+        img = ax.scatter(
+            T.ravel(), enr.ravel(),
+            s=1.0, c=wht.ravel(), lw=0.0, zorder=1,
+            vmin=wht.min(), vmax=wht.max(),
+            cmap='seismic',
+        )
 
-    # Add colorbar
-    divider = make_axes_locatable(ax)
-    ax_cbar = divider.append_axes('right', size='5%', pad=0.02)
-    cbar = plt.colorbar(img, cax=ax_cbar, orientation='vertical')
+        # Add colorbar
+        divider = make_axes_locatable(ax)
+        ax_cbar = divider.append_axes('right', size='5%', pad=0.02)
+        cbar = fig.colorbar(img, cax=ax_cbar, orientation='vertical')
 
-    if cbar_labels is not None:
-        if len(cbar_labels) != 2:
-            raise ValueError(
-                f"cbar_labels must contain exactly 2 labels, got {len(cbar_labels)}."
-            )
-        cbar.set_ticks([Wht.max(), Wht.min()])
-        cbar.set_ticklabels(cbar_labels)
+        if cbar_labels is not None:
+            if len(cbar_labels) != 2:
+                raise ValueError(
+                    f"cbar_labels must contain exactly 2 labels, got {len(cbar_labels)}."
+                )
+            cbar.set_ticks([wht.max(), wht.min()])
+            cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    ymin = min(Enr[0, vbm_idx], Enr[0, cbm_idx]) - 0.5
-    ymax = max(Enr[0, vbm_idx], Enr[0, cbm_idx]) + 0.5
+    ymin = enr[0, vbm_idx] - 0.5
+    ymax = enr[0, cbm_idx] + 0.5
     ax.set_ylim(ymin, ymax)
 
     # Labels and formatting
-    ax.set_xlabel('Time [fs]', labelpad=5)
-    ax.set_ylabel('Energy [eV]', labelpad=8)
+    ax.set_xlabel('Time (fs)', labelpad=5)
+    ax.set_ylabel('Energy (eV)', labelpad=8)
     ax.tick_params(which='both', labelsize='x-small')
 
-    plt.tight_layout(pad=0.2)
-    plt.savefig(filename, dpi=dpi)
+    fig.tight_layout(pad=0.2)
+    fig.savefig(filename, transparent=True, dpi=dpi)
     plt.close()
 
     return os.path.abspath(filename)
