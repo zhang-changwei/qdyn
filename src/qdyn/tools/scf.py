@@ -306,7 +306,7 @@ def qdyn_scf_cpu(
         )
         postprocess = False
         # logger and solver
-        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        scf_logger = SCFLogger(nstep=scf_end, retry=retry)
         last_step = scf_logger.cur_step
         scf_solver = DFTSCFSolver(
             software=software_dft,
@@ -339,7 +339,7 @@ def qdyn_scf_cpu(
         postprocess = True
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
-        scf_logger = SCFLogger(nstep=n_frames, retry=retry)
+        scf_logger = SCFLogger(nstep=scf_end, retry=retry)
         last_step = scf_logger.cur_step
         scf_solver = MLSCFSolver(
             software=software_dft,

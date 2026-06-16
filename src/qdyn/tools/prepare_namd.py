@@ -1,14 +1,14 @@
 import os
 from pathlib import Path
 import shutil
-from typing import List, Dict, Tuple, Any
+from typing import Any
 
 import numpy as np
 from jobflow.core.job import job
 
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
-from ..output_postprocess import extract_wht_with_cache, extract_band_edges
+from ..output_postprocess import extract_tdeigenvalues_with_weights, extract_band_edges
 from .canac import collect_tdolap_output, extract_nacs
 from .dephase import calculate_dephasing_time
 
@@ -17,11 +17,11 @@ from .dephase import calculate_dephasing_time
 def qdyn_pre_namd(
     software: str,
     parameters: PreNAMDInputT,
-    run_dirs: List[str],
+    run_dirs: list[str],
     nproc: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run NAMD preprocessing: extract eigenvalues and NACs from SCF results.
 
     Args:
@@ -78,14 +78,7 @@ def qdyn_pre_namd(
         images.append(ksen_path)
 
     # basics
-    is_gamma_ver = False
-    if software_lower == 'vasp':
-        with open(f'{all_scf_dirs[0]}/OUTCAR', 'r') as f:
-            head = f.readline()
-            if head.strip().endswith('gamma-only'):
-                is_gamma_ver = True
-    elif software_lower in ['abacus', 'hamgnn', 'openmx', 'siesta']:
-        is_gamma_ver = True
+    gamma = is_gamma_ver(software_lower, all_scf_dirs[0])
 
     bmin = parse_band_index(parameters.bmin, vbm, nbands)
     bmax = parse_band_index(parameters.bmax, vbm, nbands)
@@ -93,7 +86,7 @@ def qdyn_pre_namd(
     out_traj = collect_tdolap_output(
         run_dirs=all_scf_dirs,
         software=software_lower,  # type: ignore
-        is_gamma_ver=is_gamma_ver,
+        is_gamma_ver=gamma,
         is_alle=parameters.adv.alle,
         bmin=bmin,
         bmax=bmax,
@@ -140,6 +133,15 @@ def qdyn_pre_namd(
     }
 
 
+def is_gamma_ver(software: str, run_dir: str):
+    if software == 'vasp':
+        with open(Path(run_dir) / 'OUTCAR', 'r') as f:
+            head = f.readline()
+            if not head.strip().endswith('gamma-only'):
+                return False
+    return True
+
+
 def plot_ksen_weight(
     software: str,
     run_dirs: list,
@@ -148,8 +150,7 @@ def plot_ksen_weight(
     cbm: int,
     nproc: int | None = None,
     filename: str = 'ksen_wht.png',
-    cmap: str = 'seismic',
-    figsize: Tuple[float, float] = (4.8, 3.0),
+    figsize: tuple[float, float] = (4.8, 3.0),
     dpi: int = 360,
 ) -> str:
     """Plot Kohn-Sham energy bands with weight coloring.
@@ -167,7 +168,6 @@ def plot_ksen_weight(
             - adv.ikpt: k-point index (1-based, converted to 0-based internally)
         nproc: Number of parallel processes. If None, uses all available CPUs.
         filename: Output filename for the plot (default: 'ksen_wht.png').
-        cmap: Colormap name (default: 'seismic').
         figsize: Figure size in inches (default: (4.8, 3.0)).
         dpi: Output DPI (default: 360).
 
@@ -176,6 +176,7 @@ def plot_ksen_weight(
     """
     
     if software in ['abacus', 'openmx', 'hamgnn']:
+        # TODO: dqyao
         return ''
     
     import matplotlib
@@ -190,19 +191,10 @@ def plot_ksen_weight(
     which_atoms = parameters.adv.which_atoms
     if which_atoms is not None:
         which_atoms = np.asarray(which_atoms, dtype=int)
-        if which_atoms.ndim != 1 or which_atoms.size == 0:
-            raise ValueError(
-                f"which_atoms must be a non-empty 1D array, got shape {which_atoms.shape}."
-            )
-        if np.any(which_atoms <= 0):
-            raise ValueError(
-                f"which_atoms must use 1-based atom indices, got {which_atoms.tolist()}."
-            )
-        which_atoms = which_atoms - 1
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data
-    Enr, Wht = extract_wht_with_cache(
+    Enr, Wht = extract_tdeigenvalues_with_weights(
         software=software,
         run_dirs=run_dirs,
         which_spin=which_spin,
@@ -247,7 +239,7 @@ def plot_ksen_weight(
         zorder=1,
         vmin=Wht.min(),
         vmax=Wht.max(),
-        cmap=cmap,
+        cmap='seismic',
     )
 
     # Add colorbar

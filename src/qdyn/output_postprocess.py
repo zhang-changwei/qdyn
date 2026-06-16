@@ -1,22 +1,18 @@
-# pyright: reportOptionalSubscript=false
-
 import os
 import re
-import logging
 from pathlib import Path
-from typing import Dict, Tuple, Any
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from ase import Atoms
 
-from qdyn.calc_common import read_stru
-from qdyn.params import  VALENCE_ELECTRONS, ORBITAL_BASIS
+from .calc_common import read_stru
+from .params import VALENCE_ELECTRONS
 
 
 def extract_band_edges(
     software: str, dir_path: str, whichk: int = 1, whichs: int = 1 
-) -> Tuple[int, int, int]:
+) -> tuple[int, int, int]:
     """Extract VBM and CBM band indices from output files for different software.
 
     Parses the output files to find the last occupied band (VBM) and the first
@@ -42,8 +38,159 @@ def extract_band_edges(
         return _extract_vbmcbm_from_hamgnn_fake(dir_path)
     raise NotImplementedError(f"Software '{software}' is not supported yet.")
 
+def extract_tdeigenvalues_with_weights(
+    software: str,
+    run_dirs: list,
+    which_spin: int = 1,
+    which_kpoint: int = 1,
+    which_atoms: np.ndarray | None = None,
+    nproc: int | None = None,
+    force_recalculate: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract and cache wavefunction weight data from different software.
+
+    Atom-projected weights are extracted from output files across multiple SCF
+    directories and cached in ``.npy`` files for fast reuse. 
+    ``partial_weight / total_weight`` is returned.
+
+    Args:
+        software: Software name (currently only ``'vasp'`` is supported).
+        run_dirs: Directories to process.
+        which_spin: Spin index to extract (1-based).
+        which_kpoint: K-point index to extract (1-based).
+        which_atoms: Atom indices to project weights onto; None sums over all
+            atoms. (1-based)
+        nproc: Number of parallel worker processes; None uses all available CPUs.
+        force_recalculate: Recompute and overwrite the cache instead of reusing it.
+
+    Returns:
+        tuple: ``(enr, wht)`` where each array has shape ``(nsw, nbands)`` for the
+        selected spin and k-point.
+
+    Raises:
+        ValueError: If run_dirs is empty.
+    """
+    if len(run_dirs) == 0:
+        raise ValueError("run_dirs must not be empty.")
+
+    # assemble cache paths
+    atoms_key = (
+        'all'
+        if which_atoms is None
+        else str(sum(which_atoms)) # TODO: use sum as a simple identifier
+    )
+    suffix = ("{}.spin{}.k{}.atoms_{}.n{}").format(
+        software, which_spin, which_kpoint, atoms_key, len(run_dirs)
+    )
+    fname_enr = Path(f"all_en.{suffix}.npy")
+    fname_wht = Path(f"all_wht.{suffix}.npy")
+
+    # resume from cache if available
+    if (
+        not force_recalculate
+        and fname_wht.is_file()
+        and fname_enr.is_file()
+    ):
+        wht = np.load(fname_wht)
+        enr = np.load(fname_enr)
+        return enr, wht
+
+    # extract tdeigenvalues and weights
+    which_spin -= 1 # convert to 0-based index
+    which_kpoint -= 1 # convert to 0-based index
+    if which_atoms is not None:
+        which_atoms -= 1
+    sel = np.s_[:, which_spin, which_kpoint, :]
+
+    enr, wht = _parallel_extract_evs_and_whts(
+        run_dirs, which_atoms, software=software, nproc=nproc
+    )
+    _validate_wht_dimensions(enr, wht)
+    _validate_spin_kpoint_indices(enr, which_spin, which_kpoint)
+    enr = enr[sel]
+    wht = wht[sel]
+
+    # save
+    np.save(fname_wht, wht)
+    np.save(fname_enr, enr)
+
+    return enr, wht
+
+def _parallel_extract_evs_and_whts(
+    run_dirs: list[str],
+    which_atoms: np.ndarray | None,
+    software: str,
+    nproc: int | None = None,
+) -> tuple:
+
+    import multiprocessing
+
+    run_dir_paths = [Path(rd) for rd in run_dirs]
+
+    nproc = multiprocessing.cpu_count() if nproc is None else nproc
+    with multiprocessing.Pool(processes=nproc) as pool:
+
+        # Select weight extraction function based on software
+        if software == 'vasp':
+            weight_func = _evs_and_whts_from_procar
+            weight_file = 'PROCAR'
+        else:
+            # TODO: dqyao
+            raise NotImplementedError
+
+        results = []
+        for rd in run_dir_paths:
+            res = pool.apply_async(
+                weight_func,
+                (rd / weight_file, which_atoms, None,),
+            )
+            results.append(res)
+
+        enr = []
+        wht = []
+        for ii in range(len(results)):
+            tmp_enr, tmp_wht, tmp_totwht = results[ii].get()
+            tmp_wht = np.divide(
+                tmp_wht,
+                tmp_totwht,
+                out=np.zeros_like(tmp_wht),
+                where=tmp_totwht != 0,
+            )
+            enr.append(tmp_enr)
+            wht.append(tmp_wht)
+
+    return np.stack(enr, axis=0), np.stack(wht, axis=0)
+
+def _validate_wht_dimensions(*arrays: np.ndarray) -> None:
+    reference_shape = arrays[0].shape
+    if len(reference_shape) != 4:
+        raise ValueError(
+            f"Expected weight arrays with shape (nsw, nspin, nkpt, nband), got {reference_shape}."
+        )
+
+    for arr in arrays[1:]:
+        if arr.shape != reference_shape:
+            raise ValueError(
+                f"Weight arrays must share the same shape, got {reference_shape} and {arr.shape}."
+            )
+
+def _validate_spin_kpoint_indices(
+    energies: np.ndarray,
+    which_spin: int,
+    which_kpoint: int,
+) -> None:
+    _, nspin, nkpt, _ = energies.shape
+    if not 0 <= which_spin < nspin:
+        raise IndexError(
+            f"which_spin={which_spin + 1} is out of range for nspin={nspin}."
+        )
+    if not 0 <= which_kpoint < nkpt:
+        raise IndexError(
+            f"which_kpoint={which_kpoint + 1} is out of range for nkpt={nkpt}."
+        )
+
 # ===========================================================================
-# plot functions (md plots and weights for tdks plots)
+# plot functions
 # ===========================================================================
 def plot_md_results(md_data: dict, filename: str, target_temp: float | None = None):
     """Plot temperature, potential, and total energy evolution of an MD run.
@@ -102,260 +249,10 @@ def plot_md_results(md_data: dict, filename: str, target_temp: float | None = No
     fig.savefig(filename, dpi=300, transparent=True)
     plt.close()
 
-
-def extract_wht_with_cache(
-    software: str,
-    run_dirs: list,
-    which_spin: int = 1,
-    which_kpoint: int = 1,
-    which_atoms: np.ndarray | None = None,
-    nproc: int | None = None,
-    cache_file_wht: str = 'all_wht.npy',
-    cache_file_enr: str = 'all_en.npy',
-    force_recalculate: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Extract and cache wavefunction weight data from different software.
-
-    Atom-projected weights are extracted from output files across multiple SCF
-    directories and cached in ``.npy`` files for fast reuse. When ``which_atoms``
-    is given the returned weight is ``partial_weight / total_weight``; otherwise it
-    is the total weight summed over all atoms.
-
-    Args:
-        software: Software name (currently only ``'vasp'`` is supported).
-        run_dirs: Directories to process.
-        which_spin: Spin index to extract (1-based).
-        which_kpoint: K-point index to extract (1-based).
-        which_atoms: Atom indices to project weights onto; None sums over all
-            atoms.
-        nproc: Number of parallel worker processes; None uses all available CPUs.
-        cache_file_wht: Base filename for cached weights.
-        cache_file_enr: Base filename for cached energies.
-        force_recalculate: Recompute and overwrite the cache instead of reusing it.
-
-    Returns:
-        tuple: ``(enr, wht)`` where each array has shape ``(nsw, nbands)`` for the
-        selected spin and k-point.
-
-    Raises:
-        ValueError: If run_dirs is empty.
-    """
-    if len(run_dirs) == 0:
-        raise ValueError("run_dirs must not be empty.")
-
-    cache_wht, cache_enr = _resolve_cache_paths(
-        cache_file_wht,
-        cache_file_enr,
-        software,
-        which_spin,
-        which_kpoint,
-        which_atoms,
-        len(run_dirs),
-    )
-
-    if (
-        not force_recalculate
-        and cache_wht.is_file()
-        and cache_enr.is_file()
-    ):
-        wht = np.load(cache_wht)
-        enr = np.load(cache_enr)
-        return enr, wht
-
-    enr, wht = _compute_wht_for_selection(
-        software, run_dirs, which_spin, which_kpoint, which_atoms, nproc
-    )
-
-    np.save(cache_wht, wht)
-    np.save(cache_enr, enr)
-    return enr, wht
-
-
-def _resolve_cache_paths(
-    cache_file_wht: str,
-    cache_file_enr: str,
-    software: str,
-    which_spin: int,
-    which_kpoint: int,
-    which_atoms: np.ndarray | None,
-    n_run_dirs: int,
-) -> Tuple[Path, Path]:
-    atoms_key = (
-        'all'
-        if which_atoms is None
-        else str(sum(which_atoms)) # TODO: use sum as a simple identifier
-    )
-    cache_suffix = (
-        f".{software}.spin{which_spin}.k{which_kpoint}.atoms_{atoms_key}.n{n_run_dirs}"
-    )
-    return (
-        _append_cache_suffix(cache_file_wht, cache_suffix),
-        _append_cache_suffix(cache_file_enr, cache_suffix),
-    )
-
-
-def _compute_wht_for_selection(
-    software: str,
-    run_dirs: list,
-    which_spin: int,
-    which_kpoint: int,
-    which_atoms: np.ndarray | None,
-    nproc: int | None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute selected-spin/k-point energies and weights via ``parallel_wht``.
-
-    Args:
-        software: Software name passed through to ``parallel_wht``.
-        run_dirs: Directories to process.
-        which_spin: Spin index to select (1-based).
-        which_kpoint: K-point index to select (1-based).
-        which_atoms: Atom indices to project onto; None sums over all atoms.
-        nproc: Number of parallel worker processes; None uses all available CPUs.
-
-    Returns:
-        tuple: ``(enr, wht)`` for the selected spin and k-point. When
-        ``which_atoms`` is given, ``wht`` is the partial/total weight ratio.
-    """
-    which_spin -= 1 # convert to 0-based index
-    which_kpoint -= 1 # convert to 0-based index
-    sel = np.s_[:, which_spin, which_kpoint, :]
-    if which_atoms is not None:
-        enr, wht_partial, tot_wht = _parallel_wht(
-            run_dirs, which_atoms, software=software, nproc=nproc
-        )
-        _validate_wht_dimensions(enr, wht_partial, tot_wht)
-        _validate_spin_kpoint_indices(enr, which_spin, which_kpoint)
-        enr = enr[sel]
-        wht_partial = wht_partial[sel]
-        tot_wht = tot_wht[sel]
-        wht = np.divide(
-            wht_partial,
-            tot_wht,
-            out=np.zeros_like(wht_partial),
-            where=tot_wht != 0,
-        )
-    else:
-        enr, wht = _parallel_wht(
-            run_dirs, which_atoms, software=software, nproc=nproc
-        )
-        _validate_wht_dimensions(enr, wht)
-        _validate_spin_kpoint_indices(enr, which_spin, which_kpoint)
-        enr = enr[sel]
-        wht = wht[sel]
-    return enr, wht
-
-
-def _parallel_wht(
-    run_dirs: list[str],
-    which_atoms: np.ndarray | None,
-    software: str,
-    nproc: int | None = None,
-) -> Tuple:
-    """Calculate atom-projected weights in parallel for the given software.
-
-    Args:
-        run_dirs: Directories to process, one weight file per directory.
-        which_atoms: Atom indices to project weights onto; None projects over all
-            atoms.
-        software: Software name (currently only ``'vasp'`` is supported).
-        nproc: Number of parallel worker processes; None uses all available CPUs.
-
-    Returns:
-        tuple: ``(enr, wht)`` when ``which_atoms`` is None, otherwise
-        ``(enr, wht_partial, tot_wht)``.
-
-    Raises:
-        ValueError: If run_dirs is empty.
-        NotImplementedError: If software is not supported.
-    """
-    import multiprocessing
-
-    run_dir_paths = [Path(rd) for rd in run_dirs]
-    if len(run_dir_paths) == 0:
-        raise ValueError("run_dirs must not be empty.")
-
-    nproc = multiprocessing.cpu_count() if nproc is None else nproc
-    with multiprocessing.Pool(processes=nproc) as pool:
-
-        # Select weight extraction function based on software
-        if software == 'vasp':
-            weight_func = _weight_from_procar
-            weight_file = 'PROCAR'
-        else:
-            raise NotImplementedError
-
-        results = []
-        for rd in run_dir_paths:
-            res = pool.apply_async(
-                weight_func,
-                (
-                    rd / weight_file,
-                    which_atoms,
-                    None,
-                ),
-            )
-            results.append(res)
-
-        enr = []
-        wht = []
-        if which_atoms is None:
-            for ii in range(len(results)):
-                tmp_enr, tmp_wht = results[ii].get()
-                enr.append(tmp_enr)
-                wht.append(tmp_wht)
-            return np.stack(enr, axis=0), np.stack(wht, axis=0)
-        else:
-            totwht = []
-            for ii in range(len(results)):
-                tmp_enr, tmp_wht, tmp_totwht = results[ii].get()
-                enr.append(tmp_enr)
-                wht.append(tmp_wht)
-                totwht.append(tmp_totwht)
-            return (
-                np.stack(enr, axis=0),
-                np.stack(wht, axis=0),
-                np.stack(totwht, axis=0),
-            )
-
-
-def _append_cache_suffix(filename: str, suffix: str) -> Path:
-    path = Path(os.path.expanduser(filename))
-    return path.with_name(f"{path.stem}{suffix}{path.suffix}")
-
-
-def _validate_wht_dimensions(*arrays: np.ndarray) -> None:
-    reference_shape = arrays[0].shape
-    if len(reference_shape) != 4:
-        raise ValueError(
-            f"Expected weight arrays with shape (nsw, nspin, nkpt, nband), got {reference_shape}."
-        )
-
-    for arr in arrays[1:]:
-        if arr.shape != reference_shape:
-            raise ValueError(
-                f"Weight arrays must share the same shape, got {reference_shape} and {arr.shape}."
-            )
-
-
-def _validate_spin_kpoint_indices(
-    energies: np.ndarray,
-    which_spin: int,
-    which_kpoint: int,
-) -> None:
-    _, nspin, nkpt, _ = energies.shape
-    if not 0 <= which_spin < nspin:
-        raise IndexError(
-            f"which_spin={which_spin + 1} is out of range for nspin={nspin}."
-        )
-    if not 0 <= which_kpoint < nkpt:
-        raise IndexError(
-            f"which_kpoint={which_kpoint + 1} is out of range for nkpt={nkpt}."
-        )
-
 # ===========================================================================
 # qdyn_md.log parser (software-agnostic)
 # ===========================================================================
-def parse_qdyn_log_text(text: str) -> Dict:
+def parse_qdyn_log_text(text: str) -> dict:
     """Parse the contents of a ``qdyn_md.log`` file.
 
     The header ``Step: <N>, Interval: <I>`` carries the total MD steps (not the
@@ -429,21 +326,10 @@ def parse_qdyn_log_text(text: str) -> Dict:
         'total_steps': total_steps,
     }
 
-
 def parse_md_data_from_qdyn_log(
-    log_path: 'os.PathLike[str] | str',
-) -> Dict:
-    """Parse MD data from a ``qdyn_md.log`` file path.
-
-    Args:
-        log_path: Path to the ``qdyn_md.log`` file.
-
-    Returns:
-        dict: Parsed MD data (see ``parse_qdyn_log_text``).
-
-    Raises:
-        FileNotFoundError: If the log file does not exist.
-    """
+    log_path: str | Path,
+) -> dict:
+    """Parse MD data from a ``qdyn_md.log`` file path."""
     from pathlib import Path as _Path
     log_file = _Path(log_path)
     if not log_file.is_file():
@@ -451,15 +337,14 @@ def parse_md_data_from_qdyn_log(
     with open(log_file, 'r') as f:
         return parse_qdyn_log_text(f.read())
 
-
 # ===========================================================================
 # VASP specific functions
 # ===========================================================================
-def _weight_from_procar(
+def _evs_and_whts_from_procar(
     infile: str = 'PROCAR',
     which_atom: np.ndarray | None = None,
     spd: np.ndarray | None = None,
-) -> Tuple:
+) -> tuple:
     """Compute the contribution of selected atoms to each KS orbital.
 
     Args:
@@ -469,8 +354,7 @@ def _weight_from_procar(
         spd: Orbital column indices to sum over; None uses the total column.
 
     Returns:
-        tuple: ``(energies, weights)`` when ``which_atom`` is None, otherwise
-        ``(energies, partial_weights, total_weights)``.
+        tuple: ``(energies, partial_weights, total_weights)``.
 
     Raises:
         FileNotFoundError: If infile does not exist.
@@ -523,7 +407,7 @@ def _weight_from_procar(
     energies.resize(nspin, nkpts, nbands)
 
     if which_atom is None:
-        return energies, np.sum(weights, axis=-1)
+        weights = np.sum(weights, axis=-1)
     else:
         which_atom = np.asarray(which_atom, dtype=int)
         if which_atom.ndim != 1:
@@ -536,14 +420,14 @@ def _weight_from_procar(
             raise IndexError(
                 f"which_atom indices must be in [0, {nions - 1}], got {which_atom.tolist()}."
             )
-        return energies, np.sum(weights[:, :, :, which_atom], axis=-1), total_weights
-
+        weights = np.sum(weights[:, :, :, which_atom], axis=-1)
+    return energies, weights, total_weights
 
 def _extract_vbmcbm_from_vasp_outcar(
     dir_path: str,
     whichk: int = 1,
     whichs: int = 1,
-) -> Tuple[int, int, int]:
+) -> tuple[int, int, int]:
     outcar_path = os.path.join(dir_path, 'OUTCAR')
     with open(outcar_path, 'r') as f:
         outcar_lines = [line for line in f if line.strip()]
@@ -579,26 +463,19 @@ def _extract_vbmcbm_from_vasp_outcar(
     offset = ((whichs - 1) * nkpts + (whichk - 1)) * nbands
     band_lines = data_lines[offset : offset + nbands]
 
-    vbm = 0
-    cbm = 0
     for line in band_lines:
         parts = line.split()
         band_idx = int(parts[0])
         occupation = float(parts[-1])
 
-        if occupation >= 0.5:
-            vbm = band_idx
-        else:
+        if occupation < 0.5:
             cbm = band_idx
+            vbm = band_idx - 1
             break
-
-    if vbm == 0:
+    else:
         raise RuntimeError("Could not determine VBM from OUTCAR eigenvalues.")
-    if cbm != vbm + 1:
-        cbm = vbm + 1
 
     return vbm, cbm, nbands
-
 
 # ===========================================================================
 # OPENMX specific functions
@@ -607,7 +484,7 @@ def _extract_vbmcbm_from_openmx_out(
     dir_path: str,
     whichk: int = 1,
     whichs: int = 1,
-) -> Tuple[int, int, int]: # TODO: fit 4.0 openmx output
+) -> tuple[int, int, int]: # TODO: fit 4.0 openmx output
     out_path = os.path.join(dir_path, 'qdyn.out')
     with open(out_path, 'r') as f:
         text = f.read()
@@ -770,7 +647,7 @@ def calc_openmx_HK_SK_gamma(
 # ===========================================================================
 # Hamgnn specific functions
 # ===========================================================================
-def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> Tuple[int, int, int]:
+def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> tuple[int, int, int]:
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
         software_dft = 'openmx'

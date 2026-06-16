@@ -7,20 +7,15 @@ import numpy.typing as npt
 from scipy.optimize import curve_fit
 from scipy.integrate import cumulative_trapezoid
 from scipy.fftpack import fft
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 
-from typing import Tuple, Dict, Any
-
-# mpl.use('agg')
-# mpl.rcParams['axes.unicode_minus'] = False
+from typing import Any
 
 
 def calculate_dephasing_time(
     energies: npt.NDArray[np.float64],
     md_dt: float = 1.0,
     plot: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     r"""Calculate pairwise dephasing times from KS energy eigenvalue trajectories.
 
     Args:
@@ -41,7 +36,9 @@ def calculate_dephasing_time(
 
     working_dir = str(Path.cwd())
     if plot:
-        os.makedirs("img_dephasing", exist_ok=True)
+        os.makedirs("figs_dephasing", exist_ok=True)
+        handle = plot_dephasing_time()
+        next(handle)
 
     for ii in range(nbasis):
         for jj in range(ii):
@@ -50,24 +47,22 @@ def calculate_dephasing_time(
 
             Ct, Dt, Iw = dephase(Et)
 
-            if plot:
-                N = min(T.size, Dt.size)
+            try:
+                popt, pcov = curve_fit(gaussian, T, Dt)
+            except Exception as exc:
+                matrix[ii, jj] = -1.
+                matrix[jj, ii] = -1.
+            else:
+                Dt_fit = gaussian(T, *popt)
+                matrix[ii, jj] = popt[0]
+                matrix[jj, ii] = matrix[ii, jj]
 
-                plt.cla()
-                ax = plt.subplot(111)
-                ax.plot(T[:N], Dt[:N], ls='-', lw=1.0)
-                ax.set_xlabel('Time (fs)')
-                ax.set_ylabel('Dephasing function')
-                plt.tight_layout()
-                img_path = f'{working_dir}/img_dephasing/dephasing_{ii}_{jj}.png'
-                plt.savefig(img_path, dpi=300)
-
-                images.append(img_path)
-
-            popt, pcov = curve_fit(gaussian, T, Dt)
-            Dt_fit = gaussian(T, *popt)
-            matrix[ii, jj] = popt[0]
-            matrix[jj, ii] = matrix[ii, jj]
+                if plot:
+                    fig_path = f'{working_dir}/figs_dephasing/dephasing_{ii}_{jj}.png'
+                    handle.send( # type: ignore
+                        (False, fig_path, T, Dt)
+                    )
+                    images.append(fig_path)
 
     # output
     deph_path = f'{working_dir}/DEPHTIME'
@@ -82,7 +77,7 @@ def gaussian(x, sigma):
 
 def dephase(
     Et, dt=1.0
-) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     r'''
     Calculate the autocorrelation function (ACF), dephasing function, and FT of
     ACF.
@@ -125,3 +120,24 @@ def dephase(
     Iw = np.abs(fft(Ct / Ct[0])) ** 2
 
     return Ct, Dt, Iw
+
+
+def plot_dephasing_time():
+    import matplotlib
+    import matplotlib.pyplot as plt
+    matplotlib.use('agg')
+
+    fig = plt.figure(figsize=(4.8, 3.0))
+    ax = plt.subplot()
+
+    while True:
+        close, fig_path, T, Dt = yield
+        if close:
+            break
+        N = min(len(T), len(Dt))
+        ax.cla()
+        ax.plot(T[:N], Dt[:N], ls='-', lw=1.0)
+        ax.set_xlabel('Time (fs)')
+        ax.set_ylabel('Dephasing function')
+        fig.tight_layout()
+        fig.savefig(fig_path, transparent=True, dpi=300)

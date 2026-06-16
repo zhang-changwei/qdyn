@@ -24,6 +24,7 @@ from ..params import (
 from ..output_postprocess import extract_band_edges
 from .scf import TrajInfo, SCFLogger, DFTSCFSolver
 from .scf import _prepare_scf_input, overlap_run_software
+from .prepare_namd import is_gamma_ver
 from .canac import extract_tdolaps, extract_nacs
 from .dephase import calculate_dephasing_time
 
@@ -331,7 +332,7 @@ def qdyn_fused_scf_prenamd_task(
                 canac: Generator[dict[str, Any] | None, None, None] = extract_tdolaps(
                     run_dirs=subdirs,
                     software=software,  # type: ignore
-                    is_gamma_ver=dftinputs.gamma,
+                    is_gamma_ver=is_gamma_ver(software, subdirs[0]),
                     is_alle=prenamd_input.adv.alle,
                     bmin=bmin,
                     bmax=bmax,
