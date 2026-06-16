@@ -9,6 +9,7 @@ from typing import Any
 from jobflow_remote import JobController
 
 from .errors import ConfigError, ValidationError
+from .params import TERMINAL_STATES
 from .frontend_api.run_dir_access import (
     LocalRunDirAccess,
     RemoteRunDirAccess,
@@ -165,17 +166,7 @@ class WorkerPool:
     # Pool occupancy queries (MongoDB)
     # ------------------------------------------------------------------
 
-    # Terminal states: jobs in these states are "done" and no longer occupy a worker.
-    # Aligned with jobflow-remote's JobState enum — note that jf-remote has
-    # USER_STOPPED but NOT CANCELLED as a job state.  CANCELLED only exists
-    # at the QDYN queue level (queued_submissions table), not in MongoDB.
-    _TERMINAL_STATES = [
-        "COMPLETED",
-        "FAILED",
-        "REMOTE_ERROR",
-        "STOPPED",
-        "USER_STOPPED",
-    ]
+    _TERMINAL_STATES = TERMINAL_STATES
 
     def get_occupancy(self) -> dict[str, int]:
         """Query the number of SUBMITTED+RUNNING jobs per pool worker.
@@ -222,7 +213,7 @@ class WorkerPool:
                 "$match": {
                     "worker": {"$in": pool_workers},
                     "job.metadata.qdyn_user": username,
-                    "state": {"$nin": self._TERMINAL_STATES},
+                    "state": {"$nin": list(self._TERMINAL_STATES)},
                 }
             },
             {"$group": {"_id": "$worker"}},
@@ -244,7 +235,7 @@ class WorkerPool:
             {
                 "$match": {
                     "worker": {"$in": pool_workers},
-                    "state": {"$nin": self._TERMINAL_STATES},
+                    "state": {"$nin": list(self._TERMINAL_STATES)},
                 }
             },
             {"$group": {"_id": "$worker"}},

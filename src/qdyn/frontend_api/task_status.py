@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
+from ..params import RUNNING_RAW_STATES, STEP_ORDER_FUSED, STEP_ORDER_NORMAL
 from ._common import _dt_str
 from .models import (
     JobErrorResponse,
@@ -16,18 +17,6 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-
-# Status derivation constants
-RUNNING_RAW_STATES = {
-    "SUBMITTED",
-    "CHECKED_OUT",
-    "UPLOADED",
-    "BATCH_SUBMITTED",
-    "BATCH_RUNNING",
-    "RUNNING",
-    "RUN_FINISHED",
-    "DOWNLOADED",
-}
 
 PAUSED_RAW_STATES = {"PAUSED"}
 STOPPED_RAW_STATES = {"STOPPED", "USER_STOPPED"}
@@ -391,15 +380,11 @@ def get_task_detail(
     )
 
 
-_STEP_ORDER_NORMAL = ["nvt", "nve", "scf", "pre_namd", "namd"]
-_STEP_ORDER_FUSED = ["nvt", "nve", "fused_scf_prenamd", "namd"]
-
-
 def _get_step_order(job_ids: dict) -> list[str]:
     """Return the step ordering based on which steps exist."""
     if "fused_scf_prenamd" in job_ids:
-        return _STEP_ORDER_FUSED
-    return _STEP_ORDER_NORMAL
+        return STEP_ORDER_FUSED
+    return STEP_ORDER_NORMAL
 
 
 def _build_task_summary(

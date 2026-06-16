@@ -19,6 +19,7 @@ import ase.io
 from ase import Atoms
 
 from ..calc_common import read_stru, read_strus
+from ..params import STEP_ORDER
 from ..tools.seldyn import extract_constraint_mask
 from ._common import _get_task_run_dir_access
 from .models import StructurePreviewPayload
@@ -303,14 +304,9 @@ def _try_preview_for_task(
     if not job_ids:
         return None
 
-    _STEP_ORDER_MAP = {
-        "nvt": 0, "nve": 1, "scf": 2,
-        "fused_scf_prenamd": 2, "fused_cat": 2,
-        "pre_namd": 3, "namd": 4,
-    }
     sorted_steps = sorted(
         job_ids.keys(),
-        key=lambda s: _STEP_ORDER_MAP.get(s, 99),
+        key=lambda s: STEP_ORDER.get(s, 99),
     )
     first_job_uuid = None
     first_step = None

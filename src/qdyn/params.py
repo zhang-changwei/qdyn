@@ -118,6 +118,37 @@ PARAMS_DEFAULT = {
 HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 
+# Workflow state/order constants shared by API, validation, and pool logic.
+TERMINAL_STATES = {
+    "COMPLETED",
+    "FAILED",
+    "REMOTE_ERROR",
+    "STOPPED",
+    "USER_STOPPED",
+}
+RUNNING_RAW_STATES = {
+    "SUBMITTED",
+    "CHECKED_OUT",
+    "UPLOADED",
+    "BATCH_SUBMITTED",
+    "BATCH_RUNNING",
+    "RUNNING",
+    "RUN_FINISHED",
+    "DOWNLOADED",
+}
+STEP_ORDER = {
+    "nvt": 0,
+    "nve": 1,
+    "scf": 2,
+    "fused_scf_prenamd": 2,
+    "fused_cat": 2,
+    "pre_namd": 3,
+    "namd": 4,
+}
+STEP_ORDER_NORMAL = ["nvt", "nve", "scf", "pre_namd", "namd"]
+STEP_ORDER_FUSED = ["nvt", "nve", "fused_scf_prenamd", "namd"]
+
+
 XC_MAPPING = {
     'vasp':{
         'PBE': '',

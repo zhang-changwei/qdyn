@@ -21,6 +21,7 @@ from .input import (
 from .resources import build_qresources
 from .validation import load_config, validate_workflow_input
 from .calc_common import read_stru, stru_todict
+from .params import RUNNING_RAW_STATES, STEP_ORDER
 from .pool import WorkerPool
 
 from .tools.nvt import qdyn_nvt
@@ -30,21 +31,6 @@ from .tools.fused_scf_prenamd import qdyn_fused_scf_prenamd
 from .tools.prepare_namd import qdyn_pre_namd
 from .tools.namd import qdyn_namd
 from .ml_tools.mlff_wrapper import resolve_model_path
-
-
-# States that can be stopped via jc.stop_job()
-# States where the job has been submitted to the compute queue and can be cancelled.
-# WAITING and READY jobs are not yet on the queue, so they cannot (and need not) be stopped.
-_STOPPABLE_STATES = {
-    "SUBMITTED",
-    "CHECKED_OUT",
-    "UPLOADED",
-    "BATCH_SUBMITTED",
-    "BATCH_RUNNING",
-    "RUNNING",
-    "RUN_FINISHED",
-    "DOWNLOADED",
-}
 
 class MainWorkflow:
 
@@ -161,15 +147,7 @@ class MainWorkflow:
     def _get_first_step(steps: Sequence[str], method: str):
         if method != 'namd':
             raise NotImplementedError(f"Method '{method}' is not supported yet.")
-        key_map = {
-            'nvt': 0,
-            'nve': 1,
-            'scf': 2,
-            'fused_scf_prenamd': 2,
-            'pre_namd': 3,
-            'namd': 4,
-        }
-        return min(steps, key=lambda step: key_map[step])
+        return min(steps, key=lambda step: STEP_ORDER[step])
 
     @staticmethod
     def _should_run_step(step: str, steps: Sequence[str], flag: str) -> bool:
@@ -1089,7 +1067,7 @@ class MainWorkflow:
                 continue
 
             # Only stop jobs that are in a stoppable state
-            if raw_state not in _STOPPABLE_STATES:
+            if raw_state not in RUNNING_RAW_STATES:
                 skipped.append(job_uuid)
                 continue
 
