@@ -473,19 +473,9 @@ def _build_task_summary(
 def _get_task_created_at_fallback(task_id: str) -> float:
     """Get the creation timestamp for a task."""
     import time
-    from datetime import datetime, timezone
 
-    try:
-        conn = qdyndb.get_db()
-        row = conn.execute(
-            "SELECT created_at FROM task_owners WHERE task_id = ?", (task_id,)
-        ).fetchone()
-        if row:
-            dt = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
-            )
-            return dt.timestamp()
-    except Exception:
-        pass
+    created_at = qdyndb.get_task_created_at(task_id)
+    if created_at is not None:
+        return created_at
 
     return time.time()
