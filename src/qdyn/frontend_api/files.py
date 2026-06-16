@@ -4,12 +4,11 @@ import io
 import logging
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import List, Union
 
 from ..main_workflow import MainWorkflow
 from ._common import _get_task_run_dir_access
 from .run_dir_access import (
-    FileInfo,
     LocalRunDirAccess,
     RunDirAccess,
 )
