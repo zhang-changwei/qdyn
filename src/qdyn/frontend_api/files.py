@@ -38,7 +38,7 @@ _ZIP_MAX_TOTAL_SIZE = 1024 * 1024 * 1024  # 1 GB
 # File category classification
 _INPUT_FILENAMES = {
     "INCAR", "KPOINTS", "POSCAR", "POTCAR",
-    "nequip_in.vasp", "mace_in.vasp",
+    "nequip_in.vasp", "mace_in.vasp", "qdyn.dat",
 }
 _OUTPUT_FILENAMES = {
     "CONTCAR", "OUTCAR", "OSZICAR", "vasprun.xml",
@@ -46,6 +46,8 @@ _OUTPUT_FILENAMES = {
     "CHG", "CHGCAR", "WAVECAR", "IBZKPT", "PCDAT",
     "REPORT", "ELFCAR", "LOCPOT", "AECCAR0", "AECCAR2",
     "nequip_out.vasp", "mace_out.vasp", "qdyn.extxyz",
+    "qdyn.out", "qdyn.scfout", "qdyn.UCell", "qdyn.cif", "qdyn.xyz",
+    "wfc.npz", "overlap.npy",
 }
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp"}
 _LOG_SUFFIXES = {".log"}
