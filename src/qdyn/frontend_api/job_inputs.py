@@ -13,6 +13,17 @@ from .models import JobInputParamsResponse
 logger = logging.getLogger(__name__)
 
 
+_PARAMETERS_TITLE_BY_STEP = {
+    "nvt": "NVT Parameters",
+    "nve": "NVE Parameters",
+    "scf": "SCF Parameters",
+    "fused_scf_prenamd": "FUSED_SCF_PRENAMD Parameters",
+    "fused_cat": "FUSED_CAT Parameters",
+    "pre_namd": "PRE_NAMD Parameters",
+    "namd": "NAMD Parameters",
+}
+
+
 def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
     """Parse an INCAR file into a key-value dictionary."""
     try:
@@ -60,16 +71,12 @@ def get_job_input_params(
     job_info = manager.get_job_info(job_uuid)
     step_type = _detect_step_type(job_info.name, access.run_dir_path)
 
-    if step_type in {"pre_namd", "namd"}:
-        parameters = _read_non_vasp_job_parameters(access)
-        warning = None
-        if parameters is None:
-            warning = "Failed to load job parameters from jfremote_in.json."
+    parameters = _read_non_vasp_job_parameters(access)
+    if parameters is not None:
         return JobInputParamsResponse(
             available=True,
             parameters=parameters,
-            parameters_title="PRE_NAMD Parameters" if step_type == "pre_namd" else "NAMD Parameters",
-            warning=warning,
+            parameters_title=_get_parameters_title(step_type),
         )
 
     incar: Dict[str, str] | None = None
@@ -95,6 +102,9 @@ def get_job_input_params(
     else:
         warnings.append("KPOINTS not found")
 
+    if incar is None and kpoints_text is None:
+        warnings = ["Failed to load job parameters from jfremote_in.json."]
+
     warning_str = "; ".join(warnings) if warnings else None
 
     return JobInputParamsResponse(
@@ -103,6 +113,11 @@ def get_job_input_params(
         kpoints_text=kpoints_text,
         warning=warning_str,
     )
+
+
+def _get_parameters_title(step_type: str) -> str:
+    """Return the frontend title for serialized job parameters."""
+    return _PARAMETERS_TITLE_BY_STEP.get(step_type, "Job Parameters")
 
 
 def _read_non_vasp_job_parameters(
