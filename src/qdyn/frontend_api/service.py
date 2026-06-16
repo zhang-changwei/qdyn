@@ -80,6 +80,7 @@ __all__ = [
     # test-visible
     "_dt_str",
     "_detect_step_type",
+    "_get_task_run_dir_access",
     "_flatten_parameter_mapping",
     "_get_scf_progress",
     "_get_scf_progress_from_log_text",
