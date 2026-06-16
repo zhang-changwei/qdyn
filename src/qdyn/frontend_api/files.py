@@ -100,29 +100,6 @@ def _is_allowed_subdir(subdir: str) -> bool:
     return any(subdir.startswith(p) for p in _ALLOWED_SUBDIR_PREFIXES)
 
 
-def _detect_subdir_status(access: RunDirAccess, subdir: str) -> str:
-    """Detect the status of a subdirectory from marker files.
-
-    Note: For scf_* subdirectories, prefer ``scan_scf_status()`` which
-    checks all subdirs in a single pass.  This function is kept as a
-    fallback for non-scf subdirectories (e.g. nvt_attempt_*).
-    """
-    try:
-        has_ended = access.subdir_file_exists(subdir, "ENDED")
-        has_outcar = access.subdir_file_exists(subdir, "OUTCAR")
-
-        if has_ended:
-            return "completed"
-        if has_outcar:
-            return "running"
-        has_poscar = access.subdir_file_exists(subdir, "POSCAR")
-        if has_poscar:
-            return "pending"
-        return "unknown"
-    except Exception:
-        return "unknown"
-
-
 # Map from scan_scf_status log-derived status to SubdirInfo display status
 _SCF_STATUS_MAP = {
     "ENDED": "completed",
@@ -244,12 +221,11 @@ def list_job_subdirs(
                 except Exception:
                     file_count = 0
 
-                status = _detect_subdir_status(access, subdir_name)
                 items.append(
                     SubdirInfo(
                         name=subdir_name,
                         file_count=file_count,
-                        status=status,
+                        status="unknown",
                     )
                 )
         except Exception as exc:
