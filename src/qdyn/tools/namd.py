@@ -1,4 +1,5 @@
 from glob import glob
+import logging
 import math
 from pathlib import Path
 import os
@@ -11,7 +12,7 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import numpy.typing as npt
-from jobflow import job
+from jobflow.core.job import job
 
 from typing import List
 
@@ -61,6 +62,12 @@ def qdyn_namd(
             bot = bmin - bmin_stored
             top = bmax - bmin_stored + 1
             deph = deph[bot:top, bot:top]
+            if np.any(deph <= 0):
+                raise ValueError("Dephasing times must be positive.")
+            elif np.any(deph > 1000):
+                logging.warning(
+                    "Some dephasing times are unusually large (> 1000 fs)."
+                )
             np.savetxt('DEPHTIME', deph)
         else:
             raise FileNotFoundError("Dephasing time file not found.")

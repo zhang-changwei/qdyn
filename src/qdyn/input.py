@@ -34,6 +34,18 @@ def validate_md5_hash(v: str) -> str:
         raise ValueError('must be a 32-character lowercase hex string (MD5 digest)')
     return v
 
+def parse_index_list(v: str, dedupe: bool = True) -> list[int]:
+    result: list[int] = []
+    for part in v.split():
+        if '-' in part:
+            start, end = map(int, part.split('-'))
+            result.extend(range(start, end + 1))
+        else:
+            result.append(int(part))
+    if dedupe:
+        return sorted(set(result))
+    return result
+
 MD5HashStr = Annotated[str, AfterValidator(validate_md5_hash)]
 
 
@@ -383,10 +395,10 @@ class _PreNAMDInputAdvT(BaseModel):
 
     which_atoms: List[int] | None = Field(
         default=None,
-        description="Optional atom indices to project, comma-separated in UI",
+        description="Optional atom indices to project",
         json_schema_extra={
-            "widget": "comma-separated-integers",
-            "placeholder": "e.g. 1,2,5",
+            "widget": "text",
+            "placeholder": "e.g. 1-3 5",
         },
     )
     cbar_labels: List[str] | None = Field(
@@ -400,12 +412,12 @@ class _PreNAMDInputAdvT(BaseModel):
 
     @field_validator('which_atoms', mode='before')
     @classmethod
-    def normalize_which_atoms(cls, value):
-        if value is None:
+    def normalize_which_atoms(cls, v: str | list[int] | None):
+        if v is None:
             return None
-        if isinstance(value, np.ndarray):
-            return value.tolist()
-        return value
+        if isinstance(v, list):
+            return v
+        return parse_index_list(v)
 
 class PreNAMDInputT(BaseModel):
     bmin: str = Field(
@@ -452,7 +464,7 @@ class SelDynInputT(BaseModel):
         description="Number of surface layers to fix (counting from 1 from bottom to top.). "
         "Leave empty for no constraints. Not useful when the structure file has already "
         "included constraints, which will be applied directly. Format: e.g. '1-3 5' or "
-        "[1,2,3,5] means fixing layers 1 to 3 and layer 5 from bottom to top.",
+        "'1,2,3,5' means fixing layers 1 to 3 and layer 5 from bottom to top.",
         json_schema_extra={
             **ADVANCED_GROUP,
             "widget": "text",
@@ -476,25 +488,11 @@ class SelDynInputT(BaseModel):
     @field_validator('constraint_layers', mode='before')
     @classmethod
     def parse_constraint_layers(cls, v: str | List[int] | None) -> List[int] | None:
-
-        if v is None:
+        if not v: # None, [], ''
             return None
         if isinstance(v, list):
             return v
-
-        stripped = v.strip()
-        if stripped == '':
-            return None
-
-        result: List[int] = []
-        for part in stripped.split():
-            if '-' in part:
-                start, end = map(int, part.split('-'))
-                result.extend(range(start, end + 1))
-            else:
-                result.append(int(part))
-
-        return sorted(set(result))
+        return parse_index_list(v)
 
 class ThermostatsInputT(BaseModel):
     rescale_v_nraise: int = Field(

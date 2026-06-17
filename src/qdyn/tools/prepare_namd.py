@@ -1,14 +1,14 @@
 import os
 from pathlib import Path
 import shutil
-from typing import List, Dict, Tuple, Any
+from typing import Any
 
 import numpy as np
 from jobflow.core.job import job
 
 from ..calc_common import parse_band_index
 from ..input import PreNAMDInputT
-from ..output_postprocess import extract_wht_with_cache, extract_band_edges
+from ..output_postprocess import extract_tdeigenvalues_with_weights, extract_band_edges
 from .canac import collect_tdolap_output, extract_nacs
 from .dephase import calculate_dephasing_time
 
@@ -17,11 +17,11 @@ from .dephase import calculate_dephasing_time
 def qdyn_pre_namd(
     software: str,
     parameters: PreNAMDInputT,
-    run_dirs: List[str],
+    run_dirs: list[str],
     nproc: int = 1,
     plot: bool = False,
     prepare_input_only: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run NAMD preprocessing: extract eigenvalues and NACs from SCF results.
 
     Args:
@@ -78,14 +78,7 @@ def qdyn_pre_namd(
         images.append(ksen_path)
 
     # basics
-    is_gamma_ver = False
-    if software_lower == 'vasp':
-        with open(f'{all_scf_dirs[0]}/OUTCAR', 'r') as f:
-            head = f.readline()
-            if head.strip().endswith('gamma-only'):
-                is_gamma_ver = True
-    elif software_lower in ['abacus', 'hamgnn', 'openmx', 'siesta']:
-        is_gamma_ver = True
+    gamma = is_gamma_ver(software_lower, all_scf_dirs[0])
 
     bmin = parse_band_index(parameters.bmin, vbm, nbands)
     bmax = parse_band_index(parameters.bmax, vbm, nbands)
@@ -93,7 +86,7 @@ def qdyn_pre_namd(
     out_traj = collect_tdolap_output(
         run_dirs=all_scf_dirs,
         software=software_lower,  # type: ignore
-        is_gamma_ver=is_gamma_ver,
+        is_gamma_ver=gamma,
         is_alle=parameters.adv.alle,
         bmin=bmin,
         bmax=bmax,
@@ -140,6 +133,15 @@ def qdyn_pre_namd(
     }
 
 
+def is_gamma_ver(software: str, run_dir: str):
+    if software == 'vasp':
+        with open(Path(run_dir) / 'OUTCAR', 'r') as f:
+            head = f.readline()
+            if not head.strip().endswith('gamma-only'):
+                return False
+    return True
+
+
 def plot_ksen_weight(
     software: str,
     run_dirs: list,
@@ -148,8 +150,7 @@ def plot_ksen_weight(
     cbm: int,
     nproc: int | None = None,
     filename: str = 'ksen_wht.png',
-    cmap: str = 'seismic',
-    figsize: Tuple[float, float] = (4.8, 3.0),
+    figsize: tuple[float, float] = (4.8, 3.0),
     dpi: int = 360,
 ) -> str:
     """Plot Kohn-Sham energy bands with weight coloring.
@@ -167,13 +168,17 @@ def plot_ksen_weight(
             - adv.ikpt: k-point index (1-based, converted to 0-based internally)
         nproc: Number of parallel processes. If None, uses all available CPUs.
         filename: Output filename for the plot (default: 'ksen_wht.png').
-        cmap: Colormap name (default: 'seismic').
         figsize: Figure size in inches (default: (4.8, 3.0)).
         dpi: Output DPI (default: 360).
 
     Returns:
         Path to the saved plot.
     """
+    
+    if software in ['abacus', 'openmx', 'hamgnn']:
+        # TODO: dqyao
+        return ''
+    
     import matplotlib
     matplotlib.use('agg')
     import matplotlib.pyplot as plt
@@ -181,24 +186,15 @@ def plot_ksen_weight(
 
     # Extract parameters
     dt = parameters.md_dt
-    which_spin = parameters.adv.ispin - 1  # Convert to 0-based index
-    which_kpoint = parameters.adv.ikpt - 1  # Convert to 0-based index
-    which_atoms = parameters.adv.which_atoms
+    which_spin = parameters.adv.ispin # 1-based
+    which_kpoint = parameters.adv.ikpt # 1-based
+    which_atoms = parameters.adv.which_atoms # 1-based
     if which_atoms is not None:
         which_atoms = np.asarray(which_atoms, dtype=int)
-        if which_atoms.ndim != 1 or which_atoms.size == 0:
-            raise ValueError(
-                f"which_atoms must be a non-empty 1D array, got shape {which_atoms.shape}."
-            )
-        if np.any(which_atoms <= 0):
-            raise ValueError(
-                f"which_atoms must use 1-based atom indices, got {which_atoms.tolist()}."
-            )
-        which_atoms = which_atoms - 1
     cbar_labels = parameters.adv.cbar_labels
 
     # Extract energy and weight data
-    Enr, Wht = extract_wht_with_cache(
+    enr, wht = extract_tdeigenvalues_with_weights(
         software=software,
         run_dirs=run_dirs,
         which_spin=which_spin,
@@ -207,70 +203,65 @@ def plot_ksen_weight(
         nproc=nproc,
     )
 
-    if Enr.ndim != 2 or Wht.ndim != 2:
+    if enr.shape != wht.shape:
         raise ValueError(
-            f"Expected Enr/Wht to be 2D arrays after spin/k-point selection, got {Enr.shape} and {Wht.shape}."
+            f"enr and wht must have the same shape, got {enr.shape} and {wht.shape}."
         )
-    if Enr.shape != Wht.shape:
-        raise ValueError(
-            f"Enr and Wht must have the same shape, got {Enr.shape} and {Wht.shape}."
-        )
-    if Enr.size == 0:
-        raise ValueError("Enr/Wht is empty; cannot generate KS energy-weight plot.")
+    if enr.size == 0:
+        raise ValueError("enr/wht is empty; cannot generate KS energy-weight plot.")
 
     # Derive dimensions from array shapes
-    nsw, nband = Enr.shape
+    nsw, nband = enr.shape
 
-    # Create a time grid with the exact same shape as Enr/Wht for scatter().
+    # Create a time grid with the exact same shape as enr/wht for scatter().
     T = np.broadcast_to((np.arange(nsw, dtype=float) * dt)[:, np.newaxis], (nsw, nband))
 
-    vbm_idx = vbm -1
-    cbm_idx = cbm -1
+    vbm_idx = vbm - 1
+    cbm_idx = cbm - 1
 
     # Create figure
-    fig = plt.figure()
-    fig.set_size_inches(*figsize)
-
+    fig = plt.figure(figsize=figsize)
     ax = plt.subplot()
 
     # Scatter plot with weight coloring
-    img = ax.scatter(
-        T.ravel(),
-        Enr.ravel(),
-        s=1.0,
-        c=Wht.ravel(),
-        lw=0.0,
-        zorder=1,
-        vmin=Wht.min(),
-        vmax=Wht.max(),
-        cmap=cmap,
-    )
+    if which_atoms is None:
+        img = ax.scatter(
+            T.ravel(), enr.ravel(),
+            s=1.0, c='k', alpha=0.8, lw=0.0, zorder=1,
+        )
+    else:
+        img = ax.scatter(
+            T.ravel(), enr.ravel(),
+            s=1.0, c=wht.ravel(), lw=0.0, zorder=1,
+            vmin=wht.min(), vmax=wht.max(),
+            cmap='seismic',
+        )
 
-    # Add colorbar
-    divider = make_axes_locatable(ax)
-    ax_cbar = divider.append_axes('right', size='5%', pad=0.02)
-    cbar = plt.colorbar(img, cax=ax_cbar, orientation='vertical')
+        # Add colorbar
+        divider = make_axes_locatable(ax)
+        ax_cbar = divider.append_axes('right', size='5%', pad=0.02)
+        cbar = fig.colorbar(img, cax=ax_cbar, orientation='vertical')
 
-    if cbar_labels is not None:
-        if len(cbar_labels) != 2:
-            raise ValueError(
-                f"cbar_labels must contain exactly 2 labels, got {len(cbar_labels)}."
-            )
-        cbar.set_ticks([Wht.max(), Wht.min()])
-        cbar.set_ticklabels(cbar_labels)
+        if cbar_labels is not None:
+            if len(cbar_labels) != 2:
+                raise ValueError(
+                    f"cbar_labels must contain exactly 2 labels, got {len(cbar_labels)}."
+                )
+            cbar.set_ticks([wht.max(), wht.min()])
+            cbar.set_ticklabels(cbar_labels)
 
     # Set energy limits
-    ymin = min(Enr[0, vbm_idx], Enr[0, cbm_idx]) - 0.5
-    ymax = max(Enr[0, vbm_idx], Enr[0, cbm_idx]) + 0.5
+    ymin = enr[0, vbm_idx] - 0.5
+    ymax = enr[0, cbm_idx] + 0.5
     ax.set_ylim(ymin, ymax)
 
     # Labels and formatting
-    ax.set_xlabel('Time [fs]', labelpad=5)
-    ax.set_ylabel('Energy [eV]', labelpad=8)
+    ax.set_xlabel('Time (fs)', labelpad=5)
+    ax.set_ylabel('Energy (eV)', labelpad=8)
     ax.tick_params(which='both', labelsize='x-small')
 
-    plt.tight_layout(pad=0.2)
-    plt.savefig(filename, dpi=dpi)
+    fig.tight_layout(pad=0.2)
+    fig.savefig(filename, transparent=True, dpi=dpi)
     plt.close()
 
     return os.path.abspath(filename)

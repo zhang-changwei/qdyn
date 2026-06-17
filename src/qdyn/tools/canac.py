@@ -1,5 +1,4 @@
 import logging
-import multiprocessing
 from collections.abc import Generator
 from pathlib import Path
 import os
@@ -7,7 +6,7 @@ import re
 import numpy as np
 import numpy.typing as npt
 
-from typing import Literal, List, Dict, Any, Sequence, cast
+from typing import Literal, Any, Sequence, cast
 
 from ..input import ScissorInputT
 from .libcanac import aeolap
@@ -24,7 +23,7 @@ def version():
                   "Should you have any question, please contact wbchu@fudan.edu.cn")
 
 def extract_tdolaps(
-    run_dirs: List[str],
+    run_dirs: list[str],
     software: Literal['vasp', 'cp2k', 'siesta', 'abacus', 'openmx', 'hamgnn'] = 'vasp',
     sysname: str = 'qdyn',
     is_gamma_ver: bool = False,
@@ -39,6 +38,7 @@ def extract_tdolaps(
     dirs_sorted: bool = False,
     generator: bool = False,
 ) -> Generator[dict[str, Any] | None, None, None]:
+    import multiprocessing
     # input validation
     nbasis = bmax - bmin + 1
     if not batch_size:
@@ -194,7 +194,9 @@ def extract_nacs(
     tdolap_path: str | Path,
     is_reorder: bool = False, 
     nproc: int = 1,
-) -> dict[str, Any] :
+) -> dict[str, Any]:
+    import multiprocessing
+
     pattern = re.compile(r"tdolap_nstep=(\d+)_bmin=(\d+)_bmax=(\d+)_ikpt=(\d+)_ispin=(\d+)_gam=(\d+)_ae=(\d+).npz")
     m = pattern.match(os.path.basename(tdolap_path))
     if m is None:
@@ -378,26 +380,26 @@ def calc_tdolap_wrapper(
     if software == 'vasp':
         if wfc_A._nbands != wfc_B._nbands:
             raise ValueError("Number of bands mismatch between two steps.")
-        if wfc_A._nplws[ikpt-1] != wfc_B._nplws[ikpt-1]:
-            raise ValueError("Number of plane waves mismatch between two steps.") # type: ignore
+        if wfc_A._nplws[ikpt-1] != wfc_B._nplws[ikpt-1]: # type: ignore
+            raise ValueError("Number of plane waves mismatch between two steps.")
 
     # read coefficients
     normalize = True if (software == 'vasp' and not is_alle) else False
     if software in ['vasp', 'siesta']:
         cic_t = np.stack(
-            [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            [wfc_A.readBandCoeff(ispin, ikpt, band_idx, norm=normalize) # type: ignore
             for band_idx in range(bmin, bmax+1)],
             axis=0
         )
         cic_tdt = np.stack(
-            [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize)
+            [wfc_B.readBandCoeff(ispin, ikpt, band_idx, norm=normalize) # type: ignore
             for band_idx in range(bmin, bmax+1)],
             axis=0
         )
     else: # hamgnn, abacus
-        cic_t = wfc_A.readBandCoeffs(slice(bmin-1, bmax))
-        cic_tdt = wfc_B.readBandCoeffs(slice(bmin-1, bmax))
-    
+        cic_t = wfc_A.readBandCoeffs(slice(bmin-1, bmax)) # type: ignore
+        cic_tdt = wfc_B.readBandCoeffs(slice(bmin-1, bmax)) # type: ignore
+
     # calculate tdolap
     tdolap = calc_tdolap(software, cic_t, cic_tdt, S)
 
