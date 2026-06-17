@@ -4,7 +4,6 @@ import io
 import logging
 import zipfile
 from pathlib import Path
-from typing import List, Union
 
 from ..main_workflow import MainWorkflow
 from ._common import _get_task_run_dir_access
@@ -30,8 +29,6 @@ _BLACKLISTED_EXTENSIONS = {".tmp", ".bak", ".swp", ".swo", ".pid", ".lock"}
 # Allowed subdirectory prefixes for file browsing (security whitelist).
 _ALLOWED_SUBDIR_PREFIXES = ("scf_", "nvt_attempt_")
 
-# Large file warning threshold (exposed in file listing for frontend display)
-_LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
 _ZIP_MAX_TOTAL_SIZE = 1024 * 1024 * 1024  # 1 GB
 
 # File category classification
@@ -110,14 +107,14 @@ _SCF_STATUS_MAP = {
 
 def list_job_files(
     access: RunDirAccess, task_id: str, job_uuid: str
-) -> tuple[List[JobFileItem], List[SubdirInfo]]:
+) -> tuple[list[JobFileItem], list[SubdirInfo]]:
     """List files in a job's run directory (non-recursive) plus subdirectory
     metadata.
 
     Returns:
         A tuple of (root_files, subdirs).
     """
-    items: List[JobFileItem] = []
+    items: list[JobFileItem] = []
 
     try:
         for fi in access.list_root_files():
@@ -143,7 +140,7 @@ def list_job_files(
 
 def serve_job_file(
     access: RunDirAccess, filename: str
-) -> tuple[Union[Path, bytes], str]:
+) -> tuple[Path | bytes, str]:
     """Resolve and validate a file request within a job's run directory.
 
     Raises:
@@ -176,9 +173,9 @@ def serve_job_file(
 
 def list_job_subdirs(
     access: RunDirAccess, task_id: str, job_uuid: str
-) -> List[SubdirInfo]:
+) -> list[SubdirInfo]:
     """List whitelisted subdirectories with metadata (name, file count, status)."""
-    items: List[SubdirInfo] = []
+    items: list[SubdirInfo] = []
 
     # --- Fast path: batch-scan scf_* subdirs ---
     try:
@@ -202,11 +199,11 @@ def list_job_subdirs(
     non_scf_prefixes = [p for p in _ALLOWED_SUBDIR_PREFIXES if p != "scf_"]
     if non_scf_prefixes:
         try:
-            other_subdirs: List[str] = []
+            other_subdirs: list[str] = []
             for prefix in non_scf_prefixes:
                 other_subdirs.extend(access.list_subdirs(prefix))
             seen: set[str] = set()
-            unique_others: List[str] = []
+            unique_others: list[str] = []
             for d in other_subdirs:
                 if d not in seen:
                     seen.add(d)
@@ -239,7 +236,7 @@ def list_job_subdirs(
 
 def list_subdir_files(
     access: RunDirAccess, task_id: str, job_uuid: str, subdir: str
-) -> List[JobFileItem]:
+) -> list[JobFileItem]:
     """List files inside a specific subdirectory of a job's run directory.
 
     Raises:
@@ -251,7 +248,7 @@ def list_subdir_files(
             f"Must start with one of: {_ALLOWED_SUBDIR_PREFIXES}"
         )
 
-    items: List[JobFileItem] = []
+    items: list[JobFileItem] = []
     try:
         for fi in access.list_subdir_files(subdir):
             name = fi.name
@@ -278,7 +275,7 @@ def list_subdir_files(
 
 def serve_subdir_file(
     access: RunDirAccess, subdir: str, filename: str
-) -> tuple[Union[Path, bytes], str]:
+) -> tuple[Path | bytes, str]:
     """Resolve and validate a file request within a job subdirectory.
 
     Raises:
@@ -402,7 +399,7 @@ def get_job_images(
 
     access = _get_task_run_dir_access(manager, task_id, job_uuid)
 
-    items: List[JobImageItem] = []
+    items: list[JobImageItem] = []
     for img_path in image_paths:
         basename = Path(img_path).name
 

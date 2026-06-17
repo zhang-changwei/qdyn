@@ -330,7 +330,7 @@ export async function getJobProgress(taskId: string, jobUuid: string): Promise<J
 }
 
 /**
- * Get parsed INCAR and KPOINTS for a job
+ * Get job input parameters (flattened from jfremote_in.json)
  */
 export async function getJobInputParams(taskId: string, jobUuid: string): Promise<JobInputParamsResponse> {
   const response = await http.get<ApiResponse<JobInputParamsResponse> | JobInputParamsResponse>(

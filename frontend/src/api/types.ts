@@ -285,10 +285,6 @@ export interface StructurePreviewPayload {
   lattice: number[][]
   pbc: boolean[]
   constraint_mask: boolean[] | null
-  /** Canonical preview content format (always "vasp"). */
-  format?: 'vasp'
-  /** Canonical VASP-serialized structure content. */
-  content?: string
 }
 
 /**
@@ -417,8 +413,6 @@ export interface JobImagesResponse {
  */
 export interface JobInputParamsResponse {
   available: boolean
-  incar: Record<string, string> | null
-  kpoints_text: string | null
   parameters: Record<string, string> | null
   parameters_title: string | null
   warning: string | null

@@ -1,7 +1,6 @@
 """Job progress services (MD and SCF progress tracking)."""
 
 import logging
-from pathlib import Path
 
 from ._common import _detect_step_type, _get_task_run_dir_access
 from ..main_workflow import MainWorkflow
@@ -22,7 +21,7 @@ def get_job_progress(
     """Get the progress of a running or completed job.
 
     For NVT/NVE jobs, parses qdyn_md.log for MD step count and temperature.
-    For SCF jobs, returns a basic available=True with step_type="scf".
+    For SCF jobs, parses qdyn_scf.log when available.
     """
     jc = manager._ensure_job_controller()
     try:
@@ -55,8 +54,6 @@ def get_job_progress(
         )
     else:
         return JobProgressResponse(available=False, step_type=step_type)
-
-
 
 def _get_md_progress(access: RunDirAccess, step_type: str) -> JobProgressResponse:
     """Parse qdyn_md.log for MD progress (step, temperature, energy)."""
@@ -104,9 +101,6 @@ def _parse_qdyn_scf_log_text(
     from ..output_postprocess import parse_qdyn_scf_log_text
 
     return parse_qdyn_scf_log_text(log_text)
-
-
-
 
 def _parse_scf_global_index(frame_name: str) -> int:
     """Extract the numeric index from an scf_* frame name."""
@@ -177,73 +171,8 @@ def _get_scf_progress_from_log_text(log_text: str) -> JobProgressResponse:
     )
 
 
-def _get_scf_progress_from_status_scan(
-    access: RunDirAccess,
-) -> JobProgressResponse:
-    """Get SCF batch progress from log-derived status scan."""
-    scf_map = access.scan_scf_status()
-    if not scf_map:
-        return JobProgressResponse(available=True, step_type="scf", current_step=0)
-
-    total = len(scf_map)
-    completed = 0
-    running = 0
-    running_subdir: str | None = None
-
-    for subdir_name, info in scf_map.items():
-        if info.status == "ENDED":
-            completed += 1
-        elif info.status == "RUNNING":
-            running += 1
-            running_subdir = subdir_name
-
-    pending = max(0, total - completed - running)
-    current_step = completed
-    percent = round(current_step / total * 100, 2) if total > 0 else None
-
-    batch_info = SCFBatchInfo(
-        completed=completed,
-        converged=completed,
-        failed=0,
-        running=running,
-        pending=pending,
-    )
-
-    current_frame: SCFCurrentFrame | None = None
-    if running_subdir is not None:
-        frame_name = running_subdir
-        global_index = 0
-        try:
-            global_index = int(frame_name.split("_", 1)[1])
-        except (ValueError, IndexError):
-            pass
-        current_frame = SCFCurrentFrame(
-            name=frame_name,
-            global_index=global_index,
-            status="RUNNING",
-            electronic_step_current=None,
-            electronic_step_limit=None,
-            scf_algorithm=None,
-            converged=None,
-        )
-
-    return JobProgressResponse(
-        available=True,
-        step_type="scf",
-        current_step=current_step,
-        total_steps=total,
-        percent=percent,
-        batch=batch_info,
-        current_frame=current_frame,
-        failed_frames=[],
-    )
-
-
 def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
-    """Get SCF batch progress with qdyn_scf.log as the primary source.
-
-    Falls back to a log-based status scan when the log is absent or unreadable.
-    """
+    """Get SCF batch progress from qdyn_scf.log."""
     try:
         if access.root_file_exists("qdyn_scf.log"):
             return _get_scf_progress_from_log_text(
@@ -256,4 +185,4 @@ def _get_scf_progress(access: RunDirAccess) -> JobProgressResponse:
             exc,
         )
 
-    return _get_scf_progress_from_status_scan(access)
+    return JobProgressResponse(available=False)

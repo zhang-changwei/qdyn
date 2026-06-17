@@ -10,7 +10,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError as PydanticValidationError
@@ -68,11 +68,11 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     # Helper: Unified response wrapper
     # -------------------------------------------------------------------------
 
-    def success_response(data: Any) -> Dict[str, Any]:
+    def success_response(data: Any) -> dict[str, Any]:
         """Wrap data in the standard success response format."""
         return {"success": True, "data": data}
 
-    def error_response(code: str, message: str) -> Dict[str, Any]:
+    def error_response(code: str, message: str) -> dict[str, Any]:
         """Wrap error in the standard error response format."""
         return {
             "success": False,
@@ -254,7 +254,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     def get_task_jobs_status(
         task_id: str,
         username: str = Depends(get_current_user),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get status of all jobs under a task.
 
@@ -286,7 +286,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         task_id: str,
         job_uuid: str,
         username: str = Depends(get_current_user),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get detailed status for a single job.
 
@@ -536,7 +536,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
     def validate_structure(
         payload: StructureValidationRequest,
         username: str = Depends(get_current_user),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Validate a structure string.
 
@@ -1064,7 +1064,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         "/tasks/{task_id}/jobs/{job_uuid}/input-params",
         response_model=JobInputParamsResponse,
         summary="Get job input parameters",
-        description="Retrieve parsed INCAR and KPOINTS for a specific job.",
+        description="Retrieve job input parameters from jfremote_in.json.",
     )
     def get_job_input_params_endpoint(
         task_id: str,
@@ -1072,7 +1072,7 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         username: str = Depends(get_current_user),
     ) -> JobInputParamsResponse:
         """
-        Get INCAR key-value pairs and raw KPOINTS text for a job.
+        Get job input parameters as flattened key-value pairs.
 
         Args:
             task_id: The task identifier.

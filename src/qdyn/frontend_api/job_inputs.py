@@ -1,16 +1,12 @@
-"""Input parameter display services (INCAR, KPOINTS, jfremote_in.json)."""
+"""Input parameter display services backed by jfremote_in.json."""
 
 import json
-import logging
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from ..main_workflow import MainWorkflow
 from ._common import _detect_step_type, _get_task_run_dir_access
 from .run_dir_access import RunDirAccess
 from .models import JobInputParamsResponse
-
-logger = logging.getLogger(__name__)
 
 
 _PARAMETERS_TITLE_BY_STEP = {
@@ -24,42 +20,6 @@ _PARAMETERS_TITLE_BY_STEP = {
 }
 
 
-def _parse_incar_file(incar_path: Path) -> Dict[str, str]:
-    """Parse an INCAR file into a key-value dictionary."""
-    try:
-        from pymatgen.io.vasp import Incar
-
-        incar = Incar.from_file(str(incar_path))
-        return {str(k): str(v) for k, v in incar.items()}
-    except Exception as exc:
-        logger.warning("Failed to parse INCAR at %s: %s", incar_path, exc)
-        return {}
-
-
-def _parse_incar_text(text: str) -> Dict[str, str]:
-    """Parse INCAR text content into a key-value dictionary.
-
-    Uses pymatgen's ``Incar.from_string()`` for robust handling.
-    Falls back to simple line-based parsing if pymatgen is unavailable.
-    """
-    try:
-        from pymatgen.io.vasp import Incar
-
-        incar = Incar.from_string(text)
-        return {str(k): str(v) for k, v in incar.items()}
-    except Exception:
-        result: Dict[str, str] = {}
-        for line in text.splitlines():
-            line = line.split("!")[0].split("#")[0].strip()
-            if "=" in line:
-                key, _, val = line.partition("=")
-                key = key.strip()
-                val = val.strip()
-                if key:
-                    result[key] = val
-        return result
-
-
 def get_job_input_params(
     manager: MainWorkflow, task_id: str, job_uuid: str
 ) -> JobInputParamsResponse:
@@ -71,47 +31,16 @@ def get_job_input_params(
     job_info = manager.get_job_info(job_uuid)
     step_type = _detect_step_type(job_info.name, access.run_dir_path)
 
-    parameters = _read_non_vasp_job_parameters(access)
-    if parameters is not None:
+    parameters = _read_job_parameters(access)
+    if parameters is None:
         return JobInputParamsResponse(
-            available=True,
-            parameters=parameters,
-            parameters_title=_get_parameters_title(step_type),
+            available=False,
+            warning="Failed to load job parameters from jfremote_in.json.",
         )
-
-    incar: Dict[str, str] | None = None
-    kpoints_text: str | None = None
-    warnings: list[str] = []
-
-    try:
-        texts = access.read_multiple_root_texts(["INCAR", "KPOINTS"])
-    except Exception as exc:
-        warnings.append(f"Failed to read input files: {exc}")
-        texts = {}
-
-    if "INCAR" in texts:
-        try:
-            incar = _parse_incar_text(texts["INCAR"])
-        except Exception as exc:
-            warnings.append(f"Failed to parse INCAR: {exc}")
-    else:
-        warnings.append("INCAR not found")
-
-    if "KPOINTS" in texts:
-        kpoints_text = texts["KPOINTS"]
-    else:
-        warnings.append("KPOINTS not found")
-
-    if incar is None and kpoints_text is None:
-        warnings = ["Failed to load job parameters from jfremote_in.json."]
-
-    warning_str = "; ".join(warnings) if warnings else None
-
     return JobInputParamsResponse(
         available=True,
-        incar=incar,
-        kpoints_text=kpoints_text,
-        warning=warning_str,
+        parameters=parameters,
+        parameters_title=_get_parameters_title(step_type),
     )
 
 
@@ -120,10 +49,10 @@ def _get_parameters_title(step_type: str) -> str:
     return _PARAMETERS_TITLE_BY_STEP.get(step_type, "Job Parameters")
 
 
-def _read_non_vasp_job_parameters(
+def _read_job_parameters(
     access: RunDirAccess,
-) -> Dict[str, str] | None:
-    """Read serialized non-VASP job parameters from ``jfremote_in.json``."""
+) -> dict[str, str] | None:
+    """Read serialized job parameters from ``jfremote_in.json``."""
     try:
         raw_text = access.read_root_text("jfremote_in.json")
     except Exception:
@@ -134,31 +63,38 @@ def _read_non_vasp_job_parameters(
     except json.JSONDecodeError:
         return None
 
-    parameters = (
-        payload.get("job", {})
-        .get("function_kwargs", {})
-        .get("parameters")
-    )
-    if not isinstance(parameters, dict):
+    function_kwargs = payload.get("job", {}).get("function_kwargs", {})
+    if not isinstance(function_kwargs, dict) or not function_kwargs:
         return None
 
-    flattened = _flatten_parameter_mapping(parameters)
+    flattened = _flatten_parameter_mapping(function_kwargs)
     return flattened or None
+
+
+_SKIP_TOPLEVEL_KEYS = {"structure"}
+
+_MAX_DISPLAY_LENGTH = 200
 
 
 def _flatten_parameter_mapping(
     value: dict[str, Any], prefix: str = ""
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Flatten nested parameter dicts into display-friendly key/value pairs."""
-    flattened: Dict[str, str] = {}
+    flattened: dict[str, str] = {}
     for key, item in value.items():
         if str(key).startswith("@"):
             continue
         current_key = f"{prefix}.{key}" if prefix else str(key)
+        toplevel = current_key.split(".")[0]
+        if toplevel in _SKIP_TOPLEVEL_KEYS:
+            continue
         if isinstance(item, dict):
             flattened.update(_flatten_parameter_mapping(item, current_key))
             continue
-        flattened[current_key] = _stringify_parameter_value(item)
+        text = _stringify_parameter_value(item)
+        if len(text) > _MAX_DISPLAY_LENGTH:
+            continue
+        flattened[current_key] = text
     return flattened
 
 

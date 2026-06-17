@@ -2,7 +2,6 @@
 
 import logging
 from collections.abc import Callable
-from typing import Dict, List
 
 from ..database import qdyndb
 from ..main_workflow import MainWorkflow, QueryError
@@ -24,7 +23,7 @@ PENDING_RAW_STATES = {"READY", "WAITING"}
 ERROR_RAW_STATES = {"REMOTE_ERROR", "ERROR"}
 
 
-def derive_task_status(raw_counts: Dict[str, int]) -> str:
+def derive_task_status(raw_counts: dict[str, int]) -> str:
     """Derive a task-level status from raw state counts."""
     if any(raw_counts.get(state, 0) > 0 for state in ERROR_RAW_STATES):
         return "ERROR"
@@ -153,13 +152,13 @@ def _extract_error_message(traceback_str: str) -> str:
 def get_task_summary_list(
     username: str,
     manager_getter: Callable[[], MainWorkflow],
-) -> List[TaskSummary]:
+) -> list[TaskSummary]:
     """Get a list of task summaries for the specified user."""
     task_ids = qdyndb.get_user_tasks(username)
     summaries = []
 
     queued_entries = qdyndb.list_queued_for_user(username)
-    queued_map: Dict[str, dict] = {}
+    queued_map: dict[str, dict] = {}
     for entry in queued_entries:
         if entry["status"] in ("QUEUED", "DISPATCHING", "FAILED", "CANCELLED"):
             queued_map[entry["task_id"]] = entry
@@ -174,7 +173,7 @@ def get_task_summary_list(
         del queued_map[tid]
 
     all_queued = qdyndb.list_all_queued()
-    queue_positions: Dict[str, int] = {
+    queue_positions: dict[str, int] = {
         q["task_id"]: i + 1 for i, q in enumerate(all_queued)
     }
 
@@ -195,7 +194,7 @@ def _build_queued_task_summary(
     task_id: str,
     username: str,
     queue_entry: dict,
-    queue_positions: Dict[str, int],
+    queue_positions: dict[str, int],
 ) -> TaskSummary:
     """Build a TaskSummary for a task still in the waiting queue."""
     import time as _time
@@ -285,11 +284,11 @@ def get_task_detail(
                 formula=task_meta.get("formula") if task_meta else None,
             )
 
-    all_uuids: List[str] = []
+    all_uuids: list[str] = []
     for uuid_list in job_ids.values():
         all_uuids.extend(uuid_list)
 
-    uuid_to_job_info: Dict[str, object] = {}
+    uuid_to_job_info: dict[str, object] = {}
     if all_uuids:
         try:
             manager = manager_getter()
@@ -307,9 +306,9 @@ def get_task_detail(
                 task_id,
             )
 
-    jobs: List[JobStatusItem] = []
-    raw_status_counts: Dict[str, int] = {}
-    failed_job_names: List[str] = []
+    jobs: list[JobStatusItem] = []
+    raw_status_counts: dict[str, int] = {}
+    failed_job_names: list[str] = []
 
     for step_name, uuid_list in job_ids.items():
         for idx, job_uuid in enumerate(uuid_list):
@@ -398,10 +397,10 @@ def _build_task_summary(
 
     job_ids = qdyndb.get_task_job_ids(task_id)
 
-    raw_status_counts: Dict[str, int] = {}
+    raw_status_counts: dict[str, int] = {}
     total_jobs = 0
-    failed_job_names: List[str] = []
-    step_all_completed: Dict[str, bool] = {}
+    failed_job_names: list[str] = []
+    step_all_completed: dict[str, bool] = {}
 
     for step_name, uuid_list in job_ids.items():
         all_completed_for_step = True
@@ -424,7 +423,7 @@ def _build_task_summary(
     step_order = _get_step_order(job_ids)
     steps = [s for s in step_order if s in job_ids]
 
-    completed_steps: List[str] = []
+    completed_steps: list[str] = []
     for s in steps:
         if step_all_completed.get(s, False):
             completed_steps.append(s)

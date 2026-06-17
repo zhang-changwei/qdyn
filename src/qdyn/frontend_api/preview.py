@@ -1,10 +1,10 @@
 """Structure preview builder and task-level preview orchestration.
 
-Low-level builder functions (atoms_to_vasp_text, build_preview_from_atoms,
-build_preview) have no business dependencies.  Task-level orchestration
-functions (compute_structure_preview, _try_preview_for_task, etc.) use
-delayed imports for MainWorkflow and qdyndb to keep the builder importable
-without pulling in heavy business modules.
+Low-level builder functions (build_preview_from_atoms, build_preview) have no
+business dependencies.  Task-level orchestration functions
+(compute_structure_preview, _try_preview_for_task, etc.) use delayed imports
+for MainWorkflow and qdyndb to keep the builder importable without pulling in
+heavy business modules.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import ase.io
 from ase import Atoms
 
 from ..calc_common import read_stru, read_strus
@@ -34,25 +33,12 @@ logger = logging.getLogger(__name__)
 # Low-level structure preview builder (no business dependencies)
 # =============================================================================
 
-def atoms_to_vasp_text(atoms: Atoms) -> str:
-    """Serialize ASE atoms to POSCAR/VASP text without reordering atoms."""
-    buf = io.StringIO()
-    ase.io.write(
-        buf,
-        atoms,
-        format="vasp",
-        direct=True,
-        vasp5=True,
-        sort=False,
-    )
-    return buf.getvalue()
-
 
 def build_preview_from_atoms(atoms: Atoms) -> StructurePreviewPayload:
     """Build the additive preview payload from an ASE Atoms object."""
     species: list[str] = atoms.get_chemical_symbols()
     cart_coords: list[list[float]] = atoms.get_positions().tolist()
-    lattice: list[list[float]] = atoms.cell.tolist()
+    lattice: list[list[float]] = atoms.cell.array.tolist()
     pbc: list[bool] = atoms.pbc.tolist()
     constraint_mask = extract_constraint_mask(atoms)
 
@@ -62,8 +48,6 @@ def build_preview_from_atoms(atoms: Atoms) -> StructurePreviewPayload:
         lattice=lattice,
         pbc=pbc,
         constraint_mask=constraint_mask,
-        format="vasp",
-        content=atoms_to_vasp_text(atoms),
     )
 
 

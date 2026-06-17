@@ -1,7 +1,5 @@
 """MD timeseries data retrieval and sampling services."""
 
-import logging
-import re
 from pathlib import Path
 
 from ._common import _detect_step_type
@@ -14,40 +12,16 @@ from .models import (
     MDTimeseriesStats,
 )
 
-logger = logging.getLogger(__name__)
-
-
-def _parse_incar_numeric_value(incar_path: Path, key: str) -> float | None:
-    """Parse a numeric value from an INCAR file using exact key matching.
-
-    Uses a regex anchor so that e.g. ``key='NELM'`` does **not** match
-    ``NELMIN``.
-    """
-    pattern = re.compile(
-        rf'^\s*{re.escape(key)}\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)',
-        re.IGNORECASE,
-    )
-    try:
-        with open(incar_path, 'r') as f:
-            for line in f:
-                m = pattern.match(line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _resolve_md_attempt_files(
     run_dir: Path,
-    step_type: str,
     attempt: int | None,
-) -> tuple[Path, Path | None, int, list[MDAttemptItem]]:
+) -> tuple[Path, int, list[MDAttemptItem]]:
     """Discover NVT retry attempt directories and resolve source directories.
 
     Returns
     -------
-    tuple of (attempt_dir, incar_path_or_None, selected_attempt, attempts_list)
+    tuple of (attempt_dir, selected_attempt, attempts_list)
     """
     attempt_dirs: list[Path] = sorted(
         run_dir.glob("nvt_attempt_*"),
@@ -89,7 +63,6 @@ def _resolve_md_attempt_files(
 
     if selected == current_num and root_qdyn_log.is_file():
         attempt_dir = run_dir
-        incar_path = (run_dir / "INCAR") if (run_dir / "INCAR").is_file() else None
     else:
         attempt_dir = run_dir / f"nvt_attempt_{selected}"
         qdyn_log_path = attempt_dir / "qdyn_md.log"
@@ -98,9 +71,8 @@ def _resolve_md_attempt_files(
                 f"qdyn_md.log not found for attempt {selected} "
                 f"(looked in {attempt_dir})."
             )
-        incar_path = (attempt_dir / "INCAR") if (attempt_dir / "INCAR").is_file() else None
 
-    return attempt_dir, incar_path, selected, attempts
+    return attempt_dir, selected, attempts
 
 
 def _sample_series(series: dict, max_points: int) -> dict:
@@ -175,21 +147,36 @@ def _calc_energy_drift_slope(
     return ss_xy / ss_xx
 
 
+def _read_md_references_from_job(run_dir: Path | None) -> dict:
+    """Extract MD reference parameters from jfremote_in.json."""
+    if run_dir is None:
+        return {}
+    try:
+        import json
+        raw = (run_dir / "jfremote_in.json").read_text(encoding="utf-8")
+        params = json.loads(raw).get("job", {}).get("function_kwargs", {}).get("parameters", {})
+        if not isinstance(params, dict):
+            return {}
+        return {
+            "temp_begin": params.get("temp_begin"),
+            "temp_end": params.get("temp_end"),
+            "md_dt": params.get("md_dt"),
+        }
+    except Exception:
+        return {}
+
+
 def _build_md_references(
     step_type: str,
-    incar_path: Path | None,
+    raw_data: dict,
     series: dict,
+    run_dir: Path | None = None,
 ) -> MDReferenceLines:
     """Assemble reference line data for the chart."""
-    potim: float | None = None
-    tebeg: float | None = None
-    teend: float | None = None
-
-    if incar_path is not None:
-        potim = _parse_incar_numeric_value(incar_path, "POTIM")
-        if step_type == "nvt":
-            tebeg = _parse_incar_numeric_value(incar_path, "TEBEG")
-            teend = _parse_incar_numeric_value(incar_path, "TEEND")
+    job_refs = _read_md_references_from_job(run_dir)
+    potim: float | None = job_refs.get("md_dt")
+    tebeg: float | None = job_refs.get("temp_begin")
+    teend: float | None = job_refs.get("temp_end")
 
     target_temp: float | None = None
     tol_low: float | None = None
@@ -271,7 +258,6 @@ def get_job_md_timeseries(
         )
 
     raw_data: dict | None = None
-    incar_path: Path | None = None
     selected_attempt: int | None = None
     attempts: list[MDAttemptItem] = []
 
@@ -283,8 +269,6 @@ def get_job_md_timeseries(
                 attempt=1, label="Attempt 1", is_current=True, archived=False,
             ),
         ]
-        if (run_dir / "INCAR").is_file():
-            incar_path = run_dir / "INCAR"
         try:
             raw_data = parse_md_data_from_qdyn_log(qdyn_log_path)
         except (FileNotFoundError, ValueError) as exc:
@@ -298,8 +282,8 @@ def get_job_md_timeseries(
             )
     else:
         try:
-            attempt_dir, incar_path, selected_attempt, attempts = (
-                _resolve_md_attempt_files(run_dir, step_type, attempt)
+            attempt_dir, selected_attempt, attempts = (
+                _resolve_md_attempt_files(run_dir, attempt)
             )
         except FileNotFoundError as exc:
             return JobMdTimeseriesResponse(
@@ -324,13 +308,7 @@ def get_job_md_timeseries(
 
     original_points = len(raw_data['steps'])
 
-    potim: float | None = None
-    if incar_path is not None:
-        potim = _parse_incar_numeric_value(incar_path, "POTIM")
-
-    if potim is not None and potim > 0:
-        time_fs = [s * potim for s in raw_data['steps']]
-    elif 'time_ps' in raw_data:
+    if 'time_ps' in raw_data:
         time_fs = [t * 1000.0 for t in raw_data['time_ps']]
     else:
         time_fs = [float(s) for s in raw_data['steps']]
@@ -345,15 +323,13 @@ def get_job_md_timeseries(
         'converged': raw_data['converged'],
     }
 
-    references = _build_md_references(step_type, incar_path, series_dict)
+    references = _build_md_references(step_type, raw_data, series_dict, run_dir=run_dir)
 
     sampled = original_points > max_points
     if sampled:
         series_dict = _sample_series(series_dict, max_points)
 
     returned_points = len(series_dict['steps'])
-    if potim is not None:
-        references.potim_fs = potim
 
     total_from_header = raw_data.get('total_steps', 0)
     total_steps: int | None = int(total_from_header) if total_from_header > 0 else None

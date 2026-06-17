@@ -94,11 +94,11 @@ def test_get_job_input_params_reads_prenamd_parameters_from_jfremote_json(
     assert response.available is True
     assert response.parameters_title == "PRE_NAMD Parameters"
     assert response.parameters == {
-        "bmin": "VBM-1",
-        "bmax": "CBM+2",
-        "surface_hopping": "DISH",
-        "adv.reorder": "true",
-        "adv.which_atoms": "3, 8",
+        "parameters.bmin": "VBM-1",
+        "parameters.bmax": "CBM+2",
+        "parameters.surface_hopping": "DISH",
+        "parameters.adv.reorder": "true",
+        "parameters.adv.which_atoms": "3, 8",
     }
     assert response.warning is None
 
@@ -144,15 +144,13 @@ def test_get_job_input_params_prefers_jfremote_json_for_scf(tmp_path: Path):
     assert response.available is True
     assert response.parameters_title == "SCF Parameters"
     assert response.parameters == {
-        "software": "openmx",
-        "scf.criterion": "1e-06",
+        "parameters.software": "openmx",
+        "parameters.scf.criterion": "1e-06",
     }
-    assert response.incar is None
-    assert response.kpoints_text is None
     assert response.warning is None
 
 
-def test_get_job_input_params_falls_back_to_vasp_files(tmp_path: Path):
+def test_get_job_input_params_returns_unavailable_without_jfremote_json(tmp_path: Path):
     run_dir = tmp_path / "nvt_job"
     run_dir.mkdir()
     (run_dir / "INCAR").write_text("ENCUT = 500\nISMEAR = 0\n")
@@ -176,11 +174,9 @@ def test_get_job_input_params_falls_back_to_vasp_files(tmp_path: Path):
 
     response = get_job_input_params(DummyManager(), "task-1", "job-123")
 
-    assert response.available is True
+    assert response.available is False
     assert response.parameters is None
-    assert response.incar == {"ENCUT": "500", "ISMEAR": "0"}
-    assert response.kpoints_text == "kpoints\n0\nGamma\n1 1 1\n"
-    assert response.warning is None
+    assert response.warning == "Failed to load job parameters from jfremote_in.json."
 
 
 def test_get_job_progress_hides_placeholder_progress_for_namd(monkeypatch, tmp_path: Path):
