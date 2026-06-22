@@ -38,7 +38,7 @@ def hamgnn_wrapper_module(monkeypatch):
             or name == "qdyn.tools.run_software"
             or name == "qdyn.tools.scf"
         ):
-            sys.modules.pop(name, None)
+            monkeypatch.delitem(sys.modules, name, raising=False)
 
     torch_module = ModuleType("torch")
     torch_module.Tensor = type("Tensor", (), {})

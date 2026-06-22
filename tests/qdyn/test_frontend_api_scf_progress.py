@@ -129,8 +129,8 @@ def test_scf_progress_uses_log_as_primary_source(tmp_path: Path):
     assert progress.batch.pending == 1
 
 
-def test_scf_progress_fallback_to_scan_when_no_log(tmp_path: Path):
-    """Without qdyn_scf.log, scan fallback returns all scf_* dirs as PENDING."""
+def test_scf_progress_returns_unavailable_when_no_log(tmp_path: Path):
+    """Without qdyn_scf.log, SCF progress is unavailable."""
     for name in ("scf_001", "scf_002"):
         d = tmp_path / name
         d.mkdir()
@@ -138,16 +138,13 @@ def test_scf_progress_fallback_to_scan_when_no_log(tmp_path: Path):
 
     progress = _get_scf_progress(LocalRunDirAccess(tmp_path))
 
-    assert progress.available is True
-    assert progress.batch is not None
-    assert progress.batch.completed == 0
-    assert progress.batch.running == 0
-    assert progress.batch.pending == 2
+    assert progress.available is False
+    assert progress.batch is None
     assert progress.current_frame is None
 
 
-def test_scf_progress_product_files_without_log_stay_pending(tmp_path: Path):
-    """Product files (WAVECAR, wfc.npz) without a log record -> PENDING."""
+def test_scf_progress_product_files_without_log_are_unavailable(tmp_path: Path):
+    """Product files do not make SCF progress available without qdyn_scf.log."""
     # No qdyn_scf.log at all
     d = tmp_path / "scf_001"
     d.mkdir()
@@ -156,6 +153,5 @@ def test_scf_progress_product_files_without_log_stay_pending(tmp_path: Path):
 
     progress = _get_scf_progress(LocalRunDirAccess(tmp_path))
 
-    assert progress.batch is not None
-    assert progress.batch.completed == 0
-    assert progress.batch.pending == 1
+    assert progress.available is False
+    assert progress.batch is None

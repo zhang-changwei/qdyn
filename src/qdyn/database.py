@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from typing import List
 
 
@@ -220,6 +221,33 @@ class QdynDB:
                 (task_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def get_task_created_at(self, task_id: str) -> float | None:
+        """Return task creation time as a UTC timestamp, or None if unavailable."""
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT created_at FROM task_owners WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+
+        created_at = row["created_at"]
+        if not created_at:
+            return None
+
+        try:
+            dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
 
     def get_queued_payload(self, task_id: str) -> str | None:
         """Return the payload_json for a queued task, or None if not found."""

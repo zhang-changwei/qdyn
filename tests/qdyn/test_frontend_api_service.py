@@ -94,13 +94,89 @@ def test_get_job_input_params_reads_prenamd_parameters_from_jfremote_json(
     assert response.available is True
     assert response.parameters_title == "PRE_NAMD Parameters"
     assert response.parameters == {
-        "bmin": "VBM-1",
-        "bmax": "CBM+2",
-        "surface_hopping": "DISH",
-        "adv.reorder": "true",
-        "adv.which_atoms": "3, 8",
+        "parameters.bmin": "VBM-1",
+        "parameters.bmax": "CBM+2",
+        "parameters.surface_hopping": "DISH",
+        "parameters.adv.reorder": "true",
+        "parameters.adv.which_atoms": "3, 8",
     }
     assert response.warning is None
+
+
+def test_get_job_input_params_prefers_jfremote_json_for_scf(tmp_path: Path):
+    run_dir = tmp_path / "scf_job"
+    run_dir.mkdir()
+    (run_dir / "INCAR").write_text("ENCUT = 500\n")
+    (run_dir / "KPOINTS").write_text("kpoints\n0\nGamma\n1 1 1\n")
+    (run_dir / "jfremote_in.json").write_text(
+        json.dumps(
+            {
+                "job": {
+                    "function_kwargs": {
+                        "parameters": {
+                            "software": "openmx",
+                            "scf": {"criterion": 1e-6},
+                        }
+                    }
+                }
+            }
+        )
+    )
+
+    class DummyJobInfo:
+        name = "qdyn_scf"
+
+    class DummyManager:
+        def get_task_pool(self, task_id: str):
+            assert task_id == "task-1"
+            return SimpleNamespace(
+                build_run_dir_access=lambda job_uuid: LocalRunDirAccess(run_dir)
+            )
+
+        def get_job_info(self, job_uuid: str):
+            assert job_uuid == "job-123"
+            return DummyJobInfo()
+
+    from qdyn.frontend_api.run_dir_access import LocalRunDirAccess
+
+    response = get_job_input_params(DummyManager(), "task-1", "job-123")
+
+    assert response.available is True
+    assert response.parameters_title == "SCF Parameters"
+    assert response.parameters == {
+        "parameters.software": "openmx",
+        "parameters.scf.criterion": "1e-06",
+    }
+    assert response.warning is None
+
+
+def test_get_job_input_params_returns_unavailable_without_jfremote_json(tmp_path: Path):
+    run_dir = tmp_path / "nvt_job"
+    run_dir.mkdir()
+    (run_dir / "INCAR").write_text("ENCUT = 500\nISMEAR = 0\n")
+    (run_dir / "KPOINTS").write_text("kpoints\n0\nGamma\n1 1 1\n")
+
+    class DummyJobInfo:
+        name = "qdyn_nvt"
+
+    class DummyManager:
+        def get_task_pool(self, task_id: str):
+            assert task_id == "task-1"
+            return SimpleNamespace(
+                build_run_dir_access=lambda job_uuid: LocalRunDirAccess(run_dir)
+            )
+
+        def get_job_info(self, job_uuid: str):
+            assert job_uuid == "job-123"
+            return DummyJobInfo()
+
+    from qdyn.frontend_api.run_dir_access import LocalRunDirAccess
+
+    response = get_job_input_params(DummyManager(), "task-1", "job-123")
+
+    assert response.available is False
+    assert response.parameters is None
+    assert response.warning == "Failed to load job parameters from jfremote_in.json."
 
 
 def test_get_job_progress_hides_placeholder_progress_for_namd(monkeypatch, tmp_path: Path):

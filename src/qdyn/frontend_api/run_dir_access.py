@@ -13,7 +13,6 @@ import base64
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
 
 
 @dataclass
@@ -37,37 +36,36 @@ class ScfSubdirStatus:
     file_count: int
 
 
-_SCF_COMPLETED_LOG_CATEGORIES = {"normal", "posthamgnn", "overlap"}
-_SCF_RUNNING_LOG_CATEGORIES = {"prehamgnn", "hamgnn"}
-
-
 def _scf_statuses_from_log(log_path: Path) -> dict[str, str]:
     """Parse qdyn_scf.log and return per-frame status dict.
 
-    Reads data rows (skipping the 2-line header) and maps each global_idx to
-    its final status.  ENDED takes priority over RUNNING for the same frame.
+    Delegates to the core parser in ``output_postprocess`` and reduces
+    records to per-frame final status (ENDED > RUNNING).
 
     Returns an empty dict if the log is missing, unreadable, or malformed.
     """
-    statuses: dict[str, str] = {}
+    from ..output_postprocess import (
+        SCF_COMPLETED_LOG_CATEGORIES,
+        SCF_RUNNING_LOG_CATEGORIES,
+        parse_qdyn_scf_log_text,
+    )
+
     if not log_path.is_file():
-        return statuses
+        return {}
     try:
         with open(log_path, "r", errors="replace") as f:
-            lines = f.readlines()
-        for line in lines[2:]:
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            global_idx = parts[1]
-            category = parts[2]
-            if category in _SCF_COMPLETED_LOG_CATEGORIES:
-                statuses[global_idx] = "ENDED"
-            elif category in _SCF_RUNNING_LOG_CATEGORIES:
-                if statuses.get(global_idx) != "ENDED":
-                    statuses[global_idx] = "RUNNING"
-    except OSError:
+            text = f.read()
+        _total, records = parse_qdyn_scf_log_text(text)
+    except (OSError, ValueError):
         return {}
+
+    statuses: dict[str, str] = {}
+    for _step, global_idx, category in records:
+        if category in SCF_COMPLETED_LOG_CATEGORIES:
+            statuses[global_idx] = "ENDED"
+        elif category in SCF_RUNNING_LOG_CATEGORIES:
+            if statuses.get(global_idx) != "ENDED":
+                statuses[global_idx] = "RUNNING"
     return statuses
 
 
@@ -101,7 +99,7 @@ class RunDirAccess(ABC):
     # --- Root-level file access (safe, no subdirs) ---
 
     @abstractmethod
-    def list_root_files(self) -> List[FileInfo]: ...
+    def list_root_files(self) -> list[FileInfo]: ...
 
     @abstractmethod
     def root_file_exists(self, name: str) -> bool: ...
@@ -118,7 +116,7 @@ class RunDirAccess(ABC):
     # --- Controlled subdirectory access (for progress/attempts) ---
 
     @abstractmethod
-    def list_subdirs(self, prefix: str = "") -> List[str]: ...
+    def list_subdirs(self, prefix: str = "") -> list[str]: ...
 
     @abstractmethod
     def subdir_file_exists(self, subdir: str, name: str) -> bool: ...
@@ -132,7 +130,7 @@ class RunDirAccess(ABC):
     ) -> str: ...
 
     @abstractmethod
-    def list_subdir_files(self, subdir: str) -> List[FileInfo]:
+    def list_subdir_files(self, subdir: str) -> list[FileInfo]:
         """List files inside a validated subdirectory."""
         ...
 
@@ -144,7 +142,7 @@ class RunDirAccess(ABC):
     # --- Batch operations (reduce SSH roundtrips for remote) ---
 
     @abstractmethod
-    def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
+    def scan_scf_status(self) -> dict[str, ScfSubdirStatus]:
         """Scan all scf_* subdirs for SCF frame status from root qdyn_scf.log categories.
 
         Returns a dict keyed by subdirectory name (e.g. "scf_000") with
@@ -159,7 +157,7 @@ class RunDirAccess(ABC):
         ...
 
     @abstractmethod
-    def read_multiple_root_texts(self, names: List[str]) -> Dict[str, str]:
+    def read_multiple_root_texts(self, names: list[str]) -> dict[str, str]:
         """Read multiple root-level text files in one pass.
 
         Returns a dict mapping filename to its text content.  Missing
@@ -200,7 +198,7 @@ class LocalRunDirAccess(RunDirAccess):
     def is_available(self) -> bool:
         return self._dir.is_dir()
 
-    def list_root_files(self) -> List[FileInfo]:
+    def list_root_files(self) -> list[FileInfo]:
         return [
             FileInfo(name=e.name, size=e.stat().st_size, is_file=True)
             for e in self._dir.iterdir()
@@ -227,7 +225,7 @@ class LocalRunDirAccess(RunDirAccess):
         self._validate_name(name)
         return (self._dir / name).read_bytes()
 
-    def list_subdirs(self, prefix: str = "") -> List[str]:
+    def list_subdirs(self, prefix: str = "") -> list[str]:
         return sorted(
             d.name
             for d in self._dir.iterdir()
@@ -255,7 +253,7 @@ class LocalRunDirAccess(RunDirAccess):
             f.seek(max(0, sz - max_bytes))
             return f.read().decode(errors="replace")
 
-    def list_subdir_files(self, subdir: str) -> List[FileInfo]:
+    def list_subdir_files(self, subdir: str) -> list[FileInfo]:
         self._validate_subdir(subdir)
         d = self._dir / subdir
         if not d.is_dir():
@@ -271,8 +269,8 @@ class LocalRunDirAccess(RunDirAccess):
         self._validate_name(name)
         return (self._dir / subdir / name).read_bytes()
 
-    def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
-        result: Dict[str, ScfSubdirStatus] = {}
+    def scan_scf_status(self) -> dict[str, ScfSubdirStatus]:
+        result: dict[str, ScfSubdirStatus] = {}
         status_from_log = _scf_statuses_from_log(self._dir / "qdyn_scf.log")
         for d in sorted(self._dir.iterdir()):
             if not d.is_dir() or not d.name.startswith("scf_"):
@@ -282,8 +280,8 @@ class LocalRunDirAccess(RunDirAccess):
             result[d.name] = ScfSubdirStatus(status=status, file_count=file_count)
         return result
 
-    def read_multiple_root_texts(self, names: List[str]) -> Dict[str, str]:
-        result: Dict[str, str] = {}
+    def read_multiple_root_texts(self, names: list[str]) -> dict[str, str]:
+        result: dict[str, str] = {}
         for name in names:
             self._validate_name(name)
             p = self._dir / name
@@ -351,7 +349,7 @@ class RemoteRunDirAccess(RunDirAccess):
         except Exception:
             return False
 
-    def list_root_files(self) -> List[FileInfo]:
+    def list_root_files(self) -> list[FileInfo]:
         cmd = (
             f"find {shlex.quote(self._dir)} -maxdepth 1 -type f "
             f"-printf '%f\\t%s\\n' 2>/dev/null"
@@ -403,7 +401,7 @@ class RemoteRunDirAccess(RunDirAccess):
             finally:
                 os.unlink(tmp_path)
 
-    def list_subdirs(self, prefix: str = "") -> List[str]:
+    def list_subdirs(self, prefix: str = "") -> list[str]:
         pattern = f"{prefix}*" if prefix else "*"
         cmd = (
             f"find {shlex.quote(self._dir)} -maxdepth 1 -mindepth 1 -type d "
@@ -440,7 +438,7 @@ class RemoteRunDirAccess(RunDirAccess):
             f"tail -c {max_bytes} {self._remote_path(subdir, name)}"
         )
 
-    def list_subdir_files(self, subdir: str) -> List[FileInfo]:
+    def list_subdir_files(self, subdir: str) -> list[FileInfo]:
         self._validate_subdir(subdir)
         sub_path = os.path.join(self._dir, subdir)
         cmd = (
@@ -475,7 +473,7 @@ class RemoteRunDirAccess(RunDirAccess):
             finally:
                 os.unlink(tmp_path)
 
-    def scan_scf_status(self) -> Dict[str, ScfSubdirStatus]:
+    def scan_scf_status(self) -> dict[str, ScfSubdirStatus]:
         """Scan all scf_* subdirs in a single SSH command.
 
         Reads the root-level qdyn_scf.log with awk to derive each frame's
@@ -507,7 +505,7 @@ class RemoteRunDirAccess(RunDirAccess):
             f'echo "$name\t$s\t$c"; '
             f"done"
         )
-        result: Dict[str, ScfSubdirStatus] = {}
+        result: dict[str, ScfSubdirStatus] = {}
         try:
             stdout, _, rc = self._host.execute(cmd)
             if rc != 0:
@@ -530,7 +528,7 @@ class RemoteRunDirAccess(RunDirAccess):
             pass
         return result
 
-    def read_multiple_root_texts(self, names: List[str]) -> Dict[str, str]:
+    def read_multiple_root_texts(self, names: list[str]) -> dict[str, str]:
         """Read multiple root-level files in a single SSH command.
 
         Uses a delimiter-separated output so that file boundaries can be
@@ -556,7 +554,7 @@ class RemoteRunDirAccess(RunDirAccess):
             )
         cmd = "; ".join(parts)
 
-        result: Dict[str, str] = {}
+        result: dict[str, str] = {}
         try:
             stdout, _, rc = self._host.execute(cmd)
             if rc != 0:

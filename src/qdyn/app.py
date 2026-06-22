@@ -725,7 +725,7 @@ def get_pool_status(username: str = Depends(get_current_user)):
         {
             "$match": {
                 "worker": {"$in": pool_workers},
-                "state": {"$nin": WorkerPool._TERMINAL_STATES},
+                "state": {"$nin": list(WorkerPool._TERMINAL_STATES)},
             }
         },
         {"$group": {"_id": "$worker"}},

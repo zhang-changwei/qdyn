@@ -157,12 +157,12 @@
     >
       <el-collapse>
         <el-collapse-item title="Input Parameters">
-          <!-- Generic parameters table (PRE_NAMD / NAMD) -->
+          <!-- Parameters table -->
           <template v-if="rowState.inputParams?.parameters">
             <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">
               {{ rowState.inputParams?.parameters_title || 'Parameters' }}
             </el-text>
-            <el-descriptions :column="2" border size="small" class="incar-table">
+            <el-descriptions :column="2" border size="small" class="params-table">
               <el-descriptions-item
                 v-for="(val, key) in rowState.inputParams!.parameters!"
                 :key="key"
@@ -173,36 +173,6 @@
                 {{ val }}
               </el-descriptions-item>
             </el-descriptions>
-          </template>
-
-          <!-- INCAR table -->
-          <template v-if="rowState.inputParams?.incar">
-            <el-text size="small" type="info" tag="div" style="margin-bottom: 6px; font-weight: 600;">INCAR</el-text>
-            <el-descriptions :column="2" border size="small" class="incar-table">
-              <el-descriptions-item
-                v-for="(val, key) in rowState.inputParams!.incar!"
-                :key="key"
-              >
-                <template #label>
-                  <el-tooltip
-                    v-if="INCAR_DESCRIPTIONS[String(key)]"
-                    :content="INCAR_DESCRIPTIONS[String(key)]"
-                    placement="top"
-                    :show-after="300"
-                  >
-                    <span class="incar-key-with-desc">{{ key }}</span>
-                  </el-tooltip>
-                  <span v-else>{{ key }}</span>
-                </template>
-                {{ val }}
-              </el-descriptions-item>
-            </el-descriptions>
-          </template>
-
-          <!-- KPOINTS block -->
-          <template v-if="rowState.inputParams?.kpoints_text">
-            <el-text size="small" type="info" tag="div" style="margin-top: 12px; margin-bottom: 6px; font-weight: 600;">KPOINTS</el-text>
-            <pre class="kpoints-pre">{{ rowState.inputParams!.kpoints_text }}</pre>
           </template>
 
           <!-- Warning -->
@@ -465,7 +435,6 @@
 import { computed } from 'vue'
 import { Document, Download, WarningFilled, FolderOpened, Folder } from '@element-plus/icons-vue'
 import JobMdTimeseriesPanel from '@/components/JobMdTimeseriesPanel.vue'
-import { INCAR_DESCRIPTIONS } from '@/utils/incar-descriptions'
 import { formatFileSize, formatDateTime, computeDuration } from '@/utils/format'
 import type { JobStatusItem, JobFileItem, JobErrorResponse, JobFilesResponse, JobProgressResponse, JobInputParamsResponse, SubdirInfo, SubdirFilesResponse } from '@/api/types'
 
@@ -791,32 +760,17 @@ function subdirStatusType(status: string): string {
   margin-bottom: var(--space-2);
 }
 
-.incar-table :deep(.el-descriptions__label) {
+.params-table :deep(.el-descriptions__label) {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   font-weight: 600;
   min-width: 120px;
 }
 
-.incar-table :deep(.el-descriptions__content) {
+.params-table :deep(.el-descriptions__content) {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
-}
-
-.incar-key-with-desc {
-  border-bottom: 1px dashed var(--fg-tertiary);
-  cursor: help;
-}
-
-.kpoints-pre {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  background-color: var(--el-fill-color-light);
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  margin: 0;
+  word-break: break-all;
 }
 
 /* Subdirectory section styles */

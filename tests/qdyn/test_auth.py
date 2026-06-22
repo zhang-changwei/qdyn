@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import datetime, timezone
 
 import pytest
 
@@ -128,6 +129,21 @@ class TestDatabaseTasks:
         jobs = {"scf": ["a", "b"], "namd": ["c"]}
         qdyndb.assign_task("t6", "carol", jobs)
         assert qdyndb.get_task_job_ids("t6") == jobs
+
+    def test_get_task_created_at(self):
+        qdyndb.create_user("erin", "pw")
+        qdyndb.assign_task("t8", "erin", {})
+        qdyndb.get_db().execute(
+            "UPDATE task_owners SET created_at = ? WHERE task_id = ?",
+            ("2026-06-16 02:30:00", "t8"),
+        )
+        qdyndb.get_db().commit()
+
+        expected = datetime(
+            2026, 6, 16, 2, 30, 0, tzinfo=timezone.utc
+        ).timestamp()
+        assert qdyndb.get_task_created_at("t8") == expected
+        assert qdyndb.get_task_created_at("missing") is None
 
     def test_delete_task(self):
         qdyndb.create_user("dave", "pw")

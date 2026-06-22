@@ -15,7 +15,7 @@ from .ml_tools.mlff_wrapper import (
     hamgnn_pretrained_model_filename,
 )
 from .calc_common import has_valid_cell, read_stru
-from .params import SUPPORTED_STRU_FORMATS, SUPPORTED_TRAJ_FORMATS
+from .params import STEP_ORDER, SUPPORTED_STRU_FORMATS, SUPPORTED_TRAJ_FORMATS
 from .pool import WorkerPool
 from .resources import normalize_worker_resources, validate_step_resources
 
@@ -62,7 +62,6 @@ ML_SOFTWARE_PAIRS = {
     "mace": MACEInputT,
     "hamgnn": HamGNNInputT,
 }
-_STEP_ORDER_INDEX = {"nvt": 0, "nve": 1, "scf": 2, "pre_namd": 3, "namd": 4}
 
 
 def _format_list(formats: Collection[str]) -> str:
@@ -501,7 +500,7 @@ def validate_workflow_input(
     # step contiguity check (namd only; other methods reserved for future use)
     if method == "namd":
         expanded_steps = _expand_steps_for_validation(input.steps)
-        step_int = sorted(_STEP_ORDER_INDEX[s] for s in expanded_steps)
+        step_int = sorted(STEP_ORDER[s] for s in expanded_steps)
         for i in range(1, len(step_int)):
             if step_int[i] != step_int[i - 1] + 1:
                 raise ValidationError(f"Steps must be contiguous. Got: {input.steps}")

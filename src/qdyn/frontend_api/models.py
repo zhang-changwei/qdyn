@@ -6,7 +6,7 @@ implementing a dual-layer status model: raw status passthrough
 plus derived status for UI consumption.
 """
 
-from typing import Dict, List, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -44,10 +44,10 @@ class TaskJobsStatusResponse(BaseModel):
 
     task_id: str
     # Raw status counts, preserving all original states from jobflow-remote
-    raw_status_counts: Dict[str, int]
+    raw_status_counts: dict[str, int]
     # Derived status for quick UI assessment
     derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR"
-    jobs: List[JobStatusItem]
+    jobs: list[JobStatusItem]
     # Resume chain: id of the predecessor task (if this is a resume task)
     prev_task_id: str | None = None
     # Custom task display name (user-provided or None)
@@ -63,16 +63,16 @@ class TaskSummary(BaseModel):
     owner: str
     created_at: float
     # Raw status counts preserved from jobflow-remote
-    raw_status_counts: Dict[str, int]
+    raw_status_counts: dict[str, int]
     # Derived status for UI
     derived_status: str  # "RUNNING" | "FAILED" | "COMPLETED" | "PENDING" | "PAUSED" | "STOPPED" | "ERROR" | "QUEUED" | "DISPATCHING"
     total_jobs: int
     # Optional: names of failed jobs for quick identification
-    failed_job_names: List[str] = Field(default_factory=list)
+    failed_job_names: list[str] = Field(default_factory=list)
     # Steps included in this task (ordered by phase)
-    steps: List[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
     # Steps that have fully completed (contiguous prefix only)
-    completed_steps: List[str] = Field(default_factory=list)
+    completed_steps: list[str] = Field(default_factory=list)
     # Custom task display name (user-provided or None)
     task_name: str | None = None
     # Structure metadata (persisted at submit time)
@@ -99,7 +99,7 @@ class TaskSummaryListResponse(BaseModel):
     """Response for task summary list endpoint."""
 
     total: int
-    items: List[TaskSummary]
+    items: list[TaskSummary]
 
 
 class JobErrorResponse(BaseModel):
@@ -121,17 +121,17 @@ class StopFailedItem(BaseModel):
 class StopResultResponse(BaseModel):
     """Result of a stop operation, showing per-job outcomes."""
 
-    stopped: List[str] = Field(default_factory=list)
-    skipped: List[str] = Field(default_factory=list)
-    failed: List[StopFailedItem] = Field(default_factory=list)
+    stopped: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    failed: list[StopFailedItem] = Field(default_factory=list)
 
 
 class ContinueResultResponse(BaseModel):
     """Result of a continue/resume operation, showing per-job outcomes."""
 
-    continued: List[str] = Field(default_factory=list)
-    skipped: List[str] = Field(default_factory=list)
-    failed: List[StopFailedItem] = Field(default_factory=list)
+    continued: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    failed: list[StopFailedItem] = Field(default_factory=list)
 
 
 class StructureValidationRequest(BaseModel):
@@ -146,7 +146,7 @@ class StructureValidationInfo(BaseModel):
 
     num_atoms: int
     formula: str
-    lattice: List[List[float]]
+    lattice: list[list[float]]
 
 
 class StructurePreviewPayload(BaseModel):
@@ -167,8 +167,6 @@ class StructurePreviewPayload(BaseModel):
     lattice: list[list[float]]
     pbc: list[bool] = Field(default=[True, True, True])
     constraint_mask: list[bool] | None = None  # true = constrained (source-agnostic)
-    format: Literal["vasp"] = "vasp"
-    content: str
 
 
 class StructureValidationResponse(BaseModel):
@@ -246,7 +244,7 @@ class ZipDownloadFileItem(BaseModel):
 class ZipDownloadRequest(BaseModel):
     """Request body for batch zip download."""
 
-    files: List[ZipDownloadFileItem] = Field(
+    files: list[ZipDownloadFileItem] = Field(
         ..., min_length=1, max_length=2000
     )
 
@@ -269,8 +267,8 @@ class JobFilesResponse(BaseModel):
     """Response listing available files in a job's run directory."""
 
     available: bool
-    files: List[JobFileItem] = Field(default_factory=list)
-    subdirs: List[SubdirInfo] = Field(default_factory=list)
+    files: list[JobFileItem] = Field(default_factory=list)
+    subdirs: list[SubdirInfo] = Field(default_factory=list)
 
 
 class SubdirFilesResponse(BaseModel):
@@ -278,7 +276,7 @@ class SubdirFilesResponse(BaseModel):
 
     available: bool
     subdir: str
-    files: List[JobFileItem] = Field(default_factory=list)
+    files: list[JobFileItem] = Field(default_factory=list)
 
 
 class SCFBatchInfo(BaseModel):
@@ -316,7 +314,7 @@ class JobProgressResponse(BaseModel):
     # SCF fine-grained fields
     batch: SCFBatchInfo | None = None
     current_frame: SCFCurrentFrame | None = None
-    failed_frames: List[str] = Field(default_factory=list)
+    failed_frames: list[str] = Field(default_factory=list)
 
 
 class JobImageItem(BaseModel):
@@ -330,7 +328,7 @@ class JobImagesResponse(BaseModel):
     """Response listing result images for a completed job."""
 
     available: bool
-    images: List[JobImageItem] = Field(default_factory=list)
+    images: list[JobImageItem] = Field(default_factory=list)
 
 
 # ============================================
@@ -342,9 +340,7 @@ class JobInputParamsResponse(BaseModel):
     """Response containing input parameters for a job."""
 
     available: bool
-    incar: Dict[str, str] | None = None
-    kpoints_text: str | None = None
-    parameters: Dict[str, str] | None = None
+    parameters: dict[str, str] | None = None
     parameters_title: str | None = None
     warning: str | None = None
 
@@ -361,13 +357,13 @@ class MDAttemptItem(BaseModel):
 class MDSeriesData(BaseModel):
     """Time-series arrays for an MD trajectory."""
 
-    steps: List[int]
-    time_fs: List[float]
-    temperatures: List[float]
-    total_energies: List[float]
-    potential_energies: List[float]
-    kinetic_energies: List[float]
-    converged: List[bool]
+    steps: list[int]
+    time_fs: list[float]
+    temperatures: list[float]
+    total_energies: list[float]
+    potential_energies: list[float]
+    kinetic_energies: list[float]
+    converged: list[bool]
 
 
 class MDReferenceLines(BaseModel):
@@ -401,7 +397,7 @@ class JobMdTimeseriesResponse(BaseModel):
     step_type: str | None = None
     state: str | None = None
     selected_attempt: int = 1
-    attempts: List[MDAttemptItem] = Field(default_factory=list)
+    attempts: list[MDAttemptItem] = Field(default_factory=list)
     series: MDSeriesData | None = None
     references: MDReferenceLines | None = None
     stats: MDTimeseriesStats | None = None
