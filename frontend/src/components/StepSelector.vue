@@ -65,9 +65,11 @@ const props = withDefaults(defineProps<{
   modelValue: string[]
   resume?: boolean
   completedSteps?: string[]
+  resumeEarliestStep?: string | null
 }>(), {
   resume: false,
-  completedSteps: () => []
+  completedSteps: () => [],
+  resumeEarliestStep: null
 })
 
 const emit = defineEmits<{
@@ -130,16 +132,38 @@ const fuseToggleDisabled = computed((): boolean => {
 const stepOrder = computed((): string[] => effectiveStepOrder.value)
 
 const resumeStartIndex = computed((): number => {
-  if (!props.resume || !props.completedSteps || props.completedSteps.length === 0) {
+  if (!props.resume) {
     return 0
   }
+
+  if (props.resumeEarliestStep) {
+    const earliestIdx = stepOrder.value.indexOf(props.resumeEarliestStep)
+    if (earliestIdx >= 0) {
+      return earliestIdx
+    }
+  }
+
+  if (!props.completedSteps || props.completedSteps.length === 0) {
+    return 0
+  }
+
   const lastCompleted = props.completedSteps[props.completedSteps.length - 1]
   const idx = stepOrder.value.indexOf(lastCompleted)
   return idx >= 0 ? idx + 1 : 0
 })
 
-function isCompletedStep(step: string): boolean {
+function isParentCompletedStep(step: string): boolean {
   return props.resume && (props.completedSteps ?? []).includes(step)
+}
+
+function isLockedCompletedStep(step: string): boolean {
+  if (!isParentCompletedStep(step)) return false
+  const stepIndex = stepOrder.value.indexOf(step)
+  return stepIndex >= 0 && stepIndex < resumeStartIndex.value
+}
+
+function isCompletedStep(step: string): boolean {
+  return isLockedCompletedStep(step)
 }
 
 function isStepSelectable(step: string): boolean {
@@ -218,8 +242,8 @@ function handleFuseToggle(fused: boolean): void {
 }
 
 function handleUpdate(newValue: string[]): void {
-  // Filter out completed steps — they should never appear in modelValue
-  const filtered = newValue.filter(s => !isCompletedStep(s))
+  // Locked parent-completed steps are inherited context, not steps to submit.
+  const filtered = newValue.filter(s => !isLockedCompletedStep(s))
   const sortedValue = sortSteps(filtered)
 
   // Auto-trim: deselecting a step removes all subsequent steps

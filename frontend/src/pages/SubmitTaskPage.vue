@@ -129,6 +129,7 @@
             v-model="formData.steps"
             :resume="submitMode === 'resume'"
             :completed-steps="selectedResumeTask?.completed_steps"
+            :resume-earliest-step="selectedResumeTask?.resume_earliest_step"
           />
         </el-form-item>
       </el-card>
@@ -891,9 +892,11 @@ async function handleResumeTaskSelected(task: TaskSummary | null): Promise<void>
   constraintRequestId++ // Invalidate in-flight constraint requests
   poscarVersion.value++ // Use as stale guard for resume preview requests
   const currentVersion = poscarVersion.value
-  // Auto-initialize steps to resume_next_step when a task is selected
-  if (task?.resume_next_step) {
-    formData.steps = [task.resume_next_step]
+  // Auto-initialize to the normal continuation step, or the earliest rerun step
+  // for fully completed parent tasks.
+  const initialStep = task?.resume_next_step ?? task?.resume_earliest_step
+  if (initialStep) {
+    formData.steps = [initialStep]
   } else {
     formData.steps = []
   }
