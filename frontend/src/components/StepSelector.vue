@@ -205,17 +205,12 @@ function isStepSelectable(step: string): boolean {
   // Resume mode with known completed steps
   if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
     if (stepIndex < resumeStartIndex.value) return false
-    const selectedIndices = getSelectedIndices()
-    if (selectedIndices.length === 0) {
+    if (props.modelValue.length === 0) {
       return stepIndex <= maxValidStartIndex.value
     }
-
-    const minIdx = selectedIndices[0]
-    const maxIdx = selectedIndices[selectedIndices.length - 1]
-    if (props.modelValue.includes(step)) {
-      return selectedIndices.length === 1 || stepIndex === minIdx || stepIndex === maxIdx
-    }
-    return stepIndex === minIdx - 1 || stepIndex === maxIdx + 1
+    if (props.modelValue.includes(step)) return true
+    const prevStep = stepOrder.value[stepIndex - 1]
+    return props.modelValue.includes(prevStep)
   }
 
   // Resume mode without completed steps: only allow starting from nvt
@@ -286,11 +281,6 @@ function handleUpdate(newValue: string[]): void {
   const filtered = uniqueSteps(newValue).filter(s => !isLockedCompletedStep(s))
   const sortedValue = sortSteps(filtered)
 
-  if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
-    emit('update:modelValue', trimToLastContiguousSegment(sortedValue))
-    return
-  }
-
   // Auto-trim: deselecting a step removes all subsequent steps
   if (sortedValue.length < props.modelValue.length) {
     const removedSteps = props.modelValue.filter(s => !sortedValue.includes(s))
@@ -313,33 +303,23 @@ function handleUpdate(newValue: string[]): void {
   emit('update:modelValue', sortedValue)
 }
 
-function getSelectedIndices(steps: string[] = props.modelValue, order: string[] = stepOrder.value): number[] {
-  return uniqueSteps(steps)
-    .map(s => order.indexOf(s))
-    .filter(idx => idx >= resumeStartIndex.value)
-    .sort((a, b) => a - b)
-}
 
-function trimToLastContiguousSegment(steps: string[], order: string[] = stepOrder.value): string[] {
-  const sorted = sortSteps(steps, order)
-  const indices = sorted.map(s => order.indexOf(s))
-  if (indices.length <= 1) return sorted
 
-  let segmentStart = indices.length - 1
-  while (segmentStart > 0 && indices[segmentStart] === indices[segmentStart - 1] + 1) {
-    segmentStart -= 1
-  }
-
-  if (segmentStart === 0) return sorted
-  return sorted.slice(segmentStart)
-}
 
 function normalizeResumeSelection(steps: string[], order: string[] = stepOrder.value): string[] {
-  const normalized = uniqueSteps(steps).filter(s => {
-    const idx = order.indexOf(s)
-    return idx >= resumeStartIndex.value
-  })
-  return trimToLastContiguousSegment(normalized, order)
+  const sorted = sortSteps(
+    uniqueSteps(steps).filter(s => {
+      const idx = order.indexOf(s)
+      return idx >= resumeStartIndex.value
+    }),
+    order,
+  )
+  if (sorted.length <= 1) return sorted
+  const indices = sorted.map(s => order.indexOf(s))
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] !== indices[i - 1] + 1) return sorted.slice(0, i)
+  }
+  return sorted
 }
 
 function uniqueSteps(steps: string[]): string[] {
