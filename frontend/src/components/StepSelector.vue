@@ -168,6 +168,22 @@ const resumeStartIndex = computed((): number => {
   return idx >= 0 ? idx + 1 : 0
 })
 
+const maxValidStartIndex = computed((): number => {
+  if (!props.resume || !props.completedSteps?.length) {
+    return stepOrder.value.length - 1
+  }
+
+  const completedIndices = props.completedSteps
+    .map(s => stepOrder.value.indexOf(s))
+    .filter(idx => idx >= 0)
+  if (completedIndices.length === 0) {
+    return stepOrder.value.length - 1
+  }
+
+  const lastCompletedIdx = Math.max(...completedIndices)
+  return Math.min(lastCompletedIdx + 1, stepOrder.value.length - 1)
+})
+
 function isParentCompletedStep(step: string): boolean {
   return props.resume && (props.completedSteps ?? []).includes(step)
 }
@@ -190,7 +206,9 @@ function isStepSelectable(step: string): boolean {
   if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
     if (stepIndex < resumeStartIndex.value) return false
     const selectedIndices = getSelectedIndices()
-    if (selectedIndices.length === 0) return true
+    if (selectedIndices.length === 0) {
+      return stepIndex <= maxValidStartIndex.value
+    }
 
     const minIdx = selectedIndices[0]
     const maxIdx = selectedIndices[selectedIndices.length - 1]
