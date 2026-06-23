@@ -138,7 +138,11 @@ const showFuseToggle = computed((): boolean => {
 })
 
 const fuseToggleDisabled = computed((): boolean => {
-  return false
+  if (!props.resume) return false
+  return props.completedSteps.some(step => {
+    return (step === 'scf' || step === FUSED_SCF_PRENAMD)
+      && isLockedCompletedStep(step)
+  })
 })
 
 const stepOrder = computed((): string[] => effectiveStepOrder.value)
@@ -241,6 +245,7 @@ function isArrowActive(step: string): boolean {
 }
 
 function handleFuseToggle(fused: boolean): void {
+  if (fuseToggleDisabled.value) return
   fuseModeOverride.value = fused
   let newSteps: string[]
   const targetOrder = fused
