@@ -118,6 +118,8 @@ export interface TaskSummary {
   worker: string | null
   /** The next step eligible for resume */
   resume_next_step: string | null
+  /** The earliest completed successor step that can be selected for rerun */
+  resume_earliest_step?: string | null
   /** Whether this task can be resumed */
   resume_eligible: boolean
   /** Queue status: "QUEUED" | "DISPATCHING" | null (for tasks in the waiting queue) */
