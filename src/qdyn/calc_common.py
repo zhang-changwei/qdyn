@@ -293,11 +293,11 @@ def write_stru(
                         for idx in constraint.index:
                             if 0 <= idx < natoms:
                                 fixed_mask[idx] = True
-            stru_lines.append("<MD.Fixed.XYZ\n")
-            for i in range(natoms):
-                flags = "1 1 1" if fixed_mask[i] else "0 0 0"
-                stru_lines.append(f" {i + 1:5d}  {flags}\n")
-            stru_lines.append("MD.Fixed.XYZ>\n\n")
+                stru_lines.append("<MD.Fixed.XYZ\n")
+                for i in range(natoms):
+                    flags = "1 1 1" if fixed_mask[i] else "0 0 0"
+                    stru_lines.append(f" {i + 1:5d}  {flags}\n")
+                stru_lines.append("MD.Fixed.XYZ>\n\n")
 
             f.write("".join(stru_lines))
             f.flush()
