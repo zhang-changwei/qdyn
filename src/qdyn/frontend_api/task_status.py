@@ -237,6 +237,7 @@ def _build_queued_task_summary(
         prev_task_id=meta.get("prev_task_id"),
         worker=meta.get("worker"),
         resume_next_step=None,
+        resume_earliest_step=None,
         resume_eligible=False,
         queue_status=queue_status,
         queue_position=queue_positions.get(task_id),
@@ -431,7 +432,13 @@ def _build_task_summary(
             break
 
     resume_next_step: str | None = None
+    resume_earliest_step: str | None = None
     if completed_steps:
+        first_completed = completed_steps[0]
+        first_idx = step_order.index(first_completed)
+        if first_idx + 1 < len(step_order):
+            resume_earliest_step = step_order[first_idx + 1]
+
         last_completed = completed_steps[-1]
         last_idx = step_order.index(last_completed)
         if last_idx + 1 < len(step_order):
@@ -441,7 +448,7 @@ def _build_task_summary(
     derived_status = derive_task_status(raw_status_counts)
 
     resume_eligible = (
-        resume_next_step is not None
+        resume_earliest_step is not None
         and derived_status in ("COMPLETED", "FAILED")
     )
 
@@ -463,6 +470,7 @@ def _build_task_summary(
         prev_task_id=meta.get("prev_task_id"),
         worker=meta.get("worker"),
         resume_next_step=resume_next_step,
+        resume_earliest_step=resume_earliest_step,
         resume_eligible=resume_eligible,
         pool_name=meta.get("pool_name"),
         runtime_worker=meta.get("worker"),

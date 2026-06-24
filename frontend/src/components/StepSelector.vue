@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowRight, Check } from '@element-plus/icons-vue'
 import { FUSED_SCF_PRENAMD } from '@/constants/steps'
 
@@ -65,9 +65,11 @@ const props = withDefaults(defineProps<{
   modelValue: string[]
   resume?: boolean
   completedSteps?: string[]
+  resumeEarliestStep?: string | null
 }>(), {
   resume: false,
-  completedSteps: () => []
+  completedSteps: () => [],
+  resumeEarliestStep: null
 })
 
 const emit = defineEmits<{
@@ -94,9 +96,26 @@ const STEPS_FUSED: StepConfig[] = [
   { value: 'namd', label: 'NAMD' },
 ]
 
+const fuseModeOverride = ref<boolean | null>(null)
+
+watch(
+  () => [props.completedSteps.join('|'), props.resumeEarliestStep ?? ''],
+  () => {
+    fuseModeOverride.value = null
+  }
+)
+
 const isFused = computed((): boolean => {
-  return props.modelValue.includes(FUSED_SCF_PRENAMD)
-    || props.completedSteps.includes(FUSED_SCF_PRENAMD)
+  if (fuseModeOverride.value !== null) {
+    return fuseModeOverride.value
+  }
+  if (props.modelValue.includes(FUSED_SCF_PRENAMD)) {
+    return true
+  }
+  if (props.modelValue.includes('scf') || props.modelValue.includes('pre_namd')) {
+    return false
+  }
+  return props.completedSteps.includes(FUSED_SCF_PRENAMD)
 })
 
 const effectiveStepOrder = computed((): string[] => {
@@ -120,35 +139,75 @@ const showFuseToggle = computed((): boolean => {
 
 const fuseToggleDisabled = computed((): boolean => {
   if (!props.resume) return false
-  // completedSteps contains fused → locked on
-  if (props.completedSteps.includes(FUSED_SCF_PRENAMD)) return true
-  // completedSteps contains scf (independent) → locked off
-  if (props.completedSteps.includes('scf')) return true
-  return false
+  return props.completedSteps.some(step => {
+    return (step === 'scf' || step === FUSED_SCF_PRENAMD)
+      && isLockedCompletedStep(step)
+  })
 })
 
 const stepOrder = computed((): string[] => effectiveStepOrder.value)
 
 const resumeStartIndex = computed((): number => {
-  if (!props.resume || !props.completedSteps || props.completedSteps.length === 0) {
+  if (!props.resume) {
     return 0
   }
+
+  if (props.resumeEarliestStep) {
+    const earliestIdx = stepOrder.value.indexOf(props.resumeEarliestStep)
+    if (earliestIdx >= 0) {
+      return earliestIdx
+    }
+  }
+
+  if (!props.completedSteps || props.completedSteps.length === 0) {
+    return 0
+  }
+
   const lastCompleted = props.completedSteps[props.completedSteps.length - 1]
   const idx = stepOrder.value.indexOf(lastCompleted)
   return idx >= 0 ? idx + 1 : 0
 })
 
-function isCompletedStep(step: string): boolean {
+const maxValidStartIndex = computed((): number => {
+  if (!props.resume || !props.completedSteps?.length) {
+    return stepOrder.value.length - 1
+  }
+
+  const completedIndices = props.completedSteps
+    .map(s => stepOrder.value.indexOf(s))
+    .filter(idx => idx >= 0)
+  if (completedIndices.length === 0) {
+    return stepOrder.value.length - 1
+  }
+
+  const lastCompletedIdx = Math.max(...completedIndices)
+  return Math.min(lastCompletedIdx + 1, stepOrder.value.length - 1)
+})
+
+function isParentCompletedStep(step: string): boolean {
   return props.resume && (props.completedSteps ?? []).includes(step)
+}
+
+function isLockedCompletedStep(step: string): boolean {
+  if (!isParentCompletedStep(step)) return false
+  const stepIndex = stepOrder.value.indexOf(step)
+  return stepIndex >= 0 && stepIndex < resumeStartIndex.value
+}
+
+function isCompletedStep(step: string): boolean {
+  return isLockedCompletedStep(step)
 }
 
 function isStepSelectable(step: string): boolean {
   const stepIndex = stepOrder.value.indexOf(step)
+  if (stepIndex < 0) return false
 
   // Resume mode with known completed steps
   if (props.resume && props.completedSteps && props.completedSteps.length > 0) {
     if (stepIndex < resumeStartIndex.value) return false
-    if (stepIndex === resumeStartIndex.value) return true
+    if (props.modelValue.length === 0) {
+      return stepIndex <= maxValidStartIndex.value
+    }
     if (props.modelValue.includes(step)) return true
     const prevStep = stepOrder.value[stepIndex - 1]
     return props.modelValue.includes(prevStep)
@@ -199,6 +258,8 @@ function isArrowActive(step: string): boolean {
 }
 
 function handleFuseToggle(fused: boolean): void {
+  if (fuseToggleDisabled.value) return
+  fuseModeOverride.value = fused
   let newSteps: string[]
   const targetOrder = fused
     ? STEPS_FUSED.map(s => s.value)
@@ -212,14 +273,12 @@ function handleFuseToggle(fused: boolean): void {
       .filter(s => s !== FUSED_SCF_PRENAMD)
       .concat('scf', 'pre_namd')
   }
-  emit('update:modelValue', [...newSteps].sort((a, b) =>
-    targetOrder.indexOf(a) - targetOrder.indexOf(b)
-  ))
+  emit('update:modelValue', normalizeResumeSelection(newSteps, targetOrder))
 }
 
 function handleUpdate(newValue: string[]): void {
-  // Filter out completed steps — they should never appear in modelValue
-  const filtered = newValue.filter(s => !isCompletedStep(s))
+  // Locked parent-completed steps are inherited context, not steps to submit.
+  const filtered = uniqueSteps(newValue).filter(s => !isLockedCompletedStep(s))
   const sortedValue = sortSteps(filtered)
 
   // Auto-trim: deselecting a step removes all subsequent steps
@@ -244,9 +303,32 @@ function handleUpdate(newValue: string[]): void {
   emit('update:modelValue', sortedValue)
 }
 
-function sortSteps(steps: string[]): string[] {
+
+
+
+function normalizeResumeSelection(steps: string[], order: string[] = stepOrder.value): string[] {
+  const sorted = sortSteps(
+    uniqueSteps(steps).filter(s => {
+      const idx = order.indexOf(s)
+      return idx >= resumeStartIndex.value
+    }),
+    order,
+  )
+  if (sorted.length <= 1) return sorted
+  const indices = sorted.map(s => order.indexOf(s))
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] !== indices[i - 1] + 1) return sorted.slice(0, i)
+  }
+  return sorted
+}
+
+function uniqueSteps(steps: string[]): string[] {
+  return [...new Set(steps)]
+}
+
+function sortSteps(steps: string[], order: string[] = stepOrder.value): string[] {
   return [...steps].sort((a, b) => {
-    return stepOrder.value.indexOf(a) - stepOrder.value.indexOf(b)
+    return order.indexOf(a) - order.indexOf(b)
   })
 }
 </script>

@@ -102,10 +102,10 @@
           </template>
         </span>
       </div>
-      <div class="summary-row">
-        <span class="summary-label">Resume from</span>
+      <div v-if="resumeTargetStep(selectedTask)" class="summary-row">
+        <span class="summary-label">{{ resumeActionLabel(selectedTask) }}</span>
         <el-tag type="warning" size="small">
-          {{ stepLabel(selectedTask.resume_next_step ?? '') }}
+          {{ stepLabel(resumeTargetStep(selectedTask)) }}
         </el-tag>
       </div>
     </el-card>
@@ -192,6 +192,14 @@ function formatDate(timestamp: number): string {
 
 function stepLabel(step: string): string {
   return STEP_LABELS[step] ?? step
+}
+
+function resumeTargetStep(task: TaskSummary): string {
+  return task.resume_next_step ?? task.resume_earliest_step ?? ''
+}
+
+function resumeActionLabel(task: TaskSummary): string {
+  return task.resume_next_step ? 'Resume from' : 'Rerun from'
 }
 
 function workerTagType(worker: string): '' | 'success' | 'info' | 'warning' | 'danger' {

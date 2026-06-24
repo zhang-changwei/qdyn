@@ -84,6 +84,8 @@ class TaskSummary(BaseModel):
     worker: str | None = None
     # The next step that can be resumed from
     resume_next_step: str | None = None
+    # The earliest step that can be selected for rerun in resume mode
+    resume_earliest_step: str | None = None
     # Whether this task is eligible to be resumed
     resume_eligible: bool = False
     # Pool-based queue fields (populated for tasks in the waiting queue)
