@@ -26,6 +26,7 @@ from hamgnn.models.hamgnn_output import HamGNNPlusPlusOut
 import numpy.typing as npt
 
 from ..calc_common import select_orbitals, change_dir
+from ..calc_common import get_shared_memory_handle, close_and_unlink_shared_memory
 from ..input import HamGNNInputT
 from ..params import ORBITAL_BASIS
 from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
@@ -134,7 +135,8 @@ def calc_hamgnn_HK_gamma(
     nao_per_atoms: list[int], 
     basis_def: dict[int, npt.NDArray[np.int32]],
     graph: Data,
-    dtype: np.float32 | np.float64
+    dtype: type[np.float32] | type[np.float64],
+    shm: bool = False,
 ):
     natoms = graph.node_counts[0]
     z = graph.z.numpy()
@@ -147,7 +149,19 @@ def calc_hamgnn_HK_gamma(
     Hon  = HR[:natoms,:].reshape(-1, nao_max, nao_max)
     Hoff = HR[natoms:,:].reshape(-1, nao_max, nao_max)
 
-    HK = np.zeros((nao_total, nao_total), dtype=dtype)
+    if shm:
+        handle = None
+        try:
+            nbytes = nao_total * nao_total * dtype.itemsize
+            handle = get_shared_memory_handle(nbytes)
+            HK = np.ndarray((nao_total, nao_total), dtype=dtype, buffer=handle.buf, order='C')
+            HK[...] = 0.0
+        except Exception as e:
+            close_and_unlink_shared_memory(handle)
+            raise
+    else:
+        handle = None
+        HK = np.zeros((nao_total, nao_total), dtype=dtype)
 
     # orb_mask
     orb_masks = {}
@@ -177,7 +191,7 @@ def calc_hamgnn_HK_gamma(
         tmp = Hoff[idx][orb_mask].reshape(nao_i, nao_j)
         HK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp
 
-    return HK
+    return HK, handle
 
 
 def overwrite_hamgnn_basis(cls):
@@ -261,7 +275,8 @@ class HamGNNWrapper:
 _worker_model: HamGNNWrapper | None = None
 _worker_software: str | None = None
 _worker_add_H0: bool | None = None
-_worker_eigen_dtype: np.float32 | np.float64 | None = None
+_worker_eigen_solver: str | None = None
+_worker_eigen_dtype: type[np.float32] | type[np.float64] | None = None
 _worker_batch_size = 1
 
 _THREAD_ENV_VARS = (
@@ -328,7 +343,8 @@ def init_spawn_worker(
     nproc: int,
     threads_per_proc: int,
     batch_per_proc: int,
-    eigen_dtype: np.float32 | np.float64,
+    eigen_solver: str,
+    eigen_dtype: type[np.float32] | type[np.float64],
 ):
     _set_spawn_worker_cpu_affinity(nproc, threads_per_proc)
     torch.set_num_threads(threads_per_proc)
@@ -337,11 +353,13 @@ def init_spawn_worker(
     global _worker_model
     global _worker_software
     global _worker_add_H0
+    global _worker_eigen_solver
     global _worker_eigen_dtype
     global _worker_batch_size
 
     _worker_software = software
     _worker_add_H0 = mlh_input.add_H0
+    _worker_eigen_solver = eigen_solver
     _worker_eigen_dtype = eigen_dtype
     _worker_batch_size = max(1, batch_per_proc)
     ORBITAL_BASIS.clear()
@@ -366,15 +384,21 @@ def n2amd_workflow(
     assert _worker_add_H0 is not None, (
         "HamGNN worker add_H0 configuration is not initialized."
     )
+    assert _worker_eigen_solver is not None, (
+        "HamGNN worker eigen solver configuration is not initialized."
+    )
     assert _worker_eigen_dtype is not None, (
         "HamGNN worker eigen dtype configuration is not initialized."
     )
     worker_model = _worker_model
     software = _worker_software
     add_H0 = _worker_add_H0
+    eigen_solver = _worker_eigen_solver
     dtype = _worker_eigen_dtype
+    use_shm = (eigen_solver == 'elpa')
 
-    SKs, H0Ks, graphs, num_mats = [], [], [], []
+    SKs, H0Ks, HKs, graphs, num_mats = [], [], [], [], []
+    SK_handles, HK_handles = [], []
     nao_per_atom = None
     basis_def = None
     idx = -1
@@ -399,10 +423,11 @@ def n2amd_workflow(
             if basis_def is None:
                 basis_def = get_basis_def(software, stru, worker_model.nao_max)
             # 2. calc SK and HK
-            SK = calc_openmx_HK_SK_gamma(scfout_data)
+            SK, SK_handle = calc_openmx_HK_SK_gamma(scfout_data, dtype=dtype, shm=use_shm)
             SKs.append(SK)
+            SK_handles.append(SK_handle)
             if add_H0:
-                H0K = calc_openmx_HK_SK_gamma(scfout_data, isH=True)
+                H0K, _ = calc_openmx_HK_SK_gamma(scfout_data, dtype=dtype, isH=True)
                 H0Ks.append(H0K)
             # 3. gen graph
             num_mat, graph = gen_hamgnn_graph(software, stru, scfout_data)
@@ -432,27 +457,61 @@ def n2amd_workflow(
             }
         )
         # 5. HR -> HK
-        HKs = []
         for idx in range(len(graphs)):
             HR = hamiltonians[mat_offsets[idx]:mat_offsets[idx]+num_mats[idx]]
-            HK = calc_hamgnn_HK_gamma(
+            HK, HK_handle = calc_hamgnn_HK_gamma(
                 HR, 
                 worker_model.nao_max,
                 nao_per_atom, 
                 basis_def, 
                 graphs[idx], 
-                dtype=dtype
+                dtype=dtype,
+                shm=use_shm,
             )
             if add_H0:
                 HK += H0Ks[idx]
             HKs.append(HK)
+            HK_handles.append(HK_handle)
         del hamiltonians
         if add_H0:
             del H0Ks
         # 6. diag
         idx = -1
-        for idx, (HK, SK, graph) in enumerate(zip(HKs, SKs, graphs)):
-            eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
+        for idx, (HK, HK_handle, SK, SK_handle, graph) in enumerate(zip(HKs, HK_handles, SKs, SK_handles, graphs)):
+            if eigen_solver == 'scipy':
+                eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
+            elif eigen_solver == 'elpa':
+                n = SK.shape[-1]
+                itemsize = dtype.itemsize
+                mat_bytes = n * n * itemsize
+                val_bytes = n * itemsize
+                shm_w, w_view = None, None
+                try:
+                    shm_w = get_shared_memory_handle(val_bytes)
+                    w_view = np.ndarray((n,), dtype=dtype, buffer=shm_w.buf)
+                    args = {
+                        'n': n,
+                        'dtype': str(dtype),
+                        'shm-a': HK_handle.name,
+                        'shm-b': SK_handle.name,
+                        'shm-w': shm_w.name,
+                        'bytes-a': mat_bytes,
+                        'bytes-b': mat_bytes,
+                        'bytes-w': val_bytes,
+                        'expected-nprocs': threads,
+                    }
+                    run_software(
+                        software='elpa_worker',
+                        nprocs=threads,
+                        args=args,
+                        omp=1,
+                    )
+                    eigvals, eigvecs = w_view.copy(), HK
+                finally:
+                    del w_view
+                    close_and_unlink_shared_memory(shm_w)
+            else:
+                raise NotImplementedError
             eigvecs = eigvecs.T
             # 7. save wfc.npz
             np.savez(
@@ -479,6 +538,15 @@ def n2amd_workflow(
             }
         )
         raise
+    finally:
+        for SK in SKs:
+            del SK
+        for HK in HKs:
+            del HK
+        for handle in SK_handles:
+            close_and_unlink_shared_memory(handle)
+        for handle in HK_handles:
+            close_and_unlink_shared_memory(handle)
 
 
 class MLSCFSolver:
@@ -489,7 +557,6 @@ class MLSCFSolver:
         mlh_input: HamGNNInputT,
         model_path: str,
         logger: SCFLogger,
-        eigen_solver: str = 'scipy',
         use_gpu: bool = False,
         save_lmdb: bool = False,
         nproc: int = 1,
@@ -514,10 +581,8 @@ class MLSCFSolver:
         self.task_count = 0
 
         self.add_H0 = mlh_input.add_H0
-        self.eigen_solver = eigen_solver
-        self.eigen_dtype = (np.float64 
-                            if mlh_input.adv.eigen_dtype == 'float64'
-                            else np.float32)
+        self.eigen_solver = mlh_input.eigen_solver
+        self.eigen_dtype = np.dtype(mlh_input.eigen_dtype)
 
         if save_lmdb:
             self.save_lmdb = True
@@ -546,6 +611,7 @@ class MLSCFSolver:
                         self.nproc,
                         self.threads_per_proc,
                         self.batch_per_proc,
+                        self.eigen_solver,
                         self.eigen_dtype,
                     ),
                 )

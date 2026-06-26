@@ -187,6 +187,8 @@ class MainWorkflow:
         if omp_threads is not None:
             export['OMP_NUM_THREADS'] = str(omp_threads)
             export['MKL_NUM_THREADS'] = str(omp_threads)
+            export["OPENBLAS_NUM_THREADS"] = str(omp_threads)
+            export["NUMEXPR_NUM_THREADS"] = str(omp_threads)
 
         return ExecutionConfig(
             modules=list(dict.fromkeys(modules)),
@@ -429,7 +431,7 @@ class MainWorkflow:
             pp_path = active_worker_cfg["pp_path"][software]
             orb_path = active_worker_cfg["orb_path"][software]
             model_path = ''
-            res_software = software
+            res_software = [software]
             use_gpu = False
         else:
             nodes = 1
@@ -441,7 +443,9 @@ class MainWorkflow:
             pp_path = active_worker_cfg["pp_path"][dft_backend]
             orb_path = active_worker_cfg["orb_path"][dft_backend]
             model_path = resolve_model_path(self.active_pool, calculator)
-            res_software = dft_backend
+            res_software = ([dft_backend]
+                            if calculator.eigen_solver != "elpa"
+                            else [dft_backend, "elpa_worker"])
             use_gpu = False # calculator.use_gpu
 
         jobs_scf = qdyn_scf(
@@ -469,7 +473,7 @@ class MainWorkflow:
             set_run_config(
                 job_scf,
                 exec_config=self._build_exec_config(
-                    [res_software],
+                    res_software,
                     omp_threads=qres.threads_per_process,
                 ),
                 resources=qres,
@@ -537,7 +541,7 @@ class MainWorkflow:
             pp_path = active_worker_cfg["pp_path"][software]
             orb_path = active_worker_cfg["orb_path"][software]
             model_path = ''
-            res_software = software
+            res_software = [software]
             use_gpu = False
         else:
             nodes = 1
@@ -549,7 +553,9 @@ class MainWorkflow:
             pp_path = active_worker_cfg["pp_path"][dft_backend]
             orb_path = active_worker_cfg["orb_path"][dft_backend]
             model_path = resolve_model_path(self.active_pool, calculator)
-            res_software = dft_backend
+            res_software = ([dft_backend]
+                            if calculator.eigen_solver != "elpa"
+                            else [dft_backend, "elpa_worker"])
             use_gpu = False # calculator.use_gpu
         nprocs_dft = processes_per_node
         nprocs_py = max(1, min(default_nprocs_py, ncpus))
@@ -587,7 +593,7 @@ class MainWorkflow:
                     software_names=(
                         ['python'] 
                         if idx == njobs - 1 
-                        else [res_software]
+                        else res_software
                     ),
                     omp_threads=omp_py,
                 ),

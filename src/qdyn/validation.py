@@ -30,6 +30,7 @@ SUPPORTED_SOFTWARE = {
     "nequip",
     "mace",
     "hamgnn",
+    "elpa_worker",
 }
 # map from installed to modules / export / pre_run
 SOFTWARE_MAPPING = {
@@ -42,6 +43,7 @@ SOFTWARE_MAPPING = {
     "nequip": "python",
     "mace": "python",
     "hamgnn": "python",
+    "elpa_worker": "elpa_worker",
 }
 SOFTWARES_IN_STEP_FIELDS = {
     "vasp",
@@ -604,6 +606,8 @@ def validate_workflow_input(
         if isinstance(input.scf_input.calculator, HamGNNInputT):
             software = input.scf_input.calculator.ham_type
             validate_software_installation(software, installed)
+            if input.scf_input.calculator.eigen_solver == "elpa":
+                validate_software_installation("elpa_worker", installed)
 
         validate_step_input(input.scf_input, active_pool, worker_cfg, check_list)
 

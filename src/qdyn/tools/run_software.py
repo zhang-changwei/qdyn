@@ -229,6 +229,11 @@ def run_software(
             cmd = cmd_head + [str(nprocs), 'openmx_postprocess', 'qdyn.dat']
         else:
             cmd = cmd_head + [str(nprocs), 'openmx', 'qdyn.dat']
+    elif software == 'elpa_worker':
+        assert 'args' in kwargs
+        cmd = cmd_head + [str(nprocs), 'elpa_worker']
+        for k, v in kwargs['args'].items():
+            cmd.extend([f'--{k}', str(v)])
     else:
         cmd = cmd_head + [software]
     

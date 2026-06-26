@@ -78,7 +78,7 @@ class DFTSCFSolver:
         inputs_dict: dict,
         logger: SCFLogger,
         nproc: int = 1,
-        threads_per_proc: int = 1
+        threads_per_proc: int = 1,
     ):
         self.software = software
         self.nproc = nproc
@@ -136,6 +136,7 @@ def overlap_run_software(
     olapdir: Path,
     software_dft: str,
     threads_per_process: int,
+    dtype: type[np.float32] | type[np.float64] = np.float64,
 ):
     """Run overlap postprocess and save the overlap matrix."""
     with change_dir(olapdir):
@@ -147,7 +148,7 @@ def overlap_run_software(
         )
     # save overlap matrix
     scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
-    SK = calc_openmx_HK_SK_gamma(scfout_data, tdt=True)
+    SK, _ = calc_openmx_HK_SK_gamma(scfout_data, dtype=dtype, tdt=False)
     np.save(subdir / "overlap.npy", SK)
 
 
@@ -305,6 +306,7 @@ def qdyn_scf_cpu(
             inputs_params=calc.parameters,
         )
         postprocess = False
+        dtype = np.dtype(np.float64)
         # logger and solver
         scf_logger = SCFLogger(nstep=scf_end, retry=retry)
         last_step = scf_logger.cur_step
@@ -337,6 +339,7 @@ def qdyn_scf_cpu(
             inputs_dict=inputs_dict,
         )
         postprocess = True
+        dtype = np.dtype(calc.eigen_dtype)
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=scf_end, retry=retry)
@@ -407,7 +410,7 @@ def qdyn_scf_cpu(
 
     # tdoverlap calculation
     if software_dft == 'openmx':
-        dftinputs.update_inputs({'postprocess.output.level': 1})
+        dftinputs.update_inputs({'postprocess.output.level': 11})
         dftinputs.update_stru_extras()
 
     if software_dft in {'abacus', 'openmx'}:
@@ -435,7 +438,7 @@ def qdyn_scf_cpu(
                 results.append(
                     pool.apply_async(
                         overlap_run_software,
-                        args=(subdir, olapdir, software_dft, threads_per_process)
+                        args=(subdir, olapdir, software_dft, threads_per_process, dtype)
                     )
                 )
 
@@ -454,6 +457,7 @@ def qdyn_scf_cpu(
         'run_dir': str(task_dir),
         'software': software,
         'software_dft': software_dft,
+        'dtype': str(dtype),
     }
 
 
