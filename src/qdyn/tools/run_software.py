@@ -2,6 +2,7 @@ from enum import Enum
 import io
 import logging
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -11,12 +12,17 @@ import ase.units
 from ..calc_common import read_stru, write_stru
 from ..params import STRU2_FNAME_MAPPING, STRU2_FORMAT_MAPPING
 
+_SRUN = (shutil.which("srun") is not None)
+_INTEL_MPI_ENVS = {
+    "I_MPI_PIN": "1",
+    "I_MPI_PIN_DOMAIN": "core",
+    "I_MPI_PIN_ORDER": "compact",
+}
 
 class DFTStatus(Enum):
     NORMAL = 0
     NOT_CONVERGED_ERROR = 1
     UNKNOWN_ERROR = 2
-
 
 class MDProgressMonitor:
 
@@ -205,18 +211,26 @@ def run_software(
         monitor: Optional callback function to monitor the calculation progress.
     """
 
+    env = os.environ.copy()
+    threads = env.get("OMP_NUM_THREADS", "1")
+    if "omp" in kwargs and kwargs["omp"] is not None:
+        threads = str(kwargs["omp"])
+        env["OMP_NUM_THREADS"] = threads
+        env["MKL_NUM_THREADS"] = threads
+        env["OPENBLAS_NUM_THREADS"] = threads
+        env["NUMEXPR_NUM_THREADS"] = threads
+    
+    cmd_head = set_cmd_head(env, nprocs, int(threads))
+    
     if software == 'vasp':
-        cmd = run_vasp(nprocs, monitor=monitor, **kwargs)
+        cmd = cmd_head + run_vasp(nprocs, **kwargs)
     elif software == 'openmx':
         if 'postprocess' in kwargs and kwargs['postprocess']:
-            cmd = ['mpirun', '-np', str(nprocs), 'openmx_postprocess', 'qdyn.dat']
+            cmd = cmd_head + [str(nprocs), 'openmx_postprocess', 'qdyn.dat']
         else:
-            cmd = ['mpirun', '-np', str(nprocs), 'openmx', 'qdyn.dat']
+            cmd = cmd_head + [str(nprocs), 'openmx', 'qdyn.dat']
     else:
-        raise NotImplementedError(f"Software '{software}' is not supported yet.")
-    env = os.environ.copy()
-    if "omp" in kwargs and kwargs["omp"] is not None:
-        env["OMP_NUM_THREADS"] = str(kwargs["omp"])
+        cmd = cmd_head + [software]
     
 
     if monitor is None:
@@ -260,7 +274,6 @@ def run_software(
             stru.set_cell(kwargs['cell'])
             stru.set_pbc([True, True, True])
             write_stru(fname, stru, STRU2_FORMAT_MAPPING[software])
-        
 
 def run_vasp(
     nprocs: int, 
@@ -293,6 +306,15 @@ def run_vasp(
             vasp_exe = 'vasp_std'
 
     # Launch VASP
-    cmd = ['mpirun', '-np', str(nprocs), vasp_exe]
+    cmd = [vasp_exe]
 
     return cmd
+
+def set_cmd_head(env: dict[str, Any], tasks: int, threads: int = 1):
+    if _SRUN:
+        return ['srun', '--mpi=pmi2', 
+                '-n', str(tasks), '-c', str(threads),
+                '--exact', '--cpu-bind=cores']
+    for k, v in _INTEL_MPI_ENVS:
+        env.setdefault(k, v)
+    return ['mpirun', '-np', str(tasks)]

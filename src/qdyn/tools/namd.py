@@ -19,6 +19,7 @@ from typing import List
 from ..calc_common import parse_band_index
 from ..input import NAMDInputT
 from .canac import save_hfnamd_inputs
+from .run_software import run_software
 
 @job
 def qdyn_namd(
@@ -101,7 +102,7 @@ def qdyn_namd(
     if sh == 'FSSH':
         subprocess.run(['hfnamd'])
     else:
-        subprocess.run(['mpirun', '-np', str(nodes * processes_per_node), 'hfnamd'])
+        run_software('hfnamd', nprocs=nodes * processes_per_node, omp=1)
 
     # plot
     images = []
