@@ -25,12 +25,12 @@ from hamgnn.models.Model import Model
 from hamgnn.models.hamgnn_output import HamGNNPlusPlusOut
 import numpy.typing as npt
 
-from ..calc_common import select_orbitals, change_dir
+from ..calc_common import select_orbitals, change_dir, parse_band_index
 from ..calc_common import get_shared_memory_handle, close_and_unlink_shared_memory
 from ..input import HamGNNInputT
 from ..params import ORBITAL_BASIS
-from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma
-from ..tools.run_software import run_software
+from ..output_postprocess import read_scfout, calc_openmx_HK_SK_gamma, extract_band_edges
+from ..tools.run_software import run_software, ELPAMonitor
 from ..tools.scf import SCFLogger
 
 NAO_MAX_SPDF = {
@@ -278,6 +278,8 @@ _worker_add_H0: bool | None = None
 _worker_eigen_solver: str | None = None
 _worker_eigen_dtype: type[np.float32] | type[np.float64] | None = None
 _worker_batch_size = 1
+_worker_bmin: int | str = '' # 1 based
+_worker_bmax: int | str = '' # 1 based
 
 _THREAD_ENV_VARS = (
     "OMP_NUM_THREADS",
@@ -356,12 +358,16 @@ def init_spawn_worker(
     global _worker_eigen_solver
     global _worker_eigen_dtype
     global _worker_batch_size
+    global _worker_bmin
+    global _worker_bmax
 
     _worker_software = software
     _worker_add_H0 = mlh_input.add_H0
     _worker_eigen_solver = eigen_solver
     _worker_eigen_dtype = eigen_dtype
     _worker_batch_size = max(1, batch_per_proc)
+    _worker_bmin = mlh_input.bmin
+    _worker_bmax = mlh_input.bmax
     ORBITAL_BASIS.clear()
     ORBITAL_BASIS.update(select_orbitals(software, mlh_input.nao_max))
     _worker_model = HamGNNWrapper(mlh_input, model_path=model_path, device='cpu')
@@ -374,6 +380,8 @@ def n2amd_workflow(
     progress_queue: Any,
 ):
     global _worker_model
+    global _worker_bmin
+    global _worker_bmax
     assert _worker_model is not None, (
         "HamGNN model is not initialized in worker process. "
         "This workflow requires spawn workers initialized with init_spawn_worker."
@@ -396,6 +404,14 @@ def n2amd_workflow(
     eigen_solver = _worker_eigen_solver
     dtype = _worker_eigen_dtype
     use_shm = (eigen_solver == 'elpa')
+    if not (isinstance(_worker_bmin, int) and isinstance(_worker_bmax, int)):
+        vbm, cbm, nbands = extract_band_edges(
+            software='hamgnn', 
+            dir_path=task_dirs[0]
+        )
+        _worker_bmin = parse_band_index(str(_worker_bmin), vbm, nbands)
+        _worker_bmax = parse_band_index(str(_worker_bmax), vbm, nbands)
+    bmin, bmax = _worker_bmin, _worker_bmax
 
     SKs, H0Ks, HKs, graphs, num_mats = [], [], [], [], []
     SK_handles, HK_handles = [], []
@@ -480,45 +496,44 @@ def n2amd_workflow(
         for idx, (HK, HK_handle, SK, SK_handle, graph) in enumerate(zip(HKs, HK_handles, SKs, SK_handles, graphs)):
             if eigen_solver == 'scipy':
                 eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
+                np.save(
+                    os.path.join(task_dirs[idx], 'eigen.npy'),
+                    eigvals
+                )
+                np.save(
+                    os.path.join(task_dirs[idx], f'wfc_{bmin}_{bmax}.npy'),
+                    eigvecs.T[bmin-1:bmax]
+                )
             elif eigen_solver == 'elpa':
                 n = SK.shape[-1]
                 itemsize = dtype.itemsize
                 mat_bytes = n * n * itemsize
-                val_bytes = n * itemsize
-                shm_w, w_view = None, None
-                try:
-                    shm_w = get_shared_memory_handle(val_bytes)
-                    w_view = np.ndarray((n,), dtype=dtype, buffer=shm_w.buf)
-                    args = {
-                        'n': n,
-                        'dtype': str(dtype),
-                        'shm-a': HK_handle.name,
-                        'shm-b': SK_handle.name,
-                        'shm-w': shm_w.name,
-                        'bytes-a': mat_bytes,
-                        'bytes-b': mat_bytes,
-                        'bytes-w': val_bytes,
-                        'expected-nprocs': threads,
-                    }
+
+                args = {
+                    'n': n,
+                    'dtype': str(dtype),
+                    'shm-a': HK_handle.name,
+                    'shm-b': SK_handle.name,
+                    'bytes-a': mat_bytes,
+                    'bytes-b': mat_bytes,
+                    'expected-nprocs': threads,
+                    "nev": n,
+                    "bmin": bmin - 1,
+                    "bmax": bmax,
+                    "eigen-path": os.path.join(task_dirs[idx], 'eigen.npy'),
+                    "wfc-path": os.path.join(task_dirs[idx], f'wfc_{bmin}_{bmax}.npy'),
+                }
+                with ELPAMonitor(shm_a=HK_handle, shm_b=SK_handle) as m:
                     run_software(
                         software='elpa_worker',
                         nprocs=threads,
+                        monitor=m,
+                        use_pipe=True,
                         args=args,
                         omp=1,
                     )
-                    eigvals, eigvecs = w_view.copy(), HK
-                finally:
-                    del w_view
-                    close_and_unlink_shared_memory(shm_w)
             else:
                 raise NotImplementedError
-            eigvecs = eigvecs.T
-            # 7. save wfc.npz
-            np.savez(
-                os.path.join(task_dirs[idx], 'wfc.npz'),
-                eigenvalues=eigvals,
-                wfc=eigvecs,
-            )
             # logging
             progress_queue.put(
                 {
@@ -539,10 +554,8 @@ def n2amd_workflow(
         )
         raise
     finally:
-        for SK in SKs:
-            del SK
-        for HK in HKs:
-            del HK
+        del SKs
+        del HKs
         for handle in SK_handles:
             close_and_unlink_shared_memory(handle)
         for handle in HK_handles:

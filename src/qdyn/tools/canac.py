@@ -340,13 +340,13 @@ def calc_tdolap_wrapper(
         'vasp': 'WAVECAR',
         'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+1}_nao.txt',
         'siesta': f'{sysname}.fullBZ.WFSX',
-        'hamgnn': 'wfc.npz'
+        'hamgnn': 'eigen.npy'
     }
     waveB_mapping = {
         'vasp': 'WAVECAR',
         'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+2}_nao.txt',
         'siesta': f'{sysname}.fullBZ.WFSX',
-        'hamgnn': 'wfc.npz'
+        'hamgnn': 'eigen.npy'
     }
 
     f_waveA = Path(dirA) / waveA_mapping[software]

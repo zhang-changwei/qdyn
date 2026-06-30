@@ -7,7 +7,7 @@ import numpy as np
 import numpy.typing as npt
 
 from .calc_common import read_stru
-from .params import VALENCE_ELECTRONS
+from .params import VALENCE_ELECTRONS, ORBITAL_BASIS
 
 
 def extract_band_edges(
@@ -748,15 +748,26 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> tuple[int, int, int]:
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
         software_dft = 'openmx'
-        hamgnn_out = np.load(os.path.join(dir_path, 'wfc.npz'), mmap_mode='r')
-        nbands = hamgnn_out['wfc'].shape[1]
     except Exception as e:
         raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
 
     syms = stru.get_chemical_symbols()
-    nele = 0
-    for sym in syms:
-        nele += VALENCE_ELECTRONS[software_dft][sym]
+    nele = sum(VALENCE_ELECTRONS[software_dft][sym] for sym in syms)
     vbm = (nele + 1) // 2
     cbm = vbm + 1
+
+    eigen_path = Path(dir_path, 'eigen.npy')
+    if eigen_path.is_file():
+        hamgnn_out = np.load(eigen_path, mmap_mode='r')
+        nbands = hamgnn_out.size
+    else:
+        # WARNING: ORBITAL_BASIS can be undetermined in some steps.
+        naos = {}
+        for sym in set(syms):
+            basis = ORBITAL_BASIS[software_dft][sym]
+            orbitals = basis.partition('-')[2]
+            numbers = re.findall(r'[spdf](\d+)', orbitals)
+            naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
+        nbands = sum(naos[sym] for sym in syms)
+
     return vbm, cbm, nbands

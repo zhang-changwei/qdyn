@@ -270,6 +270,22 @@ class HamGNNInputT(BaseModel):
         default='scipy',
         description='Eigenvalue solver for Hamiltonian diagonalization',
     )
+    bmin: str = Field(
+        default='LOWEST',
+        description="Lower band index, accepts integer or expressions like VBM-2",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. VBM, VBM-2, 10",
+        },
+    )
+    bmax: str = Field(
+        default='HIGHEST',
+        description="Upper band index, accepts integer or expressions like CBM+4",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. CBM, CBM+4, 20",
+        },
+    )
 
     adv: _HamGNNInputAdvT = Field(
         default_factory=_HamGNNInputAdvT,

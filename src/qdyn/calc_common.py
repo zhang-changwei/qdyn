@@ -372,7 +372,7 @@ def safe_eval(expr: str) -> Any:
 
     return _eval(tree.body)
 
-_BAND_SYMBOL_RE = re.compile(r"\b(vbm|homo|cbm|lumo)\b")
+_BAND_SYMBOL_RE = re.compile(r"\b(vbm|homo|cbm|lumo|highest|lowest)\b")
 
 def parse_band_index(
     expr: str,
@@ -380,7 +380,8 @@ def parse_band_index(
     nbands: int,
 ) -> int:
     """1-based"""
-    values = {"vbm": vbm, "homo": vbm, "cbm": vbm + 1, "lumo": vbm + 1}
+    values = {"vbm": vbm, "homo": vbm, "cbm": vbm + 1, "lumo": vbm + 1,
+              "highest": nbands, "lowest": 1}
     normalized = _BAND_SYMBOL_RE.sub(
         lambda m: str(values[m.group(1)]),
         expr.lower(),
@@ -557,7 +558,7 @@ def get_shared_memory_handle(nbytes: int):
         except FileExistsError:
             continue
     else:
-        raise
+        raise RuntimeError('Cannot find available shm name within 16 attempts')
     return shm
 
 def close_and_unlink_shared_memory(shm: shared_memory.SharedMemory | None) -> None:

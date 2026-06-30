@@ -192,11 +192,33 @@ class MDProgressMonitor:
                 return DFTStatus.UNKNOWN_ERROR
 
         return DFTStatus.NORMAL
-        
+
+class ELPAMonitor:
+    def __init__(self, shm_a, shm_b):
+        self.shm_a = shm_a
+        self.shm_b = shm_b
+        self.released = False
+
+    def __enter__(self):
+        self.released = False
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def __call__(self, line: str):
+        if not self.released and line.strip() == "QDYN_ELPA_INPUTS_COPIED":
+            from ..calc_common import close_and_unlink_shared_memory
+            close_and_unlink_shared_memory(self.shm_a)
+            close_and_unlink_shared_memory(self.shm_b)
+            self.released = True
+        return DFTStatus.NORMAL
+
 def run_software(
     software: str,
     nprocs: int,
     monitor: Callable | None = None,
+    use_pipe: bool = False,
     **kwargs: Any,
 ) -> None:
     """Run the specified software with appropriate settings.
@@ -238,7 +260,29 @@ def run_software(
         cmd = cmd_head + [software]
     
 
-    if monitor is None:
+    if use_pipe:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                if monitor is not None:
+                    dftstatus = monitor(line)
+                    if dftstatus != DFTStatus.NORMAL:
+                        raise RuntimeError(
+                            f"DFT calculation failed with status: {dftstatus}"
+                        )
+            returncode = process.wait()
+        except:
+            process.kill()
+            returncode = process.wait()
+    elif monitor is None:
         result = subprocess.run(cmd, env=env)
         returncode = result.returncode
     else:

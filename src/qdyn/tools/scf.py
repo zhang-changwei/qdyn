@@ -137,6 +137,7 @@ def overlap_run_software(
     software_dft: str,
     threads_per_process: int,
     dtype: type[np.float32] | type[np.float64] = np.float64,
+    sparse: bool = False,
 ):
     """Run overlap postprocess and save the overlap matrix."""
     with change_dir(olapdir):
@@ -149,7 +150,19 @@ def overlap_run_software(
     # save overlap matrix
     scfout_data = read_scfout(str(olapdir / "qdyn.scfout"))
     SK, _ = calc_openmx_HK_SK_gamma(scfout_data, dtype=dtype, tdt=False)
-    np.save(subdir / "overlap.npy", SK)
+
+    if not sparse:
+        np.save(subdir / "overlap.npy", SK)
+        return
+    from scipy.sparse import csr_array as csr
+    sp = csr(SK, shape=SK.shape, dtype=SK.dtype, copy=True)
+    np.savez(
+        subdir / "overlap.npz",
+        data=sp.data,
+        indices=sp.indices,
+        indptr=sp.indptr,
+        shape=SK.shape,
+    )
 
 
 def qdyn_scf(
@@ -307,6 +320,7 @@ def qdyn_scf_cpu(
         )
         postprocess = False
         dtype = np.dtype(np.float64)
+        use_sparse = False
         # logger and solver
         scf_logger = SCFLogger(nstep=scf_end, retry=retry)
         last_step = scf_logger.cur_step
@@ -340,6 +354,7 @@ def qdyn_scf_cpu(
         )
         postprocess = True
         dtype = np.dtype(calc.eigen_dtype)
+        use_sparse = calc.eigen_solver == 'elpa'
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=scf_end, retry=retry)
@@ -438,7 +453,11 @@ def qdyn_scf_cpu(
                 results.append(
                     pool.apply_async(
                         overlap_run_software,
-                        args=(subdir, olapdir, software_dft, threads_per_process, dtype)
+                        args=(
+                            subdir, olapdir, software_dft, 
+                            threads_per_process, 
+                            dtype, use_sparse,
+                        )
                     )
                 )
 

@@ -81,8 +81,8 @@ def qdyn_pre_namd(
     gamma = is_gamma_ver(software_lower, all_scf_dirs[0])
     dtype = np.float64
     if software_lower == "hamgnn":
-        with np.load(os.path.join(all_scf_dirs[0], "wfc.npz"), mmap_mode="r") as tmp:
-            dtype = tmp["wfc"].dtype
+        tmp = np.load(os.path.join(all_scf_dirs[0], "eigen.npy"), mmap_mode="r")
+        dtype = tmp.dtype
 
     bmin = parse_band_index(parameters.bmin, vbm, nbands)
     bmax = parse_band_index(parameters.bmax, vbm, nbands)
