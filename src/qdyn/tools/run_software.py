@@ -280,7 +280,7 @@ def run_software(
                         )
             returncode = process.wait()
         except:
-            process.kill()
+            process.terminate()
             returncode = process.wait()
     elif monitor is None:
         result = subprocess.run(cmd, env=env)
@@ -364,6 +364,6 @@ def set_cmd_head(env: dict[str, Any], tasks: int, threads: int = 1):
         return ['srun', '--mpi=pmi2', 
                 '-n', str(tasks), '-c', str(threads),
                 '--exact', '--cpu-bind=cores']
-    for k, v in _INTEL_MPI_ENVS:
+    for k, v in _INTEL_MPI_ENVS.items():
         env.setdefault(k, v)
     return ['mpirun', '-np', str(tasks)]
