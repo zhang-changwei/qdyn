@@ -245,15 +245,15 @@ def run_software(
     cmd_head = set_cmd_head(env, nprocs, int(threads))
     
     if software == 'vasp':
-        cmd = cmd_head + run_vasp(nprocs, **kwargs)
+        cmd = cmd_head + run_vasp(**kwargs)
     elif software == 'openmx':
         if 'postprocess' in kwargs and kwargs['postprocess']:
-            cmd = cmd_head + [str(nprocs), 'openmx_postprocess', 'qdyn.dat']
+            cmd = cmd_head + ['openmx_postprocess', 'qdyn.dat']
         else:
-            cmd = cmd_head + [str(nprocs), 'openmx', 'qdyn.dat']
+            cmd = cmd_head + ['openmx', 'qdyn.dat']
     elif software == 'elpa_worker':
         assert 'args' in kwargs
-        cmd = cmd_head + [str(nprocs), 'elpa_worker']
+        cmd = cmd_head + ['elpa_worker']
         for k, v in kwargs['args'].items():
             cmd.extend([f'--{k}', str(v)])
     else:
@@ -324,15 +324,10 @@ def run_software(
             stru.set_pbc([True, True, True])
             write_stru(fname, stru, STRU2_FORMAT_MAPPING[software])
 
-def run_vasp(
-    nprocs: int, 
-    is_alle: bool | None = False, 
-    **kwargs: Any
-):
+def run_vasp(is_alle: bool = False, **kwargs: Any):
     """Run VASP calculation using mpirun.
 
     Args:
-        nprocs: Number of MPI processes
         is_alle: Whether to use all-electron VASP (vasp_ae)
     """
     # Check if using all-electron VASP
