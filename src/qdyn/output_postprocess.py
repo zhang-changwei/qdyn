@@ -764,7 +764,7 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> tuple[int, int, int]:
         # WARNING: ORBITAL_BASIS can be undetermined in some steps.
         naos = {}
         for sym in set(syms):
-            basis = ORBITAL_BASIS[software_dft][sym]
+            basis = ORBITAL_BASIS[sym]
             orbitals = basis.partition('-')[2]
             numbers = re.findall(r'[spdf](\d+)', orbitals)
             naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
