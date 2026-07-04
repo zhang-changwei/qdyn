@@ -154,6 +154,8 @@ def qdyn_fused_scf_prenamd_task(
             inputs_params=calc.parameters,
         )
         postprocess = False
+        dtype = np.dtype(np.float64)
+        use_sparse = False
         # logger and solver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
         scf_solver = DFTSCFSolver(
@@ -186,6 +188,8 @@ def qdyn_fused_scf_prenamd_task(
             inputs_dict=inputs_dict,
         )
         postprocess = True
+        dtype = np.dtype(calc.eigen_dtype)
+        use_sparse = calc.eigen_solver == 'elpa'
         # logger and solver
         from ..ml_tools.hamgnn_wrapper import MLSCFSolver
         scf_logger = SCFLogger(nstep=n_frames, retry=retry)
@@ -205,7 +209,7 @@ def qdyn_fused_scf_prenamd_task(
     if software_dft in ('abacus', 'openmx'):
         inputs_dict_olap = deepcopy(inputs_dict)
         if software_dft == 'openmx':
-            inputs_dict_olap['postprocess.output.level'] = 1
+            inputs_dict_olap['postprocess.output.level'] = 11
         elif software_dft == 'abacus':
             inputs_dict_olap['calculation'] = 'get_s'
         dftinputs_olap = DFTInputs(
@@ -252,22 +256,28 @@ def qdyn_fused_scf_prenamd_task(
             'qdyn.scfout', 'qdyn.out'
         },
         'hamgnn': {
-            'wfc.npz', 'overlap.npy', 'overlap.npz'
+            'eigen.npy', 'wfc_*_*.npy', 'overlap.npy', 'overlap.npz'
         }
     }
     def remove_large_outputs(
         softwares: Sequence[str],
         folders: Sequence[str | Path]
     ) -> None:
+        import fnmatch
         fnames = set()
         for s in softwares:
             fnames = fnames.union(LARGE_FNAMES.get(s, set()))
 
         for folder in folders:
-            for fname in fnames:
-                fpath = os.path.join(folder, fname)
-                if os.path.isfile(fpath):
-                    os.remove(fpath)
+            folder = Path(folder)
+            del_list = []
+            for fpath in folder.glob('*'):
+                basename = fpath.name
+                for pattern in fnames:
+                    if fnmatch.fnmatch(basename, pattern):
+                        del_list.append(fpath)
+            for fpath in del_list:
+                fpath.unlink()
 
     pool_olap = (
         multiprocessing.Pool(processes=nprocs_py) # type: ignore
@@ -338,6 +348,7 @@ def qdyn_fused_scf_prenamd_task(
                     bmax=bmax,
                     ikpt=prenamd_input.adv.ikpt,
                     ispin=prenamd_input.adv.ispin,
+                    dtype=dtype, # type: ignore
                     nproc=nprocs_py,
                     batch_size=batch_size,
                     dirs_sorted=True,
@@ -370,7 +381,11 @@ def qdyn_fused_scf_prenamd_task(
                     results.append(
                         pool_olap.apply_async( # type: ignore
                             overlap_run_software,
-                            args=(subdir, olapdir, software_dft, omp_py)
+                            args=(
+                                subdir, olapdir, software_dft, 
+                                omp_py, 
+                                dtype, use_sparse,
+                            )
                         )
                     )
 
@@ -411,6 +426,7 @@ def qdyn_fused_scf_prenamd_task(
         "software_dft": software_dft,
         "VBM": vbm,
         "CBM": cbm,
+        "dtype": str(dtype),
         "tdolap_path": out['tdolap_path'],
     }
 

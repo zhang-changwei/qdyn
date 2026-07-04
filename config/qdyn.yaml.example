@@ -74,6 +74,7 @@ worker_pools:
         nequip: false
         mace: false
         hamgnn: false
+        elpa_worker: false
       pp_path:
         vasp: '/absolute/path/to/vasp-pp'
       orb_path:

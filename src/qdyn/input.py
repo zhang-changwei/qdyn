@@ -163,10 +163,6 @@ class _HamGNNInputAdvT(BaseModel):
     use_kan: bool = False
     radius_scale: float = 1.01
     build_internal_graph: bool = False
-    eigen_dtype: Literal['float32', 'float64'] = Field(
-        default='float64',
-        description='Numeric precision for eigenvalue solver',
-    )
 
 class HamGNNInputT(BaseModel):
     """Input parameters for HamGNN tight-binding Hamiltonian construction."""
@@ -264,6 +260,31 @@ class HamGNNInputT(BaseModel):
     nprocs: Literal[1, 2, 4, 8] = Field(
         default=8,
         description="Concurrent processes for HamGNN inference.",
+    )
+
+    eigen_dtype: Literal['float32', 'float64'] = Field(
+        default='float32',
+        description='Numeric precision for eigenvalue solver',
+    )
+    eigen_solver: Literal['scipy', 'elpa'] = Field(
+        default='scipy',
+        description='Eigenvalue solver for Hamiltonian diagonalization',
+    )
+    bmin: str = Field(
+        default='LOWEST',
+        description="Lower band index, accepts integer or expressions like VBM-2",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. VBM, VBM-2, 10",
+        },
+    )
+    bmax: str = Field(
+        default='HIGHEST',
+        description="Upper band index, accepts integer or expressions like CBM+4",
+        json_schema_extra={
+            "widget": "band-input",
+            "placeholder": "e.g. CBM, CBM+4, 20",
+        },
     )
 
     adv: _HamGNNInputAdvT = Field(

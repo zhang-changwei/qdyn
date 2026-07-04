@@ -1,13 +1,13 @@
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
 
 from .calc_common import read_stru
-from .params import VALENCE_ELECTRONS
+from .params import VALENCE_ELECTRONS, ORBITAL_BASIS
 
 
 def extract_band_edges(
@@ -644,24 +644,29 @@ def read_scfout(path: str) -> dict[str, Any]:
     return _read_scfout(path)
 
 def calc_openmx_HK_SK_gamma(
-    scfout_data: dict[str, Any], 
+    scfout_data: dict[str, Any],
+    dtype: Literal['float32', 'float64'] | type[np.float32] | type[np.float64] = 'float32',
     tdt: bool = False, 
     isH: bool = False,
     ispin: int = 0,
+    shm: bool = False,
 ):
     """Assemble the Gamma-point overlap (or Hamiltonian) matrix from scfout data.
 
     Args:
         scfout_data: Parsed scfout data containing ``atomnum``, ``nao_per_atom``,
             ``edge_index``, and the on-/off-site blocks.
+        dtype: Data type. Either ``'float32'`` or ``'float64'``.
         tdt: Build only the cross-frame (t, t+dt) overlap blocks instead of the
             full on-site + off-site matrix.
         isH: Use the Hamiltonian blocks (``Hon``/``Hoff``) instead of the overlap
             blocks (``Son``/``Soff``).
         ispin: Spin channel index used when ``isH`` is True.
+        shm: Optional shared memory object to store the resulting matrix.
 
     Returns:
         Dense Gamma-point matrix of shape ``(nao_total, nao_total)``.
+        and shm handle if shm is provided.
 
     Raises:
         ValueError: If ``isH`` is True but the postprocess level is too low.
@@ -686,7 +691,26 @@ def calc_openmx_HK_SK_gamma(
         natoms //= 2
         nao_total //= 2
 
-    SK = np.zeros((nao_total, nao_total), dtype=np.float64)
+    _dtype = np.dtype(dtype)
+    if shm:
+        from .calc_common import get_shared_memory_handle, close_and_unlink_shared_memory
+        handle = None
+        try:
+            nbytes = int(nao_total * nao_total * _dtype.itemsize)
+            handle = get_shared_memory_handle(nbytes)
+            SK = np.ndarray(
+                (nao_total, nao_total), 
+                dtype=_dtype, 
+                buffer=handle.buf,
+                order='C',
+            )
+            SK[...] = 0.0
+        except Exception as e:
+            close_and_unlink_shared_memory(handle)
+            raise
+    else:
+        handle = None
+        SK = np.zeros((nao_total, nao_total), dtype=_dtype)
     
     if not tdt:
         # on-site
@@ -715,7 +739,7 @@ def calc_openmx_HK_SK_gamma(
                 tmp = Soff[idx][:nao_i*nao_j]
                 SK[off_i:off_i+nao_i, off_j:off_j+nao_j] += tmp.reshape(nao_i, nao_j)
 
-    return SK
+    return SK, handle
 
 # ===========================================================================
 # Hamgnn specific functions
@@ -724,15 +748,26 @@ def _extract_vbmcbm_from_hamgnn_fake(dir_path: str) -> tuple[int, int, int]:
     try:
         stru = read_stru('openmx-dat', os.path.join(dir_path, 'qdyn.dat'))
         software_dft = 'openmx'
-        hamgnn_out = np.load(os.path.join(dir_path, 'wfc.npz'), mmap_mode='r')
-        nbands = hamgnn_out['wfc'].shape[1]
     except Exception as e:
         raise FileNotFoundError(f"Could not read structure from {dir_path}/qdyn.dat: {e}")
 
     syms = stru.get_chemical_symbols()
-    nele = 0
-    for sym in syms:
-        nele += VALENCE_ELECTRONS[software_dft][sym]
+    nele = sum(VALENCE_ELECTRONS[software_dft][sym] for sym in syms)
     vbm = (nele + 1) // 2
     cbm = vbm + 1
+
+    eigen_path = Path(dir_path, 'eigen.npy')
+    if eigen_path.is_file():
+        hamgnn_out = np.load(eigen_path, mmap_mode='r')
+        nbands = hamgnn_out.size
+    else:
+        # WARNING: ORBITAL_BASIS can be undetermined in some steps.
+        naos = {}
+        for sym in set(syms):
+            basis = ORBITAL_BASIS[sym]
+            orbitals = basis.partition('-')[2]
+            numbers = re.findall(r'[spdf](\d+)', orbitals)
+            naos[sym] = sum([int(n)*(2*i+1) for i, n in enumerate(numbers)])
+        nbands = sum(naos[sym] for sym in syms)
+
     return vbm, cbm, nbands

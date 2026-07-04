@@ -33,6 +33,7 @@ def extract_tdolaps(
     ikpt: int = 1,
     ispin: int = 1,
     soc: bool = False,
+    dtype: type[np.float32] | type[np.float64] = np.float64,
     nproc: int = 1,
     batch_size: int = 0,
     dirs_sorted: bool = False,
@@ -64,7 +65,12 @@ def extract_tdolaps(
         nstep = len(run_dirs) - 1
     indices = np.arange(nstep) # from 0
 
-    olapT = np.complex128 if software == 'vasp' and not is_gamma_ver else np.float64
+    if dtype == np.float64:
+        olapT = np.complex128 if software == 'vasp' and not is_gamma_ver else np.float64
+        evT = np.float64
+    else:
+        olapT = np.complex64 if software == 'vasp' and not is_gamma_ver else np.float32
+        evT = np.float32
 
     # resume
     store_path = 'tdolap_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_gam={}_ae={}.npz'.format(
@@ -79,7 +85,7 @@ def extract_tdolaps(
     else:
         check_list = np.zeros(nstep, dtype=bool)
         tdolaps = np.zeros((nstep, nbasis, nbasis), dtype=olapT)
-        eigenvalues = np.zeros((nstep, nbasis), dtype=np.float64)
+        eigenvalues = np.zeros((nstep, nbasis), dtype=evT)
 
     # main calculation
     multiprocessing.freeze_support()
@@ -213,12 +219,13 @@ def extract_nacs(
     nbasis = bmax - bmin + 1
     indices = np.arange(nstep) # from 0
     olapT = tdolaps.dtype
+    evT = eigenvalues.dtype
 
     store_path = 'nac_nstep={}_bmin={}_bmax={}_ikpt={}_ispin={}_gam={}_ae={}.npz'.format(
         nstep, bmin, bmax, m.group(4), m.group(5), m.group(6), m.group(7)
     )
 
-    nacs = np.zeros((nstep, nbasis, nbasis), dtype=np.float64)
+    nacs = np.zeros((nstep, nbasis, nbasis), dtype=evT)
     if np.all(check_list):
         logging.info("All steps processed successfully.")
         with multiprocessing.Pool(processes=nproc) as pool:
@@ -333,13 +340,13 @@ def calc_tdolap_wrapper(
         'vasp': 'WAVECAR',
         'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+1}_nao.txt',
         'siesta': f'{sysname}.fullBZ.WFSX',
-        'hamgnn': 'wfc.npz'
+        'hamgnn': 'eigen.npy'
     }
     waveB_mapping = {
         'vasp': 'WAVECAR',
         'abacus': f'OUT.{sysname}/WFC/wfk{ikpt}g{index+2}_nao.txt',
         'siesta': f'{sysname}.fullBZ.WFSX',
-        'hamgnn': 'wfc.npz'
+        'hamgnn': 'eigen.npy'
     }
 
     f_waveA = Path(dirA) / waveA_mapping[software]
@@ -367,7 +374,7 @@ def calc_tdolap_wrapper(
             S_indices = S_raw['indices']
             S_indptr = S_raw['indptr']
             S_shape = S_raw['shape']
-            S = csr((S_data, S_indices, S_indptr), shape=S_shape, dtype=np.float32)
+            S = csr((S_data, S_indices, S_indptr), shape=S_shape, dtype=S_data.dtype)
             S = S.toarray()
         elif (Path(dirA) / 'overlap.npy').is_file():
             f_SA = Path(dirA) / 'overlap.npy'

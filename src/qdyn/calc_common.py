@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 from contextlib import contextmanager
 import io
@@ -6,21 +8,23 @@ import operator
 import os
 import re
 from pathlib import Path
-from ase import Atoms
-import ase.io
-from typing import Any, Literal, IO
+from typing import Any, IO, TYPE_CHECKING
 import logging
+import uuid
 
 from ase import Atoms
 from ase.constraints import FixAtoms
+import ase.io
 from ase.io.formats import ioformats
 import numpy as np
-from scipy.linalg import eigh as eigh_
 
 from .input import InputT
 from .pool import WorkerPool
 from .params import TRAJ_FNAME_MAPPING, TRAJ_FORMAT_MAPPING, VALENCE_ELECTRONS
 from .params import XC_MAPPING, ALL_ORBITALS
+
+if TYPE_CHECKING:
+    from multiprocessing import shared_memory
 
 logger = logging.getLogger(__name__)
 
@@ -368,7 +372,7 @@ def safe_eval(expr: str) -> Any:
 
     return _eval(tree.body)
 
-_BAND_SYMBOL_RE = re.compile(r"\b(vbm|homo|cbm|lumo)\b")
+_BAND_SYMBOL_RE = re.compile(r"\b(vbm|homo|cbm|lumo|highest|lowest)\b")
 
 def parse_band_index(
     expr: str,
@@ -376,7 +380,8 @@ def parse_band_index(
     nbands: int,
 ) -> int:
     """1-based"""
-    values = {"vbm": vbm, "homo": vbm, "cbm": vbm + 1, "lumo": vbm + 1}
+    values = {"vbm": vbm, "homo": vbm, "cbm": vbm + 1, "lumo": vbm + 1,
+              "highest": nbands, "lowest": 1}
     normalized = _BAND_SYMBOL_RE.sub(
         lambda m: str(values[m.group(1)]),
         expr.lower(),
@@ -540,10 +545,26 @@ def extract_structure_metadata(
     return formula, num_atoms
 
 
-def eigh(H, S, solver: Literal['scipy', 'cuda'] = 'scipy', overwrite_S=False):
-    if solver == 'scipy':
-        w, v = eigh_(H, S, overwrite_a=True, overwrite_b=overwrite_S)
-        v = v.T       
+def get_shared_memory_handle(nbytes: int):
+    from multiprocessing import shared_memory as _shared_memory
+    for _ in range(16):
+        try:
+            shm = _shared_memory.SharedMemory(
+                create=True,
+                size=nbytes,
+                name=f"qdyn_elpa_{uuid.uuid4().hex[:8]}"
+            )
+            break
+        except FileExistsError:
+            continue
     else:
-        raise NotImplementedError("Not supported eigensolver")
-    return w, v
+        raise RuntimeError('Cannot find available shm name within 16 attempts')
+    return shm
+
+def close_and_unlink_shared_memory(shm: shared_memory.SharedMemory | None) -> None:
+    from contextlib import suppress
+    if shm is None:
+        return
+    with suppress(FileNotFoundError):
+        shm.unlink()
+    shm.close() 
