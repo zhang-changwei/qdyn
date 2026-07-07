@@ -26,6 +26,16 @@
       <el-table-column label="Actions" width="220" fixed="right">
         <template #default="{ row }">
           <div class="action-buttons">
+            <!-- Toggle admin role -->
+            <el-button
+              :type="row.is_admin ? 'warning' : 'success'"
+              plain
+              size="small"
+              @click="handleToggleAdmin(row)"
+            >
+              {{ row.is_admin ? 'Revoke Admin' : 'Grant Admin' }}
+            </el-button>
+
             <!-- Reset password -->
             <el-button
               type="primary"

@@ -162,10 +162,6 @@ function goToSubmit(): void {
   router.push({ name: 'submit-task' })
 }
 
-function goToAdmin(): void {
-  router.push({ name: 'admin-dashboard' })
-}
-
 // Handle task deletion from TaskCard
 function onTaskDeleted(_taskId: string): void {
   refreshTaskList()
