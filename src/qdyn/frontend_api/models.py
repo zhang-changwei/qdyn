@@ -8,7 +8,9 @@ plus derived status for UI consumption.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from ..input import validate_task_name
 
 
 class JobStatusItem(BaseModel):
@@ -219,6 +221,12 @@ class RenameTaskRequest(BaseModel):
         max_length=50,
         description="New display name for the task. Set to null or empty to clear.",
     )
+
+    @field_validator('task_name', mode='before')
+    @classmethod
+    def normalize_task_name(cls, v):
+        """Enforce the same character whitelist as InputT.task_name."""
+        return validate_task_name(v)
 
 
 # ============================================

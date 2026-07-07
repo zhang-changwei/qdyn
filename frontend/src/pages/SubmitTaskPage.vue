@@ -78,7 +78,7 @@
       @submit.prevent
     >
       <!-- Task Name (always visible, all modes) -->
-      <el-form-item label="Task Name" class="task-name-input">
+      <el-form-item label="Task Name" prop="taskName" class="task-name-input">
         <el-input
           v-model="formData.taskName"
           placeholder="Custom task name (optional, defaults to formula)"
@@ -276,6 +276,7 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { FUSED_SCF_PRENAMD } from '@/constants/steps'
+import { TASK_NAME_PATTERN, TASK_NAME_HINT } from '@/constants/validation'
 import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import SparkMD5 from 'spark-md5'
@@ -517,6 +518,22 @@ const formData = reactive<{
 })
 
 const formRules: FormRules = {
+  taskName: [
+    {
+      validator: (_rule, value, callback) => {
+        if (!value) {
+          callback()
+          return
+        }
+        if (!TASK_NAME_PATTERN.test(value)) {
+          callback(new Error(TASK_NAME_HINT))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change',
+    },
+  ],
   steps: [
     {
       validator: (_rule, value, callback) => {

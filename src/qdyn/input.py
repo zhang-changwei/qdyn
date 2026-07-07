@@ -10,6 +10,26 @@ from .params import MACE_PRETRAINED_MODELS_TYPE
 from .params import HAMGNN_PRETRAINED_MODELS_TYPE
 from .params import HAMGNN_PRETRAINED_CONFIGS
 from .params import HASH_PATTERN
+from .params import TASK_NAME_PATTERN
+
+
+def validate_task_name(v: Any) -> str | None:
+    """Strip whitespace, reject empty strings, and validate the character set.
+
+    Returns None for empty/None input. Raises ValueError on illegal characters.
+    """
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+        if not TASK_NAME_PATTERN.match(v):
+            raise ValueError(
+                'Task name may only contain letters, digits, spaces, '
+                'hyphens, underscores, dots, parentheses, slashes, plus signs, '
+                'and Chinese characters'
+            )
+    return v
+
 
 ## Important!
 # InputT: should contain minimal parameters exposed to users,
@@ -710,14 +730,4 @@ class InputT(BaseModel):
     @classmethod
     def normalize_task_name(cls, v):
         """Strip whitespace, reject empty strings, and validate character set."""
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return None
-            if not re.match(r'^[A-Za-z0-9_\-. ()/+\u4e00-\u9fff]+$', v):
-                raise ValueError(
-                    'Task name may only contain letters, digits, spaces, '
-                    'hyphens, underscores, dots, parentheses, slashes, plus signs, '
-                    'and Chinese characters'
-                )
-        return v
+        return validate_task_name(v)
