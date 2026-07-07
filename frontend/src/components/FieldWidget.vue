@@ -28,8 +28,8 @@
   </div>
   <!-- nullable-object-toggle -->
   <el-switch v-else-if="field.widget === 'nullable-object-toggle'" :model-value="ctx.getFieldValue(field.path) != null" @update:model-value="ctx.toggleNullableObject(field, $event)" />
-  <!-- text widget -->
-  <el-input v-else-if="field.widget === 'text'" :model-value="String(ctx.getFieldValue(field.path) ?? '')" :placeholder="field.schema.placeholder" @update:model-value="ctx.setFieldValue(field.path, $event || undefined)" />
+  <!-- text widget (draft-buffered: model only updates on blur/Enter) -->
+  <el-input v-else-if="field.widget === 'text'" :model-value="ctx.getTextDraftValue(field.path, ctx.getFieldValue(field.path))" :placeholder="field.schema.placeholder" @focus="ctx.startTextEditing(field.path, ctx.getFieldValue(field.path))" @update:model-value="ctx.updateTextDraft(field.path, $event)" @change="ctx.commitTextDraft(field.path, field.nullable)" @keyup.enter="ctx.commitTextDraft(field.path, field.nullable)" />
 
   <!-- === Mode-specific branches below === -->
 

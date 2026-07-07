@@ -598,12 +598,21 @@ html[data-theme="dark"] {
   --el-skeleton-to-color: var(--ink-300);
 }
 
-/* Dark mode: primary button text contrast fix */
-html.dark .el-button--primary {
+/* Dark mode: primary button text contrast fix.
+   Only target solid primary buttons — exclude text/link/plain variants so
+   their icon/text color is not overridden to near-black on dark backgrounds. */
+html.dark .el-button--primary:not(.is-text):not(.is-link):not(.is-plain) {
   --el-button-text-color: var(--brand-primary-fg-on);
   --el-button-hover-text-color: var(--brand-primary-fg-on);
   --el-button-active-text-color: var(--brand-primary-fg-on);
   --el-button-disabled-text-color: var(--ink-400);
+}
+
+/* Image viewer (el-image preview dialog): give the previewed image a solid
+   white background so transparent PNGs remain legible against the dark
+   viewer mask in both light and dark themes. */
+.el-image-viewer__canvas img {
+  background-color: #ffffff;
 }
 
 /* ---------- Global resets ---------- */

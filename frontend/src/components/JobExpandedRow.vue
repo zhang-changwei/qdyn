@@ -674,6 +674,7 @@ function subdirStatusType(status: string): string {
   height: 220px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
+  background-color: var(--el-bg-color, #ffffff);
 }
 
 .image-caption {

@@ -262,6 +262,12 @@ export interface FieldWidgetContext {
   // nullable object
   toggleNullableObject(field: FieldDescriptor, enabled: boolean): void
 
+  // text widget (draft-buffered to avoid per-keystroke model updates)
+  getTextDraftValue(path: string, value: unknown): string
+  startTextEditing(path: string, value: unknown): void
+  updateTextDraft(path: string, raw: string): void
+  commitTextDraft(path: string, nullable: boolean): void
+
   // enum
   isDisabledEnumOption(opt: unknown): boolean
   isFieldDisabled(field: FieldDescriptor): boolean

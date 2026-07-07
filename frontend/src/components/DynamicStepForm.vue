@@ -783,6 +783,8 @@ watch(
 )
 
 const csvDrafts = reactive<Record<string, string>>({})
+const textDrafts = reactive<Record<string, string>>({})
+const textEditing = reactive<Record<string, boolean>>({})
 const numberDrafts = reactive<Record<string, string>>({})
 const numberEditing = reactive<Record<string, boolean>>({})
 const invalidLogInputs = reactive<Record<string, boolean>>({})
@@ -862,6 +864,11 @@ watch(
         )
         .map((field) => field.path),
     )
+    const textPaths = new Set(
+      allFields.value
+        .filter((field) => field.widget === 'text')
+        .map((field) => field.path),
+    )
     const numberPaths = new Set(
       allFields.value
         .filter(
@@ -877,6 +884,13 @@ watch(
       }
     }
 
+    for (const path of Object.keys(textDrafts)) {
+      if (!textPaths.has(path)) {
+        delete textDrafts[path]
+        delete textEditing[path]
+      }
+    }
+
     for (const path of Object.keys(numberDrafts)) {
       if (!numberPaths.has(path)) {
         delete numberDrafts[path]
@@ -889,6 +903,13 @@ watch(
         csvDrafts[field.path] = formatCsvIntegers(getFieldValue(field.path))
       } else if (field.widget === 'comma-separated-strings') {
         csvDrafts[field.path] = formatCsvStrings(getFieldValue(field.path))
+      } else if (field.widget === 'text') {
+        // Only sync draft from model when the field is not actively edited —
+        // otherwise we would clobber in-progress typing.
+        if (!textEditing[field.path]) {
+          const v = getFieldValue(field.path)
+          textDrafts[field.path] = v == null ? '' : String(v)
+        }
       } else if (
         (field.resolvedType === 'number' || field.resolvedType === 'integer') &&
         !numberEditing[field.path]
@@ -1248,6 +1269,40 @@ function commitCsvStrings(path: string, nullable: boolean): void {
   setFieldValue(path, parsed)
 }
 
+// --- Text widget draft (defers model updates until blur/Enter) ---
+function getTextDraftValue(path: string, value: unknown): string {
+  if (path in textDrafts) return textDrafts[path]
+  return value == null ? '' : String(value)
+}
+
+function startTextEditing(path: string, value: unknown): void {
+  textEditing[path] = true
+  textDrafts[path] = value == null ? '' : String(value)
+}
+
+function updateTextDraft(path: string, raw: string): void {
+  textDrafts[path] = raw
+}
+
+function commitTextDraft(path: string, nullable: boolean): void {
+  const raw = textDrafts[path] ?? ''
+  const trimmed = raw.trim()
+  const current = getFieldValue(path)
+  const nextValue = !trimmed && nullable ? null : (raw || (nullable ? null : ''))
+
+  // Mark as no longer editing so the model→draft watcher can resume syncing
+  // external updates (e.g. config import, form reset).
+  textEditing[path] = false
+  // Re-sync draft to the canonical string form so the input reflects the
+  // committed model value (handles nullable → '' normalization).
+  textDrafts[path] = nextValue == null ? '' : String(nextValue)
+
+  // Guard against duplicate commits (e.g. Enter followed by blur firing
+  // @change on the same value) — skip emit when the value is unchanged.
+  if (Object.is(current, nextValue)) return
+  setFieldValue(path, nextValue)
+}
+
 // --- Provide FieldWidgetContext for FieldWidget child components ---
 provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
   getFieldValue,
@@ -1269,6 +1324,10 @@ provide<FieldWidgetContext>(FIELD_WIDGET_CONTEXT_KEY, {
   addPairedRow,
   removePairedRow,
   toggleNullableObject,
+  getTextDraftValue,
+  startTextEditing,
+  updateTextDraft,
+  commitTextDraft,
   isDisabledEnumOption,
   isFieldDisabled,
   isModelHashField,

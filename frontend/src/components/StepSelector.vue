@@ -9,7 +9,10 @@
           v-for="(step, index) in availableSteps"
           :key="step.value"
           class="step-item"
-          :class="{ 'step-done': isCompletedStep(step.value) }"
+          :class="{
+            'step-done': isCompletedStep(step.value),
+            'step-locked': isLockedCompletedStep(step.value),
+          }"
         >
           <el-checkbox
             :value="step.value"
@@ -195,6 +198,12 @@ function isLockedCompletedStep(step: string): boolean {
 }
 
 function isCompletedStep(step: string): boolean {
+  // Show the green check for every step in completedSteps, regardless of
+  // whether it sits before or after the resume start point. The selectable
+  // rules (isStepSelectable) and submission filtering (handleUpdate) are
+  // governed separately by isLockedCompletedStep, so this display-only flag
+  // does not alter resume semantics.
+  if (isParentCompletedStep(step)) return true
   return isLockedCompletedStep(step)
 }
 
@@ -353,12 +362,15 @@ function sortSteps(steps: string[], order: string[] = stepOrder.value): string[]
   gap: var(--space-1);
 }
 
-.step-item.step-done :deep(.el-checkbox) {
-  opacity: 0.6;
-}
-
 .step-item.step-done :deep(.el-checkbox__label) {
   color: var(--success-fg);
+}
+
+/* Locked completed steps (before resume start point, not selectable) are
+   dimmed to signal they are inherited context, not actionable. Completed-but-
+   selectable steps keep full opacity so they read as interactive. */
+.step-item.step-locked :deep(.el-checkbox) {
+  opacity: 0.6;
 }
 
 .step-label-text {
