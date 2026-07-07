@@ -10,13 +10,20 @@ from fastapi import HTTPException, status
 from .database import qdyndb
 
 
-def verify_task_ownership(task_id: str, username: str) -> None:
+def verify_task_ownership(task_id: str, username: str) -> str:
     """
     Verify that a task belongs to the specified user.
+
+    Returns the owner string on success so callers can reuse it without
+    issuing a second ``get_task_owner`` query.  Existing callers that
+    ignore the return value are unaffected.
 
     Args:
         task_id: The task identifier to check.
         username: The username to verify ownership against.
+
+    Returns:
+        The verified owner username.
 
     Raises:
         HTTPException: 404 if task not found, 403 if access denied.
@@ -29,6 +36,7 @@ def verify_task_ownership(task_id: str, username: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",
         )
+    return owner
 
 
 def get_task_or_404(task_id: str) -> dict:

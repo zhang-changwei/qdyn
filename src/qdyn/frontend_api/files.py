@@ -328,6 +328,11 @@ def build_download_zip(
     total_size = 0
     pool = manager.get_task_pool(task_id)
 
+    # Pre-fetch run-dir accessors for all unique job UUIDs in one Mongo
+    # query instead of F individual ``get_job_info`` round-trips.
+    unique_uuids = list({item.job_uuid for item in files})
+    access_map = pool.build_run_dir_access_batch(unique_uuids)
+
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in files:
             filename = item.filename
@@ -336,7 +341,7 @@ def build_download_zip(
             if _is_blacklisted(filename):
                 raise ValueError(f"File type not allowed: {filename}")
 
-            access = pool.build_run_dir_access(item.job_uuid)
+            access = access_map.get(item.job_uuid)
             if access is None:
                 raise FileNotFoundError(
                     f"Run directory not available for job {item.job_uuid}"
@@ -386,7 +391,7 @@ def get_job_images(
         return JobImagesResponse(available=False)
 
     try:
-        output = manager.get_job_output(job_uuid)
+        output = manager.get_job_output(job_uuid, confirmed_state=raw_state)
     except Exception:
         return JobImagesResponse(available=False)
 

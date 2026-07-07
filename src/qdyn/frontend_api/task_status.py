@@ -155,7 +155,6 @@ def get_task_summary_list(
 ) -> list[TaskSummary]:
     """Get a list of task summaries for the specified user."""
     task_ids = qdyndb.get_user_tasks(username)
-    summaries = []
 
     queued_entries = qdyndb.list_queued_for_user(username)
     queued_map: dict[str, dict] = {}
@@ -177,17 +176,76 @@ def get_task_summary_list(
         q["task_id"]: i + 1 for i, q in enumerate(all_queued)
     }
 
+    # Pre-fetch job states for all non-queued tasks in one Mongo query to
+    # avoid O(total jobs) per-job get_job_status round-trips.
+    non_queued_ids = [tid for tid in task_ids if tid not in queued_map]
+    state_map = _prefetch_job_states(non_queued_ids, manager_getter)
+
+    summaries = []
     for task_id in task_ids:
         if task_id in queued_map:
             summary = _build_queued_task_summary(
                 task_id, username, queued_map[task_id], queue_positions
             )
         else:
-            summary = _build_task_summary(task_id, manager_getter)
+            summary = _build_task_summary(task_id, manager_getter, state_map=state_map)
         if summary is not None:
             summaries.append(summary)
 
     return summaries
+
+
+def _prefetch_job_states(
+    task_ids: list[str],
+    manager_getter: Callable[[], MainWorkflow],
+) -> dict[str, str] | None:
+    """Fetch ``{job_uuid: state}`` for all jobs under the given tasks.
+
+    Issues a single Mongo ``find`` with ``$in`` on the collected UUIDs.
+    For UUIDs with multiple index docs, keeps the highest index (mirrors
+    ``JobController.get_job_info``'s ``sort=[["index", DESCENDING]], limit=1``
+    semantics). Returns None if the JobController is unavailable or the
+    query fails, so callers fall back to per-job lookup.
+    """
+    all_uuids: list[str] = []
+    for tid in task_ids:
+        job_ids = qdyndb.get_task_job_ids(tid)
+        for uuid_list in job_ids.values():
+            all_uuids.extend(uuid_list)
+    if not all_uuids:
+        return None
+
+    try:
+        manager = manager_getter()
+        jc = manager._ensure_job_controller()
+    except Exception:
+        return None
+
+    unique_uuids = list(dict.fromkeys(all_uuids))
+    try:
+        cursor = jc.jobs.find(
+            {"uuid": {"$in": unique_uuids}},
+            projection=["uuid", "index", "state"],
+        )
+        latest_by_uuid: dict[str, tuple[int, str]] = {}
+        for doc in cursor:
+            uid = doc.get("uuid")
+            if not uid:
+                continue
+            idx = doc.get("index", 0)
+            state = doc.get("state")
+            if state is None:
+                continue
+            # state is stored as a string in Mongo, but defend against enum
+            # or future object types so comparison stays correct.
+            state_str = state.value if hasattr(state, "value") else str(state)
+            prev = latest_by_uuid.get(uid)
+            if prev is None or idx >= prev[0]:
+                latest_by_uuid[uid] = (idx, state_str)
+    except Exception:
+        return None
+
+    return {uid: state for uid, (_idx, state) in latest_by_uuid.items()}
 
 
 def _build_queued_task_summary(
@@ -249,11 +307,20 @@ def _build_queued_task_summary(
 def get_task_detail(
     task_id: str,
     manager_getter: Callable[[], MainWorkflow],
+    *,
+    owner: str | None = None,
 ) -> TaskJobsStatusResponse:
-    """Get detailed status for all jobs under a task."""
-    owner = qdyndb.get_task_owner(task_id)
+    """Get detailed status for all jobs under a task.
+
+    Args:
+        owner: Pre-verified owner username. If provided (router layer has
+            already called verify_task_ownership), skip the redundant
+            ``get_task_owner`` lookup. If None, fall back to querying it.
+    """
     if owner is None:
-        raise ValueError(f"Task '{task_id}' not found")
+        owner = qdyndb.get_task_owner(task_id)
+        if owner is None:
+            raise ValueError(f"Task '{task_id}' not found")
 
     job_ids = qdyndb.get_task_job_ids(task_id)
 
@@ -390,8 +457,17 @@ def _get_step_order(job_ids: dict) -> list[str]:
 def _build_task_summary(
     task_id: str,
     manager_getter: Callable[[], MainWorkflow],
+    *,
+    state_map: dict[str, str] | None = None,
 ) -> TaskSummary | None:
-    """Build a TaskSummary for a single task."""
+    """Build a TaskSummary for a single task.
+
+    Args:
+        state_map: Pre-fetched ``{job_uuid: state}`` map. When provided,
+            the per-job ``get_job_status`` Mongo round-trip is skipped —
+            the state is read from the map instead (missing entries count
+            as ERROR). When None, falls back to per-job lookup.
+    """
     owner = qdyndb.get_task_owner(task_id)
     if owner is None:
         return None
@@ -408,8 +484,11 @@ def _build_task_summary(
         for idx, job_uuid in enumerate(uuid_list):
             total_jobs += 1
             try:
-                manager = manager_getter()
-                raw_state = manager.get_job_status(job_uuid)
+                if state_map is not None:
+                    raw_state = state_map.get(job_uuid, "ERROR")
+                else:
+                    manager = manager_getter()
+                    raw_state = manager.get_job_status(job_uuid)
                 raw_status_counts[raw_state] = raw_status_counts.get(raw_state, 0) + 1
                 if raw_state == "FAILED":
                     failed_job_names.append(f"{step_name}_{idx}")
