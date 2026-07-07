@@ -240,6 +240,7 @@ import { getTaskStructurePreview } from '@/api/structures'
 import { getTaskDisplayName } from '@/utils/task-display'
 import { formatFileSize } from '@/utils/format'
 import { PHASE_ORDER } from '@/constants/steps'
+import { TASK_NAME_PATTERN, TASK_NAME_HINT } from '@/constants/validation'
 import { useFileSelection } from '@/composables/useFileSelection'
 import { usePolling } from '@/composables/usePolling'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -375,6 +376,10 @@ function cancelEditName(): void {
 
 async function saveTaskName(): Promise<void> {
   const name = editNameValue.value.trim() || null
+  if (name && !TASK_NAME_PATTERN.test(name)) {
+    ElMessage.warning(TASK_NAME_HINT)
+    return
+  }
   savingName.value = true
   try {
     await renameTask(taskId.value, name)
