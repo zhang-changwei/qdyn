@@ -11,7 +11,7 @@
  * underscores, dots, parentheses, slashes, plus signs, and CJK characters.
  * Mirrors TASK_NAME_PATTERN in src/qdyn/params.py.
  */
-export const TASK_NAME_PATTERN = /^[A-Za-z0-9_\-. ()/+一-鿿]+$/
+export const TASK_NAME_PATTERN = /^[A-Za-z0-9_\-. ()/+\u4e00-\u9fff]+$/
 
 export const TASK_NAME_HINT =
   'Only letters, digits, spaces, hyphens, underscores, dots, ' +

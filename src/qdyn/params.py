@@ -121,7 +121,7 @@ HASH_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 # rename API DTO so both entry points enforce the same whitelist: letters,
 # digits, spaces, hyphens, underscores, dots, parentheses, slashes, plus
 # signs, and CJK characters (U+4E00..U+9FFF).
-TASK_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_\-. ()/+一-鿿]+$')
+TASK_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_\-. ()/+\u4e00-\u9fff]+$')
 
 
 # Workflow state/order constants shared by API, validation, and pool logic.
