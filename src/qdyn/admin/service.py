@@ -26,7 +26,7 @@ from ..frontend_api.task_status import (
     derive_task_status,
 )
 from ..main_workflow import MainWorkflow
-from ..params import TERMINAL_STATES
+from ..params import HASH_PATTERN as _HASH_RE, TERMINAL_STATES
 
 if TYPE_CHECKING:
     from .file_index_cache import FileIndexCache
@@ -1471,9 +1471,6 @@ def delete_files_by_name(
 # ---------------------------------------------------------------------------
 # Trajectory management
 # ---------------------------------------------------------------------------
-
-_HASH_RE = re.compile(r"^[0-9a-f]{32}$")
-
 
 def _get_traj_dir(
     manager_getter: Callable[[], MainWorkflow],

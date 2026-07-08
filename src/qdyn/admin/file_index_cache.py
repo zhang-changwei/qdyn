@@ -257,7 +257,12 @@ class FileIndexCache:
             raise
 
     def _refresh_sync(self) -> None:
-        """Synchronous refresh (runs in a thread)."""
+        """Synchronous refresh (runs in a thread).
+
+        Loops until no coalesced invalidation is pending, so repeated
+        invalidate() calls during a refresh are collapsed into a bounded
+        number of extra rounds instead of unbounded recursion.
+        """
         with self._lock:
             if self._refreshing:
                 # Another thread is already refreshing; respect dirty flag.
@@ -267,25 +272,27 @@ class FileIndexCache:
             self._dirty = False
 
         try:
-            self._do_refresh()
-            self._status = STATUS_READY
-            self._last_error = None
-        except Exception as exc:
-            self._status = STATUS_ERROR
-            self._last_error = str(exc)
-            logger.warning("FileIndexCache refresh failed: %s", exc)
+            while True:
+                try:
+                    self._do_refresh()
+                    self._status = STATUS_READY
+                    self._last_error = None
+                except Exception as exc:
+                    self._status = STATUS_ERROR
+                    self._last_error = str(exc)
+                    logger.warning("FileIndexCache refresh failed: %s", exc)
+                    # On error, stop the loop; the next invalidate() can retry.
+                    break
+
+                with self._lock:
+                    if not self._dirty:
+                        break
+                    # Coalesced invalidation arrived during this round;
+                    # clear it and run one more round.
+                    self._dirty = False
         finally:
             with self._lock:
                 self._refreshing = False
-                pending_dirty = self._dirty
-
-            if pending_dirty:
-                # Coalesced invalidation requests arrived during refresh;
-                # run one more round.  This recurses at most once in normal
-                # operation because _refresh_sync sets _refreshing before
-                # doing work, and invalidate() will see it and just set
-                # _dirty again.
-                self._refresh_sync()
 
     def _do_refresh(self) -> None:
         """Build a new snapshot and atomically swap it in."""

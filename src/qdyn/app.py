@@ -29,7 +29,7 @@ from .main_workflow import (
     MainWorkflow, ValidationError, ResumeError, QueryError,
 )
 from .pool import WorkerPool
-from .params import HASH_PATTERN as _HASH_PATTERN
+from .params import HASH_PATTERN as _HASH_PATTERN, TERMINAL_STATES
 from .validation import validate_and_fill_runtime_config
 
 # Maximum upload file size: 1 GB.
@@ -796,7 +796,7 @@ def get_pool_status(username: str = Depends(get_current_user)):
         {
             "$match": {
                 "worker": {"$in": pool_workers},
-                "state": {"$nin": list(WorkerPool._TERMINAL_STATES)},
+                "state": {"$nin": list(TERMINAL_STATES)},
             }
         },
         {"$group": {"_id": "$worker"}},

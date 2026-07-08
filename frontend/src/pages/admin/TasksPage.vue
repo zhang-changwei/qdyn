@@ -237,7 +237,9 @@ const loading = ref(false)
 const filterOwner = ref(
   typeof route.query.owner === 'string' ? route.query.owner : ''
 )
-const filterStatus = ref('')
+const filterStatus = ref(
+  typeof route.query.status === 'string' ? route.query.status : ''
+)
 
 // Detail dialog state
 const detailDialogVisible = ref(false)
@@ -266,9 +268,10 @@ const deleteCleanupDirs = ref(true)
 // The initial load is handled by onMounted below; the watcher (without
 // immediate:true) only handles subsequent query-only navigations.
 watch(
-  () => route.query.owner,
-  (owner) => {
+  () => [route.query.owner, route.query.status] as const,
+  ([owner, status]) => {
     filterOwner.value = typeof owner === 'string' ? owner : ''
+    filterStatus.value = typeof status === 'string' ? status : ''
     loadTasks()
   }
 )
@@ -304,7 +307,13 @@ async function loadTasks(): Promise<void> {
 }
 
 function handleSearch(): void {
-  loadTasks()
+  // Sync filters to the URL so the state survives navigation (e.g. opening a
+  // task detail and coming back). replace avoids spamming browser history.
+  const query: Record<string, string> = {}
+  if (filterOwner.value) query.owner = filterOwner.value
+  if (filterStatus.value) query.status = filterStatus.value
+  router.replace({ name: 'admin-tasks', query })
+  // loadTasks() is triggered by the route.query watcher above.
 }
 
 async function handleAdminClick(task: TaskSummary): Promise<void> {
@@ -372,7 +381,11 @@ async function handleContinue(): Promise<void> {
 function goToTaskDetail(): void {
   if (!selectedTask.value) return
   detailDialogVisible.value = false
-  router.push({ name: 'task-detail', params: { taskId: selectedTask.value.task_id } })
+  router.push({
+    name: 'task-detail',
+    params: { taskId: selectedTask.value.task_id },
+    query: { returnTo: route.fullPath },
+  })
 }
 
 async function handleDelete(): Promise<void> {
