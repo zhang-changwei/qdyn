@@ -23,23 +23,6 @@
           >
             <el-icon><Refresh /></el-icon>
           </el-button>
-          <div class="user-info">
-            <span class="username">{{ authStore.username }}</span>
-            <el-tag v-if="authStore.isAdmin" type="danger" size="small" effect="dark" class="admin-badge">
-              Admin
-            </el-tag>
-            <el-button
-              v-if="authStore.isAdmin"
-              type="primary"
-              plain
-              @click="goToAdmin"
-            >
-              Admin Panel
-            </el-button>
-            <el-button type="danger" plain @click="handleLogout">
-              Logout
-            </el-button>
-          </div>
         </div>
       </div>
     </div>
@@ -213,10 +196,6 @@ function onTaskQueueCancelled(_taskId: string): void {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.admin-badge {
-  vertical-align: middle;
 }
 
 .page-main {

@@ -235,6 +235,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Download, Edit } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
+import { useAuthStore } from '@/stores/auth'
 import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
 import { getTaskStructurePreview } from '@/api/structures'
 import { getTaskDisplayName } from '@/utils/task-display'
@@ -251,6 +252,7 @@ import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResp
 const route = useRoute()
 const router = useRouter()
 const tasksStore = useTasksStore()
+const authStore = useAuthStore()
 
 const task = computed(() => tasksStore.currentTask)
 const jobsStatus = computed(() => tasksStore.currentJobsStatus)
@@ -774,7 +776,9 @@ async function handleDelete(): Promise<void> {
   try {
     await deleteTask(taskId.value)
     ElMessage.success('Task deleted')
-    router.push({ name: 'task-list' })
+    // After deletion, go to the list appropriate for the current user. Use
+    // push (not back) so we don't return to the now-deleted task's detail.
+    router.push({ name: authStore.isAdmin ? 'admin-tasks' : 'task-list' })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete task'
     ElMessage.error(message)
@@ -797,7 +801,16 @@ watch(hasRunningJobs, (newValue) => {
 // ============================================
 
 function goBack(): void {
-  router.push({ name: 'task-list' })
+  // Prefer browser history back so the user returns to the exact list they
+  // came from (e.g. /admin/tasks?owner=xxx preserves the owner filter, or
+  // the normal / task list for non-admin users). Fall back to the
+  // appropriate list route when there is no history to go back to (e.g. the
+  // detail page was opened directly via URL).
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push({ name: authStore.isAdmin ? 'admin-tasks' : 'task-list' })
+  }
 }
 
 function isScfJob(job: JobStatusItem): boolean {

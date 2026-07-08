@@ -21,8 +21,10 @@ from fastapi import HTTPException
 from ..database import qdyndb
 from ..frontend_api.models import TaskSummary
 from ..main_workflow import MainWorkflow
+from ..params import TERMINAL_STATES
 
 if TYPE_CHECKING:
+    from .file_index_cache import FileIndexCache
     from .storage_cache import StorageCache
 
 logger = logging.getLogger(__name__)
@@ -30,14 +32,10 @@ logger = logging.getLogger(__name__)
 # Canonical step ordering (same as frontend_api/service.py)
 _STEP_ORDER = ["nvt", "nve", "scf", "pre_namd", "namd"]
 
-# Module-level reference to the StorageCache singleton.
-# Populated by app.py lifespan after creating the cache instance.
+# Module-level references to singleton caches.
+# Populated by app.py lifespan after creating the cache instances.
 _storage_cache: "StorageCache | None" = None
-
-# Cached result for list_work_dir_entries (avoids re-scanning on every request).
-_files_cache: dict | None = None
-_files_cache_time: float = 0
-_FILES_CACHE_TTL: float = 300  # 5 minutes
+_file_index_cache: "FileIndexCache | None" = None
 
 
 def set_storage_cache(cache: "StorageCache") -> None:
@@ -46,11 +44,21 @@ def set_storage_cache(cache: "StorageCache") -> None:
     _storage_cache = cache
 
 
+def set_file_index_cache(cache: "FileIndexCache") -> None:
+    """Inject the FileIndexCache instance (called from app.py lifespan)."""
+    global _file_index_cache
+    _file_index_cache = cache
+
+
 def invalidate_files_cache() -> None:
-    """Force files cache refresh on next request (call after delete ops)."""
-    global _files_cache, _files_cache_time
-    _files_cache = None
-    _files_cache_time = 0
+    """Trigger background refresh of the file index (call after delete ops).
+
+    Delegates to ``FileIndexCache.invalidate()``, which sets a dirty flag
+    and starts a background refresh thread.  If a refresh is already
+    running, the flag is coalesced into the current round.
+    """
+    if _file_index_cache is not None:
+        _file_index_cache.invalidate()
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +86,7 @@ def get_admin_stats(manager_getter: Callable[[], MainWorkflow]) -> dict:
         jc = manager._ensure_job_controller()
         # Get unique flow UUIDs with at least one non-terminal job
         pipeline = [
-            {"$match": {"state": {"$nin": MainWorkflow._TERMINAL_STATES}}},
+            {"$match": {"state": {"$nin": list(TERMINAL_STATES)}}},
             {"$group": {"_id": "$db_id"}},  # db_id groups by flow
         ]
         # Instead, count distinct task_ids that have non-terminal jobs.
@@ -99,7 +107,7 @@ def get_admin_stats(manager_getter: Callable[[], MainWorkflow]) -> dict:
                 {
                     "$match": {
                         "uuid": {"$in": all_task_job_uuids},
-                        "state": {"$nin": MainWorkflow._TERMINAL_STATES},
+                        "state": {"$nin": list(TERMINAL_STATES)},
                     }
                 },
                 {"$group": {"_id": "$uuid"}},
@@ -131,12 +139,7 @@ def get_admin_stats(manager_getter: Callable[[], MainWorkflow]) -> dict:
     else:
         # Fallback: compute traj stats inline (work_dir stays None)
         try:
-            user_data_dir = str(
-                Path(
-                    manager.config["basic"].get("user_data", "data/user_data")
-                ).resolve()
-            )
-            traj_dir = os.path.join(user_data_dir, "trajs")
+            traj_dir = manager.active_pool.get_user_file_path("trajectory")
             if os.path.isdir(traj_dir):
                 traj_storage_bytes, traj_file_count = _dir_size_and_count(
                     traj_dir
@@ -675,8 +678,8 @@ def get_worker_details(
     ``job.metadata.qdyn_user`` from non-terminal jobs on each worker.
     """
     manager = manager_getter()
-    pool_name = manager.active_pool_name
-    pool_workers = manager._get_pool_workers(pool_name)
+    active_pool = manager.active_pool
+    pool_workers = active_pool.get_pool_workers()
 
     result: list[dict] = []
 
@@ -688,7 +691,7 @@ def get_worker_details(
             {
                 "$match": {
                     "worker": {"$in": pool_workers},
-                    "state": {"$nin": MainWorkflow._TERMINAL_STATES},
+                    "state": {"$nin": list(TERMINAL_STATES)},
                 }
             },
             {
@@ -1026,33 +1029,6 @@ def _resolve_work_dir_base(
     return work_dir_base, Path(work_dir_base).resolve()
 
 
-def _scan_file_summary(dir_path: str, prefix: str = "") -> list[dict]:
-    """Recursively scan a directory and return file name+size list.
-
-    Subdirectory files are prefixed with the relative path, e.g.
-    ``scf_000/OUTCAR``, ``scf_001/WAVECAR``.
-    """
-    result: list[dict] = []
-    try:
-        with os.scandir(dir_path) as it:
-            for entry in it:
-                try:
-                    name = f"{prefix}{entry.name}" if prefix else entry.name
-                    if entry.is_file(follow_symlinks=False):
-                        st = entry.stat(follow_symlinks=False)
-                        result.append({"name": name, "size": st.st_size})
-                    elif entry.is_dir(follow_symlinks=False):
-                        result.extend(
-                            _scan_file_summary(entry.path, prefix=f"{name}/")
-                        )
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    result.sort(key=lambda f: f["name"])
-    return result
-
-
 def _build_uuid_to_task_map() -> dict[str, tuple[str, str]]:
     """Build reverse mapping: job_uuid -> (task_id, owner)."""
     uuid_to_task: dict[str, tuple[str, str]] = {}
@@ -1080,27 +1056,22 @@ def _build_uuid_to_task_map() -> dict[str, tuple[str, str]]:
 def list_work_dir_entries(
     manager_getter: Callable[[], MainWorkflow],
 ) -> dict:
-    """Scan work_dir_base for job directories and map them to tasks.
+    """List job directories under work_dir_base with task mapping.
 
-    Results are cached for 5 minutes. Use invalidate_files_cache() to
-    force a refresh (called after delete operations).
+    Stage 1: the heavy file scanning is done by ``FileIndexCache`` in a
+    background thread.  This function reads the in-memory index snapshot
+    (if ready) to populate ``file_count``, ``size_bytes`` and
+    ``file_summary_ready`` without touching the filesystem.
+
+    When the index is still ``building`` or in ``error`` state, entries
+    are returned with ``file_count=None``, ``size_bytes=None`` and
+    ``file_summary_ready=False``; the frontend shows placeholders.
+
+    The directory tree walk (bucket enumeration) and ``uuid -> task``
+    mapping are still done synchronously here because they are fast
+    (Path.iterdir on ~241 leaf dirs takes milliseconds, unlike the
+    33.5s recursive file stat scan).
     """
-    global _files_cache, _files_cache_time
-
-    now = _time.monotonic()
-    if _files_cache is not None and (now - _files_cache_time) < _FILES_CACHE_TTL:
-        return _files_cache
-
-    result = _list_work_dir_entries_uncached(manager_getter)
-    _files_cache = result
-    _files_cache_time = now
-    return result
-
-
-def _list_work_dir_entries_uncached(
-    manager_getter: Callable[[], MainWorkflow],
-) -> dict:
-    """Actual scan logic (uncached)."""
     work_dir_base_str, base_resolved = _resolve_work_dir_base(manager_getter)
     if base_resolved is None:
         return {
@@ -1108,29 +1079,109 @@ def _list_work_dir_entries_uncached(
             "total_entries": 0,
             "orphan_count": 0,
             "entries": [],
+            "index_status": _file_index_cache.status
+            if _file_index_cache
+            else "building",
         }
 
     uuid_to_task = _build_uuid_to_task_map()
     base = base_resolved
 
-    entries: list[dict] = []
+    # Walk the bucket tree to enumerate leaf directories (fast: no file stat).
+    leaf_entries: list[dict] = []
     try:
         for l1 in sorted(base.iterdir()):
-            if not l1.is_dir() or len(l1.name) != 2:
-                if l1.is_dir() and not l1.name.startswith("."):
-                    _scan_bucket_tree(
-                        l1, 0, 4, base, uuid_to_task, entries
-                    )
+            if not l1.is_dir() or l1.name.startswith("."):
                 continue
-            _scan_bucket_level(l1, 1, base, uuid_to_task, entries)
+            if len(l1.name) == 2:
+                _scan_bucket_level(l1, 1, base, uuid_to_task, leaf_entries)
+            else:
+                _scan_bucket_tree(l1, 0, 4, base, uuid_to_task, leaf_entries)
     except Exception as exc:
         logger.warning("Error scanning work_dir_base: %s", exc)
 
+    # Enrich with file index data if available.
+    # Use get_entries() (per-leaf lightweight summary) instead of
+    # get_leaf_summary() to avoid O(total_file_count) aggregation per
+    # request.  get_entries() returns pre-computed file_count and
+    # size_bytes from the snapshot without reading file_summary.
+    index_status = "building"
+    if _file_index_cache is not None:
+        index_status = _file_index_cache.status
+        # Build a map: leaf_rel_path -> {size_bytes, file_count, file_summary_ready}
+        index_map: dict[str, dict] = {}
+        for ie in _file_index_cache.get_entries():
+            index_map[ie["path"]] = ie
+        for entry in leaf_entries:
+            rel_path = entry["path"]
+            ie = index_map.get(rel_path)
+            if ie is not None:
+                entry["file_count"] = ie["file_count"]
+                entry["size_bytes"] = ie["size_bytes"]
+                entry["file_summary_ready"] = ie["file_summary_ready"]
+            else:
+                entry["file_count"] = None
+                entry["size_bytes"] = None
+                entry["file_summary_ready"] = False
+    else:
+        for entry in leaf_entries:
+            entry["file_count"] = None
+            entry["size_bytes"] = None
+            entry["file_summary_ready"] = False
+
     return {
         "work_dir_base": str(base),
-        "total_entries": len(entries),
-        "orphan_count": sum(1 for e in entries if e["orphan"]),
-        "entries": entries,
+        "total_entries": len(leaf_entries),
+        "orphan_count": sum(1 for e in leaf_entries if e["orphan"]),
+        "entries": leaf_entries,
+        "index_status": index_status,
+    }
+
+
+def search_files(query: str) -> dict:
+    """Search the file index by basename (case-insensitive substring).
+
+    Returns ``{query, results}`` where each result is
+    ``{leaf_path, file_name, basename, size}``.
+
+    If the index is not ready, returns an empty result list.
+    """
+    if _file_index_cache is None:
+        return {"query": query, "results": []}
+    results = _file_index_cache.search(query)
+    return {"query": query, "results": results}
+
+
+def get_file_type_stats() -> dict:
+    """Return basename aggregation stats from the file index.
+
+    Returns ``{stats: [{name, totalSize, count}]}``.
+
+    If the index is not ready, returns an empty stats list.
+    """
+    if _file_index_cache is None:
+        return {"stats": []}
+    return {"stats": _file_index_cache.get_stats()}
+
+
+def get_leaf_file_summary(leaf_path: str) -> dict:
+    """Return ``file_summary`` for a single leaf directory.
+
+    Returns ``{path, file_summary, index_status}``.  ``file_summary``
+    is ``None`` if the leaf is not in the index or the index is not
+    ready.
+    """
+    if _file_index_cache is None:
+        return {
+            "path": leaf_path,
+            "file_summary": None,
+            "index_status": "building",
+        }
+    summary = _file_index_cache.get_leaf_summary(leaf_path)
+    return {
+        "path": leaf_path,
+        "file_summary": summary,
+        "index_status": _file_index_cache.status,
     }
 
 
@@ -1190,7 +1241,14 @@ def _collect_leaf(
     uuid_to_task: dict[str, tuple[str, str]],
     entries: list[dict],
 ) -> None:
-    """Process a single leaf job directory and append to entries."""
+    """Process a single leaf job directory and append to entries.
+
+    Stage 1: no longer calls ``_scan_file_summary`` here — the heavy
+    file scanning is done by ``FileIndexCache`` in a background thread.
+    This function only records the directory path and task mapping;
+    ``file_count``, ``size_bytes`` and ``file_summary_ready`` are
+    populated by :func:`list_work_dir_entries` from the index snapshot.
+    """
     dir_name = leaf.name
     job_uuid = (
         dir_name.rsplit("_", 1)[0] if "_" in dir_name else dir_name
@@ -1201,38 +1259,17 @@ def _collect_leaf(
     if job_uuid in uuid_to_task:
         task_id, owner = uuid_to_task[job_uuid]
 
-    # Try StorageCache first, then os.scandir aggregation
-    size_bytes: int | None = None
-    if _storage_cache is not None:
-        size_bytes = _storage_cache.get_job_dir_size(str(leaf))
-
-    # Scan files in the directory (single level)
-    file_summary = _scan_file_summary(str(leaf))
-
-    # If no cache hit, use du -sb (fast, consistent with dashboard)
-    if size_bytes is None:
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["du", "-sb", str(leaf)],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                size_bytes = int(result.stdout.split()[0])
-        except Exception:
-            # Last resort: sum from file_summary
-            size_bytes = sum(f["size"] for f in file_summary)
-
     entries.append(
         {
             "path": str(leaf.relative_to(base)),
             "abs_path": str(leaf),
-            "size_bytes": size_bytes,
+            "size_bytes": None,  # populated from FileIndexCache
             "job_uuid": job_uuid,
             "task_id": task_id,
             "owner": owner,
             "orphan": task_id is None,
-            "file_summary": file_summary,
+            "file_count": None,  # populated from FileIndexCache
+            "file_summary_ready": False,
         }
     )
 
@@ -1412,14 +1449,9 @@ _HASH_RE = re.compile(r"^[0-9a-f]{32}$")
 def _get_traj_dir(
     manager_getter: Callable[[], MainWorkflow],
 ) -> Path:
-    """Resolve the trajectory storage directory from config."""
+    """Resolve the trajectory storage directory from the active pool."""
     manager = manager_getter()
-    user_data_dir = str(
-        Path(
-            manager.config["basic"].get("user_data", "data/user_data")
-        ).resolve()
-    )
-    return Path(user_data_dir) / "trajs"
+    return Path(manager.active_pool.get_user_file_path("trajectory"))
 
 
 def _count_traj_refs(file_hash: str) -> int:
@@ -1454,7 +1486,7 @@ def list_trajectories(
     if not traj_dir.is_dir():
         return {"total": 0, "total_bytes": 0, "items": []}
 
-    from ..params import md_ase_formats
+    from ..params import TRAJ_FORMAT_MAPPING
 
     items: list[dict] = []
     total_bytes = 0
@@ -1482,7 +1514,7 @@ def list_trajectories(
             num_atoms: int | None = None
             num_frames: int | None = None
 
-            for sw_fmt, ase_fmt in md_ase_formats.items():
+            for sw_fmt, ase_fmt in TRAJ_FORMAT_MAPPING.items():
                 try:
                     import ase.io
 

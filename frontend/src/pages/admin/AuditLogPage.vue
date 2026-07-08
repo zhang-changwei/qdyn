@@ -50,7 +50,11 @@
       stripe
       class="audit-table"
     >
-      <el-table-column label="Time" prop="timestamp" width="170" sortable />
+      <el-table-column label="Time" width="170" sortable :sort-by="(row: AuditLogItem) => row.timestamp ?? 0">
+        <template #default="{ row }">
+          {{ formatTimestamp(row.timestamp, row.timestamp_raw) }}
+        </template>
+      </el-table-column>
       <el-table-column label="User" prop="username" width="120" />
       <el-table-column label="Action" prop="action" width="200">
         <template #default="{ row }">
@@ -85,7 +89,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAuditLogs } from '@/api/admin'
-import type { AuditLogResponse } from '@/api/types'
+import type { AuditLogResponse, AuditLogItem } from '@/api/types'
 
 const loading = ref(false)
 const logData = ref<AuditLogResponse | null>(null)
@@ -112,6 +116,21 @@ const actionOptions = [
   'admin_delete_files_by_name',
   'admin_delete_trajectory'
 ]
+
+function formatTimestamp(ts: number | null, raw: string | null): string {
+  if (ts !== null && !Number.isNaN(ts)) {
+    return new Date(ts * 1000).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  }
+  // Fallback to the raw UTC string if parsing failed on the backend.
+  return raw ?? '—'
+}
 
 function getActionTagType(action: string): '' | 'success' | 'warning' | 'danger' | 'info' {
   if (action === 'login_failed') return 'warning'

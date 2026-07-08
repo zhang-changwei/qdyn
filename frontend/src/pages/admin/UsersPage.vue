@@ -231,7 +231,18 @@ async function handleDeleteUser(username: string): Promise<void> {
 
 .action-buttons {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+/* el-popconfirm renders a wrapper element around its trigger button;
+   make it behave like a plain flex item so it aligns with sibling buttons. */
+.action-buttons :deep(.el-popconfirm) {
+  display: inline-flex;
+}
+
+.action-buttons :deep(.el-button) {
+  margin-left: 0;
 }
 </style>

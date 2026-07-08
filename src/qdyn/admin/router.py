@@ -19,6 +19,7 @@ from ..frontend_api.models import (
 from ..main_workflow import MainWorkflow
 from . import service
 from .models import (
+    AdminFilesResponse,
     AdminStatsResponse,
     AdminTaskListResponse,
     AdminUserItem,
@@ -27,6 +28,9 @@ from .models import (
     FileDeleteRequest,
     FileDeleteResponse,
     FileNameDeleteRequest,
+    FileLeafSummaryResponse,
+    FileSearchResponse,
+    FileStatsResponse,
     LogViewResponse,
     TrajListResponse,
 )
@@ -233,14 +237,59 @@ def create_admin_router(
     # GET /api/admin/files
     # -----------------------------------------------------------------
 
-    @router.get("/files")
+    @router.get("/files", response_model=AdminFilesResponse)
     def list_work_dirs(
         refresh: bool = Query(False, description="Force cache refresh"),
-    ) -> dict:
-        """List job directories under work_dir_base with task mapping."""
+    ) -> AdminFilesResponse:
+        """List job directories under work_dir_base with task mapping.
+
+        Stage 1: returns a lightweight entry list without per-file
+        ``file_summary``.  ``file_count``, ``size_bytes`` and
+        ``file_summary_ready`` are populated from the in-memory
+        FileIndexCache snapshot.  Use the ``/files/search``,
+        ``/files/stats`` and ``/files/summary`` endpoints for
+        file-level details.
+        """
         if refresh:
             service.invalidate_files_cache()
         return service.list_work_dir_entries(manager_getter)
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/files/search
+    # -----------------------------------------------------------------
+
+    @router.get("/files/search", response_model=FileSearchResponse)
+    def search_files(
+        q: str = Query(..., description="Filename search query"),
+    ) -> FileSearchResponse:
+        """Search the file index by basename (case-insensitive substring).
+
+        Returns matching files across all leaf directories.
+        """
+        data = service.search_files(q)
+        return FileSearchResponse(**data)
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/files/stats
+    # -----------------------------------------------------------------
+
+    @router.get("/files/stats", response_model=FileStatsResponse)
+    def get_file_type_stats() -> FileStatsResponse:
+        """Return basename aggregation stats from the file index."""
+        data = service.get_file_type_stats()
+        return FileStatsResponse(**data)
+
+    # -----------------------------------------------------------------
+    # GET /api/admin/files/summary
+    # -----------------------------------------------------------------
+
+    @router.get("/files/summary", response_model=FileLeafSummaryResponse)
+    def get_leaf_file_summary(
+        path: str = Query(..., description="Relative leaf path"),
+    ) -> FileLeafSummaryResponse:
+        """Return per-file summary for a single leaf directory (lazy load)."""
+        data = service.get_leaf_file_summary(path)
+        return FileLeafSummaryResponse(**data)
 
     # -----------------------------------------------------------------
     # POST /api/admin/files/delete

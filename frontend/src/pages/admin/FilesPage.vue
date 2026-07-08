@@ -2,6 +2,36 @@
   <div class="files-page">
     <h2 class="page-heading">File Browser</h2>
 
+    <!-- Index status alert -->
+    <el-alert
+      v-if="indexStatus === 'building'"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+    >
+      <template #title>
+        File index is building in the background. File counts, sizes, search
+        and stats will be available shortly.
+      </template>
+    </el-alert>
+    <el-alert
+      v-else-if="indexStatus === 'error'"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+    >
+      <template #title>
+        File index error: {{ indexError ?? 'unknown' }}
+      </template>
+      <template #default>
+        <el-button type="danger" size="small" plain @click="loadFiles(true)">
+          Retry
+        </el-button>
+      </template>
+    </el-alert>
+
     <!-- File type statistics bar -->
     <el-card v-if="fileTypeStats.length > 0" shadow="never" class="stats-card">
       <div class="stats-header">
@@ -58,9 +88,11 @@
         />
         <el-input
           v-model="fileNameSearch"
-          placeholder="Filter by filename (e.g. WAVECAR)"
+          :placeholder="indexStatus === 'ready' ? 'Search filenames (e.g. WAVECAR)' : 'Index building...'"
           clearable
+          :disabled="indexStatus !== 'ready'"
           style="width: 260px"
+          @change="handleFileNameSearch"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -69,14 +101,14 @@
       </div>
 
       <!-- File name search results summary -->
-      <div v-if="fileNameSearch" class="search-summary">
+      <div v-if="fileNameSearch && searchResults.length > 0" class="search-summary">
         <el-alert type="info" :closable="false" show-icon>
           <template #title>
-            Found <strong>{{ fileNameMatchCount }}</strong> matching files
-            in <strong>{{ fileNameMatchDirCount }}</strong> directories
-            ({{ formatBytes(fileNameMatchTotalSize) }} total)
+            Found <strong>{{ searchResults.length }}</strong> matching files
+            in <strong>{{ searchResultDirCount }}</strong> directories
+            ({{ formatBytes(searchResultTotalSize) }} total)
           </template>
-          <template v-if="fileNameMatchDirCount > 0" #default>
+          <template v-if="searchResultDirCount > 0" #default>
             <el-button
               type="danger"
               size="small"
@@ -116,56 +148,25 @@
       row-key="abs_path"
       :default-sort="{ prop: 'path', order: 'ascending' }"
       @selection-change="handleSelectionChange"
+      @expand-change="handleExpandChange"
     >
       <el-table-column type="selection" width="40" />
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="expand-content">
-            <!-- Top-level files -->
-            <div v-if="getGroupedFiles(row).root.length > 0" class="file-group">
-              <div class="file-group-files">
-                <div
-                  v-for="file in getGroupedFiles(row).root"
-                  :key="file.name"
-                  class="file-row"
-                >
-                  <span class="file-entry">
-                    <el-icon class="file-icon" :class="fileIconClass(file.name)"><Document /></el-icon>
-                    <span :class="{ 'highlight-match': isFileNameMatch(file.name) }">{{ file.name }}</span>
-                  </span>
-                  <span class="file-size">{{ formatBytes(file.size) }}</span>
-                  <el-popconfirm title="Delete this file?" @confirm="handleDeleteSingleFile(row, file)">
-                    <template #reference>
-                      <el-button type="danger" size="small" :icon="Delete" link />
-                    </template>
-                  </el-popconfirm>
-                </div>
-              </div>
-            </div>
-            <!-- Subdirectory groups (collapsible) -->
-            <el-collapse v-if="Object.keys(getGroupedFiles(row).subdirs).length > 0" class="subdir-collapse">
-              <el-collapse-item
-                v-for="(files, subdir) in getGroupedFiles(row).subdirs"
-                :key="subdir"
-                :name="subdir"
-              >
-                <template #title>
-                  <span class="subdir-title">
-                    <el-icon><FolderOpened /></el-icon>
-                    {{ subdir }}
-                    <el-tag size="small" type="info">{{ files.length }} files</el-tag>
-                    <el-tag size="small">{{ formatBytes(files.reduce((s: number, f: FileSummaryItem) => s + f.size, 0)) }}</el-tag>
-                  </span>
-                </template>
+            <div v-if="expandedLoading[row.abs_path]" v-loading="true" class="expand-loading" />
+            <template v-else-if="getGroupedFiles(row).root.length > 0 || Object.keys(getGroupedFiles(row).subdirs).length > 0">
+              <!-- Top-level files -->
+              <div v-if="getGroupedFiles(row).root.length > 0" class="file-group">
                 <div class="file-group-files">
                   <div
-                    v-for="file in files"
+                    v-for="file in getGroupedFiles(row).root"
                     :key="file.name"
                     class="file-row"
                   >
                     <span class="file-entry">
                       <el-icon class="file-icon" :class="fileIconClass(file.name)"><Document /></el-icon>
-                      <span :class="{ 'highlight-match': isFileNameMatch(file.name) }">{{ basename(file.name) }}</span>
+                      <span :class="{ 'highlight-match': isFileNameMatch(file.name) }">{{ file.name }}</span>
                     </span>
                     <span class="file-size">{{ formatBytes(file.size) }}</span>
                     <el-popconfirm title="Delete this file?" @confirm="handleDeleteSingleFile(row, file)">
@@ -175,21 +176,56 @@
                     </el-popconfirm>
                   </div>
                 </div>
-              </el-collapse-item>
-            </el-collapse>
-            <el-text v-if="!row.file_summary?.length" type="info">No files</el-text>
+              </div>
+              <!-- Subdirectory groups (collapsible) -->
+              <el-collapse v-if="Object.keys(getGroupedFiles(row).subdirs).length > 0" class="subdir-collapse">
+                <el-collapse-item
+                  v-for="(files, subdir) in getGroupedFiles(row).subdirs"
+                  :key="subdir"
+                  :name="subdir"
+                >
+                  <template #title>
+                    <span class="subdir-title">
+                      <el-icon><FolderOpened /></el-icon>
+                      {{ subdir }}
+                      <el-tag size="small" type="info">{{ files.length }} files</el-tag>
+                      <el-tag size="small">{{ formatBytes(files.reduce((s, f) => s + f.size, 0)) }}</el-tag>
+                    </span>
+                  </template>
+                  <div class="file-group-files">
+                    <div
+                      v-for="file in files"
+                      :key="file.name"
+                      class="file-row"
+                    >
+                      <span class="file-entry">
+                        <el-icon class="file-icon" :class="fileIconClass(file.name)"><Document /></el-icon>
+                        <span :class="{ 'highlight-match': isFileNameMatch(file.name) }">{{ basename(file.name) }}</span>
+                      </span>
+                      <span class="file-size">{{ formatBytes(file.size) }}</span>
+                      <el-popconfirm title="Delete this file?" @confirm="handleDeleteSingleFile(row, file)">
+                        <template #reference>
+                          <el-button type="danger" size="small" :icon="Delete" link />
+                        </template>
+                      </el-popconfirm>
+                      </div>
+                    </div>
+                </el-collapse-item>
+              </el-collapse>
+            </template>
+            <el-text v-else type="info">No files</el-text>
           </div>
         </template>
       </el-table-column>
       <el-table-column prop="path" label="Path" min-width="280" sortable show-overflow-tooltip />
-      <el-table-column label="Size" width="110" sortable :sort-by="(row: AdminFileEntry) => row.size_bytes ?? 0">
+      <el-table-column label="Size" width="110" sortable :sort-by="sortBySize">
         <template #default="{ row }">
-          {{ formatBytes(row.size_bytes) }}
+          {{ row.size_bytes != null ? formatBytes(row.size_bytes) : '—' }}
         </template>
       </el-table-column>
-      <el-table-column label="Files" width="80" align="center" sortable :sort-by="(row: AdminFileEntry) => row.file_summary?.length ?? 0">
+      <el-table-column label="Files" width="80" align="center" sortable :sort-by="sortByFileCount">
         <template #default="{ row }">
-          <el-text type="info">{{ row.file_summary?.length ?? 0 }}</el-text>
+          <el-text type="info">{{ row.file_count ?? '—' }}</el-text>
         </template>
       </el-table-column>
       <el-table-column label="Owner" width="120" sortable prop="owner">
@@ -200,7 +236,7 @@
           <el-text v-else type="info">--</el-text>
         </template>
       </el-table-column>
-      <el-table-column label="Task" width="130" sortable :sort-by="(row: AdminFileEntry) => row.task_id ?? ''">
+      <el-table-column label="Task" width="130" sortable :sort-by="sortByTaskId">
         <template #default="{ row }">
           <el-link v-if="row.task_id" type="primary" @click="goToTask(row.task_id)">
             {{ row.task_id.substring(0, 8) }}...
@@ -257,11 +293,11 @@
     >
       <p>
         Delete all <strong>"{{ fileNameSearch }}"</strong> files from
-        <strong>{{ fileNameMatchDirCount }}</strong> directories?
+        <strong>{{ searchResultDirCount }}</strong> directories?
       </p>
       <p>
         This will free approximately
-        <strong>{{ formatBytes(fileNameMatchTotalSize) }}</strong>.
+        <strong>{{ formatBytes(searchResultTotalSize) }}</strong>.
       </p>
       <p style="color: var(--el-color-danger)">
         This action cannot be undone.
@@ -281,12 +317,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Delete, Document, FolderOpened, RefreshRight, Search } from '@element-plus/icons-vue'
-import { getAdminFiles, deleteAdminFiles, deleteAdminFilesByName } from '@/api/admin'
-import type { AdminFilesResponse, AdminFileEntry, FileSummaryItem } from '@/api/types'
+import {
+  getAdminFiles,
+  deleteAdminFiles,
+  deleteAdminFilesByName,
+  searchFiles,
+  getFileTypeStats,
+  getLeafFileSummary,
+} from '@/api/admin'
+import type {
+  AdminFilesResponse,
+  AdminFileEntry,
+  FileSummaryItem,
+  FileTypeStat,
+  FileSearchResultItem,
+} from '@/api/types'
 
 const router = useRouter()
 const loading = ref(false)
@@ -300,6 +349,26 @@ const bulkDeleteVisible = ref(false)
 const deleteByNameVisible = ref(false)
 const deleteAssociatedTasks = ref(false)
 const tableRef = ref()
+
+// File index status from backend.
+const indexStatus = ref<string>('building')
+const indexError = ref<string | null>(null)
+
+// Lazy-loaded file summaries for expanded rows: abs_path -> FileSummaryItem[]
+const expandedSummaries = reactive<Record<string, FileSummaryItem[]>>({})
+const expandedLoading = reactive<Record<string, boolean>>({})
+
+// Backend search results for fileNameSearch.
+const searchResults = ref<FileSearchResultItem[]>([])
+
+// Backend file type stats.
+const fileTypeStats = ref<FileTypeStat[]>([])
+
+// ---------------------------------------------------------------------------
+// Computed: index readiness
+// ---------------------------------------------------------------------------
+
+const indexReady = computed(() => indexStatus.value === 'ready')
 
 // ---------------------------------------------------------------------------
 // Computed: filtering
@@ -316,7 +385,7 @@ const filteredEntries = computed(() => {
     entries = entries.filter(e => !e.orphan)
   }
 
-  // Filter by text search (owner, task_id, path)
+  // Filter by text search (owner, task_id, path, job_uuid)
   if (searchText.value) {
     const q = searchText.value.toLowerCase()
     entries = entries.filter(e =>
@@ -327,96 +396,16 @@ const filteredEntries = computed(() => {
     )
   }
 
-  // Filter by filename using basename (e.g. "WAVECAR" matches "scf_05/WAVECAR")
+  // Filter by filename search using backend search results.
+  // When fileNameSearch is non-empty, only show leaf dirs that appear in
+  // the search results.  An empty result set naturally yields an empty
+  // table (showing "no matches"), rather than falling back to all dirs.
   if (fileNameSearch.value) {
-    const fn = fileNameSearch.value.toLowerCase()
-    entries = entries.filter(e =>
-      e.file_summary?.some(f => {
-        const bn = f.name.includes('/') ? f.name.split('/').pop()! : f.name
-        return bn.toLowerCase().includes(fn)
-      })
-    )
+    const matchingPaths = new Set(searchResults.value.map(r => r.leaf_path))
+    entries = entries.filter(e => matchingPaths.has(e.path))
   }
 
   return entries
-})
-
-// ---------------------------------------------------------------------------
-// Computed: file type statistics
-// ---------------------------------------------------------------------------
-
-interface FileTypeStat {
-  name: string
-  totalSize: number
-  count: number
-}
-
-const fileTypeStats = computed<FileTypeStat[]>(() => {
-  if (!filesData.value) return []
-
-  const statMap = new Map<string, { totalSize: number; count: number }>()
-
-  for (const entry of filesData.value.entries) {
-    if (!entry.file_summary) continue
-    for (const file of entry.file_summary) {
-      // Use basename for grouping (e.g. "scf_05/WAVECAR" → "WAVECAR")
-      const basename = file.name.includes('/') ? file.name.split('/').pop()! : file.name
-      const existing = statMap.get(basename)
-      if (existing) {
-        existing.totalSize += file.size
-        existing.count += 1
-      } else {
-        statMap.set(basename, { totalSize: file.size, count: 1 })
-      }
-    }
-  }
-
-  // Sort by total size descending, keep top entries
-  return Array.from(statMap.entries())
-    .map(([name, stat]) => ({ name, ...stat }))
-    .filter(s => s.count > 1 || s.totalSize > 1024 * 1024) // Show if >1 file or >1MB
-    .sort((a, b) => b.totalSize - a.totalSize)
-    .slice(0, 20)
-})
-
-// ---------------------------------------------------------------------------
-// Computed: filename search stats
-// ---------------------------------------------------------------------------
-
-function _basename(name: string): string {
-  return name.includes('/') ? name.split('/').pop()! : name
-}
-
-const fileNameMatchCount = computed(() => {
-  if (!fileNameSearch.value || !filesData.value) return 0
-  const fn = fileNameSearch.value.toLowerCase()
-  let count = 0
-  for (const entry of filesData.value.entries) {
-    if (!entry.file_summary) continue
-    count += entry.file_summary.filter(f =>
-      _basename(f.name).toLowerCase().includes(fn)
-    ).length
-  }
-  return count
-})
-
-const fileNameMatchDirCount = computed(() => {
-  return filteredEntries.value.length
-})
-
-const fileNameMatchTotalSize = computed(() => {
-  if (!fileNameSearch.value) return 0
-  const fn = fileNameSearch.value.toLowerCase()
-  let total = 0
-  for (const entry of filteredEntries.value) {
-    if (!entry.file_summary) continue
-    for (const file of entry.file_summary) {
-      if (_basename(file.name).toLowerCase().includes(fn)) {
-        total += file.size
-      }
-    }
-  }
-  return total
 })
 
 // ---------------------------------------------------------------------------
@@ -440,21 +429,88 @@ const selectedTotalSize = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
+// Computed: filename search stats (from backend results)
+// ---------------------------------------------------------------------------
+
+const searchResultDirCount = computed(() => {
+  if (!fileNameSearch.value) return 0
+  return new Set(searchResults.value.map(r => r.leaf_path)).size
+})
+
+const searchResultTotalSize = computed(() => {
+  if (!fileNameSearch.value) return 0
+  return searchResults.value.reduce((sum, r) => sum + r.size, 0)
+})
+
+// ---------------------------------------------------------------------------
 // Data loading
 // ---------------------------------------------------------------------------
 
 onMounted(() => {
   loadFiles()
+  loadFileTypeStats()
 })
 
 async function loadFiles(forceRefresh: boolean = false): Promise<void> {
   loading.value = true
   try {
     filesData.value = await getAdminFiles(forceRefresh)
+    indexStatus.value = filesData.value.index_status ?? 'building'
+    // Clear expanded summaries on reload.
+    Object.keys(expandedSummaries).forEach(k => delete expandedSummaries[k])
+    Object.keys(expandedLoading).forEach(k => delete expandedLoading[k])
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'Failed to load files')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadFileTypeStats(): Promise<void> {
+  try {
+    const resp = await getFileTypeStats()
+    fileTypeStats.value = resp.stats
+      .filter(s => s.count > 1 || s.totalSize > 1024 * 1024)
+      .sort((a, b) => b.totalSize - a.totalSize)
+      .slice(0, 20)
+  } catch {
+    // Stats are non-critical; silently ignore.
+  }
+}
+
+async function handleFileNameSearch(): Promise<void> {
+  if (!fileNameSearch.value || !indexReady.value) {
+    searchResults.value = []
+    return
+  }
+  try {
+    const resp = await searchFiles(fileNameSearch.value)
+    searchResults.value = resp.results
+  } catch {
+    searchResults.value = []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lazy expand: fetch file summary on row expand
+// ---------------------------------------------------------------------------
+
+async function handleExpandChange(row: AdminFileEntry, expandedRows: AdminFileEntry[]): Promise<void> {
+  const isExpanded = expandedRows.some(r => r.abs_path === row.abs_path)
+  if (!isExpanded) return
+  // Already loaded?
+  if (expandedSummaries[row.abs_path] || expandedLoading[row.abs_path]) return
+
+  expandedLoading[row.abs_path] = true
+  try {
+    const resp = await getLeafFileSummary(row.path)
+    if (resp.file_summary) {
+      expandedSummaries[row.abs_path] = resp.file_summary
+    }
+  } catch {
+    ElMessage.error('Failed to load file details')
+  } finally {
+    expandedLoading[row.abs_path] = false
   }
 }
 
@@ -470,8 +526,10 @@ function handleStatTagClick(name: string): void {
   // Toggle: if already filtering by this name, clear it
   if (fileNameSearch.value === name) {
     fileNameSearch.value = ''
+    searchResults.value = []
   } else {
     fileNameSearch.value = name
+    handleFileNameSearch()
   }
 }
 
@@ -493,7 +551,7 @@ interface GroupedFiles {
 }
 
 function getGroupedFiles(row: AdminFileEntry): GroupedFiles {
-  const files = row.file_summary ?? []
+  const files = expandedSummaries[row.abs_path] ?? []
   const root: FileSummaryItem[] = []
   const subdirs: Record<string, FileSummaryItem[]> = {}
 
@@ -516,12 +574,10 @@ function basename(name: string): string {
 
 function isFileNameMatch(name: string): boolean {
   if (!fileNameSearch.value) return false
-  // Match against basename so "WAVECAR" matches "scf_05/WAVECAR"
   return basename(name).toLowerCase().includes(fileNameSearch.value.toLowerCase())
 }
 
 function fileIconClass(filename: string): string {
-  // Return a CSS class based on file type for visual grouping
   const lower = basename(filename).toLowerCase()
   if (['wavecar', 'chgcar', 'chg'].includes(lower)) return 'icon-large-file'
   if (['incar', 'poscar', 'kpoints', 'potcar'].includes(lower)) return 'icon-input-file'
@@ -545,15 +601,23 @@ async function handleDeleteSingleFile(
     })
     if (result.deleted > 0) {
       ElMessage.success(`Deleted ${file.name}`)
-      // Update local state: remove from file_summary and update size
-      const idx = dirEntry.file_summary.findIndex(f => f.name === file.name)
-      if (idx >= 0) {
-        const deletedSize = dirEntry.file_summary[idx].size
-        dirEntry.file_summary.splice(idx, 1)
-        if (dirEntry.size_bytes != null) {
-          dirEntry.size_bytes -= deletedSize
+      // Optimistic update: remove from expanded summary, decrement file_count,
+      // subtract size_bytes, and trigger background index refresh.
+      const summary = expandedSummaries[dirEntry.abs_path]
+      if (summary) {
+        const idx = summary.findIndex(f => f.name === file.name)
+        if (idx >= 0) {
+          summary.splice(idx, 1)
         }
       }
+      if (dirEntry.file_count != null && dirEntry.file_count > 0) {
+        dirEntry.file_count--
+      }
+      if (dirEntry.size_bytes != null) {
+        dirEntry.size_bytes -= file.size
+      }
+      // Trigger background refresh of the file index.
+      // The backend delete endpoint already calls invalidate_files_cache().
     } else if (result.failed.length > 0) {
       ElMessage.error(`Failed: ${result.failed[0].error}`)
     }
@@ -588,6 +652,7 @@ async function handleBulkDelete(): Promise<void> {
     bulkDeleteVisible.value = false
     selectedEntries.value = []
     await loadFiles()
+    await loadFileTypeStats()
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'Bulk delete failed')
   } finally {
@@ -618,11 +683,32 @@ async function handleDeleteByName(): Promise<void> {
     ElMessage.success(msg)
     deleteByNameVisible.value = false
     await loadFiles()
+    await loadFileTypeStats()
+    if (fileNameSearch.value) {
+      await handleFileNameSearch()
+    }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'Delete by name failed')
   } finally {
     deleteLoading.value = false
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sort helpers (extracted from template to avoid inline type annotations
+// which break vue-tsc template analysis for noUnusedLocals)
+// ---------------------------------------------------------------------------
+
+function sortBySize(row: AdminFileEntry): number {
+  return row.size_bytes ?? 0
+}
+
+function sortByFileCount(row: AdminFileEntry): number {
+  return row.file_count ?? 0
+}
+
+function sortByTaskId(row: AdminFileEntry): string {
+  return row.task_id ?? ''
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +805,10 @@ function formatBytes(bytes: number | null | undefined): string {
 
 .expand-content {
   padding: 4px 16px 4px 48px;
+}
+
+.expand-loading {
+  height: 60px;
 }
 
 .file-group-files {

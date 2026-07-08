@@ -551,7 +551,11 @@ export interface AdminFileEntry {
   task_id: string | null
   owner: string | null
   orphan: boolean
-  file_summary: FileSummaryItem[]
+  file_count: number | null
+  file_summary_ready: boolean
+  /** Optional in stage 1+: the list endpoint no longer returns per-file details.
+   *  Use getLeafFileSummary() to lazily fetch the file summary for an expanded row. */
+  file_summary?: FileSummaryItem[] | null
 }
 
 export interface AdminFilesResponse {
@@ -559,6 +563,35 @@ export interface AdminFilesResponse {
   total_entries: number
   orphan_count: number
   entries: AdminFileEntry[]
+  index_status: string  // 'building' | 'ready' | 'error'
+}
+
+export interface FileSearchResultItem {
+  leaf_path: string
+  file_name: string
+  basename: string
+  size: number
+}
+
+export interface FileSearchResponse {
+  query: string
+  results: FileSearchResultItem[]
+}
+
+export interface FileTypeStat {
+  name: string
+  totalSize: number
+  count: number
+}
+
+export interface FileStatsResponse {
+  stats: FileTypeStat[]
+}
+
+export interface FileLeafSummaryResponse {
+  path: string
+  file_summary: FileSummaryItem[] | null
+  index_status: string
 }
 
 export interface FileDeleteTarget {
@@ -625,7 +658,8 @@ export interface TrajListResponse {
  */
 export interface AuditLogItem {
   id: number
-  timestamp: string
+  timestamp: number | null
+  timestamp_raw: string | null
   username: string
   action: string
   target: string | null

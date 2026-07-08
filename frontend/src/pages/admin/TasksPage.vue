@@ -215,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -223,12 +223,20 @@ import { getAdminTasks, getTaskWorkDir, getAdminTaskDetail, adminStopTask, admin
 import TaskCard from '@/components/TaskCard.vue'
 import type { TaskSummary, DerivedState, JobStatusItem } from '@/api/types'
 
+// Router hooks must be called at the top of <script setup>, before any ref
+// that reads route state.
+const route = useRoute()
+const router = useRouter()
+
 const tasks = ref<TaskSummary[]>([])
 const totalTasks = ref(0)
 const loading = ref(false)
 
-// Filter state
-const filterOwner = ref('')
+// Filter state — seed owner from the `?owner=` query param so the first
+// fetch (in onMounted) already uses the correct filter.
+const filterOwner = ref(
+  typeof route.query.owner === 'string' ? route.query.owner : ''
+)
 const filterStatus = ref('')
 
 // Detail dialog state
@@ -241,31 +249,57 @@ const taskJobs = ref<JobStatusItem[]>([])
 const jobsLoading = ref(false)
 const deleteConfirmVisible = ref(false)
 const deleteCleanupDirs = ref(true)
-const router = useRouter()
+
+// Sync owner filter from the `?owner=` query param (e.g. clicking a user in
+// UsersPage pushes /admin/tasks?owner=<name>).
+//
+// Why a watcher instead of a one-shot read inside onMounted:
+// 1. useRoute() should be called at the top of <script setup> (Vue Router
+//    official guidance) so its reactive route object is available to any
+//    downstream ref/watcher, including the initial seed of filterOwner above.
+// 2. Vue Router reuses the component instance when only the query changes
+//    (e.g. /admin/tasks?owner=A -> /admin/tasks?owner=B without leaving the
+//    route). In that case onMounted does NOT re-fire, so a one-shot read in
+//    onMounted would keep the stale owner. The watcher fires on every query
+//    change and reloads the list with the new filter.
+//
+// The initial load is handled by onMounted below; the watcher (without
+// immediate:true) only handles subsequent query-only navigations.
+watch(
+  () => route.query.owner,
+  (owner) => {
+    filterOwner.value = typeof owner === 'string' ? owner : ''
+    loadTasks()
+  }
+)
 
 onMounted(() => {
-  // Read owner filter from query param (e.g., from UsersPage click)
-  const route = useRoute()
-  if (route.query.owner && typeof route.query.owner === 'string') {
-    filterOwner.value = route.query.owner
-  }
   loadTasks()
 })
 
+// Monotonic request sequence so a late-returning stale request cannot
+// overwrite the result of a newer one (e.g. when the user changes filters
+// quickly or a query-only navigation races with a manual search).
+let loadSeq = 0
+
 async function loadTasks(): Promise<void> {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const params: { owner?: string; status?: string } = {}
     if (filterOwner.value) params.owner = filterOwner.value
     if (filterStatus.value) params.status = filterStatus.value
     const response = await getAdminTasks(params)
+    // Drop the result if a newer request has been issued in the meantime.
+    if (seq !== loadSeq) return
     tasks.value = response.items
     totalTasks.value = response.total
   } catch (err) {
+    if (seq !== loadSeq) return
     const message = err instanceof Error ? err.message : 'Failed to load tasks'
     ElMessage.error(message)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

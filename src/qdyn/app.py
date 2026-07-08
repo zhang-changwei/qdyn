@@ -16,8 +16,8 @@ from pydantic import BaseModel
 
 from qdyn import __version__
 
-from .admin import StorageCache, create_admin_router
-from .admin.service import set_storage_cache
+from .admin import StorageCache, create_admin_router, FileIndexCache
+from .admin.service import set_storage_cache, set_file_index_cache
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .calc_common import extract_structure_metadata
@@ -132,12 +132,7 @@ async def lifespan(app: FastAPI):
 
     # Start the storage cache background task.
     work_dir_base = pool_cfg.get("work_dir_base", "")
-    user_data_dir = str(
-        Path(
-            manager.config["basic"].get("user_data", "data/user_data")
-        ).resolve()
-    )
-    traj_dir = os.path.join(user_data_dir, "trajs")
+    traj_dir = manager.active_pool.get_user_file_path("trajectory")
 
     storage_cache = StorageCache(
         work_dir_base=work_dir_base,
@@ -151,9 +146,29 @@ async def lifespan(app: FastAPI):
         name="storage-cache",
     )
 
+    # Start the file index cache background task.
+    file_index_cache = FileIndexCache(
+        work_dir_base=work_dir_base,
+        manager_getter=_manager,
+        interval=300,  # 5 minutes
+    )
+    set_file_index_cache(file_index_cache)
+
+    file_index_task: asyncio.Task | None = asyncio.create_task(
+        file_index_cache.run_forever(),
+        name="file-index-cache",
+    )
+
     yield
 
     # --- shutdown ---
+    if file_index_task is not None:
+        file_index_task.cancel()
+        try:
+            await file_index_task
+        except asyncio.CancelledError:
+            pass
+
     if storage_task is not None:
         storage_task.cancel()
         try:

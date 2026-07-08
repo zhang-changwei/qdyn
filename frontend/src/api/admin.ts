@@ -22,6 +22,9 @@ import type {
   AdminTaskListResponse,
   AdminWorkerItem,
   AdminFilesResponse,
+  FileSearchResponse,
+  FileStatsResponse,
+  FileLeafSummaryResponse,
   StopResultResponse,
   ContinueResultResponse,
   TaskJobsStatusResponse,
@@ -168,11 +171,41 @@ export async function adminDeleteTask(taskId: string, cleanupDirs: boolean = tru
 // ============================================
 
 /**
- * List work_dir_base entries with task mapping and file summaries
+ * List work_dir_base entries with task mapping.
+ * Stage 1: returns lightweight entries without per-file file_summary.
  */
 export async function getAdminFiles(forceRefresh: boolean = false): Promise<AdminFilesResponse> {
   const response = await http.get<AdminFilesResponse>('/api/admin/files', {
     params: forceRefresh ? { refresh: true } : undefined
+  })
+  return response.data
+}
+
+/**
+ * Search files by basename across all leaf directories.
+ * Returns matching files from the in-memory file index.
+ */
+export async function searchFiles(query: string): Promise<FileSearchResponse> {
+  const response = await http.get<FileSearchResponse>('/api/admin/files/search', {
+    params: { q: query }
+  })
+  return response.data
+}
+
+/**
+ * Get basename aggregation stats (file type statistics).
+ */
+export async function getFileTypeStats(): Promise<FileStatsResponse> {
+  const response = await http.get<FileStatsResponse>('/api/admin/files/stats')
+  return response.data
+}
+
+/**
+ * Get per-file summary for a single leaf directory (lazy load).
+ */
+export async function getLeafFileSummary(path: string): Promise<FileLeafSummaryResponse> {
+  const response = await http.get<FileLeafSummaryResponse>('/api/admin/files/summary', {
+    params: { path }
   })
   return response.data
 }

@@ -55,7 +55,15 @@ class FileSummaryItem(BaseModel):
 
 
 class AdminFileEntry(BaseModel):
-    """A job directory entry in work_dir_base."""
+    """A job directory entry in work_dir_base.
+
+    ``file_summary`` is optional in stage 1+: the list endpoint no longer
+    returns per-file details.  Use ``GET /api/admin/files/summary?path=...``
+    to lazily fetch the file summary for an expanded row.
+
+    ``file_count`` and ``file_summary_ready`` are populated from the
+    FileIndexCache snapshot when available.
+    """
 
     path: str
     abs_path: str
@@ -64,7 +72,47 @@ class AdminFileEntry(BaseModel):
     task_id: str | None
     owner: str | None
     orphan: bool
-    file_summary: list[FileSummaryItem]
+    file_count: int | None = None
+    file_summary_ready: bool = False
+    file_summary: list[FileSummaryItem] | None = None
+
+
+class FileSearchResultItem(BaseModel):
+    """A single file matching a filename search query."""
+
+    leaf_path: str
+    file_name: str
+    basename: str
+    size: int
+
+
+class FileSearchResponse(BaseModel):
+    """Response for GET /api/admin/files/search."""
+
+    query: str
+    results: list[FileSearchResultItem]
+
+
+class FileTypeStat(BaseModel):
+    """Aggregated file statistics for a single basename."""
+
+    name: str
+    totalSize: int
+    count: int
+
+
+class FileStatsResponse(BaseModel):
+    """Response for GET /api/admin/files/stats."""
+
+    stats: list[FileTypeStat]
+
+
+class FileLeafSummaryResponse(BaseModel):
+    """Response for GET /api/admin/files/summary."""
+
+    path: str
+    file_summary: list[FileSummaryItem] | None
+    index_status: str
 
 
 class AdminFilesResponse(BaseModel):
@@ -74,6 +122,7 @@ class AdminFilesResponse(BaseModel):
     total_entries: int
     orphan_count: int
     entries: list[AdminFileEntry]
+    index_status: str
 
 
 class FileDeleteTarget(BaseModel):
@@ -146,7 +195,8 @@ class AuditLogItem(BaseModel):
     """A single audit log entry."""
 
     id: int
-    timestamp: str
+    timestamp: float | None
+    timestamp_raw: str | None = None
     username: str
     action: str
     target: str | None = None

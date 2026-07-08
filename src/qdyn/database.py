@@ -255,6 +255,27 @@ class QdynDB:
             ).fetchone()
         return dict(row) if row else None
 
+    @staticmethod
+    def _parse_utc_timestamp(value: str | None) -> float | None:
+        """Parse a SQLite ``datetime('now')`` UTC string into a Unix timestamp.
+
+        Handles ``"%Y-%m-%d %H:%M:%S"`` (SQLite default) and ISO 8601. Naive
+        datetimes are assumed UTC, mirroring how task ``created_at`` is parsed.
+        Returns ``None`` if ``value`` is empty or unparseable.
+        """
+        if not value:
+            return None
+        try:
+            dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
     def get_task_created_at(self, task_id: str) -> float | None:
         """Return task creation time as a UTC timestamp, or None if unavailable."""
         conn = self.get_db()
@@ -265,22 +286,7 @@ class QdynDB:
             ).fetchone()
         if row is None:
             return None
-
-        created_at = row["created_at"]
-        if not created_at:
-            return None
-
-        try:
-            dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            try:
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-
-        if dt.tzinfo is None or dt.utcoffset() is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
+        return self._parse_utc_timestamp(row["created_at"])
 
     def get_queued_payload(self, task_id: str) -> str | None:
         """Return the payload_json for a queued task, or None if not found."""
@@ -696,7 +702,14 @@ class QdynDB:
 
         with self._lock:
             rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        results: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.get("timestamp")
+            item["timestamp_raw"] = raw
+            item["timestamp"] = self._parse_utc_timestamp(raw)
+            results.append(item)
+        return results
 
 
 qdyndb = QdynDB()
