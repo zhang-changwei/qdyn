@@ -20,6 +20,11 @@ from fastapi import HTTPException
 
 from ..database import qdyndb
 from ..frontend_api.models import TaskSummary
+from ..frontend_api.task_status import (
+    _build_queued_task_summary as _main_build_queued_task_summary,
+    _get_step_order,
+    derive_task_status,
+)
 from ..main_workflow import MainWorkflow
 from ..params import TERMINAL_STATES
 
@@ -28,9 +33,6 @@ if TYPE_CHECKING:
     from .storage_cache import StorageCache
 
 logger = logging.getLogger(__name__)
-
-# Canonical step ordering (same as frontend_api/service.py)
-_STEP_ORDER = ["nvt", "nve", "scf", "pre_namd", "namd"]
 
 # Module-level references to singleton caches.
 # Populated by app.py lifespan after creating the cache instances.
@@ -393,6 +395,56 @@ def delete_user(
 # ---------------------------------------------------------------------------
 
 
+def _prefetch_job_states(
+    task_ids: list[str],
+    manager_getter: Callable[[], MainWorkflow],
+) -> dict[str, str] | None:
+    """Fetch ``{job_uuid: state}`` for all jobs under the given tasks.
+
+    Issues a single Mongo ``find`` with ``$in`` on the collected UUIDs,
+    mirroring frontend_api/task_status.py::_prefetch_job_states (which is
+    not yet on this branch). Returns None if the JobController is
+    unavailable or the query fails, so callers fall back to per-job lookup.
+    """
+    all_uuids: list[str] = []
+    for tid in task_ids:
+        job_ids = qdyndb.get_task_job_ids(tid)
+        for uuid_list in job_ids.values():
+            all_uuids.extend(uuid_list)
+    if not all_uuids:
+        return None
+
+    try:
+        manager = manager_getter()
+        jc = manager._ensure_job_controller()
+    except Exception:
+        return None
+
+    unique_uuids = list(dict.fromkeys(all_uuids))
+    try:
+        cursor = jc.jobs.find(
+            {"uuid": {"$in": unique_uuids}},
+            projection=["uuid", "index", "state"],
+        )
+        latest_by_uuid: dict[str, tuple[int, str]] = {}
+        for doc in cursor:
+            uid = doc.get("uuid")
+            if not uid:
+                continue
+            idx = doc.get("index", 0)
+            state = doc.get("state")
+            if state is None:
+                continue
+            state_str = state.value if hasattr(state, "value") else str(state)
+            prev = latest_by_uuid.get(uid)
+            if prev is None or idx >= prev[0]:
+                latest_by_uuid[uid] = (idx, state_str)
+    except Exception:
+        return None
+
+    return {uid: state for uid, (_idx, state) in latest_by_uuid.items()}
+
+
 def get_all_task_summaries(
     manager_getter: Callable[[], MainWorkflow],
     owner_filter: str | None = None,
@@ -447,16 +499,26 @@ def get_all_task_summaries(
 
     summaries: list[TaskSummary] = []
 
+    # Pre-fetch job states for all non-queued tasks in one Mongo query to
+    # avoid O(total jobs) per-job get_job_status round-trips. Mirrors
+    # frontend_api/task_status.py::get_task_summary_list().
+    non_queued_ids = [
+        t["task_id"] for t in all_tasks if t["task_id"] not in queued_map
+    ]
+    state_map = _prefetch_job_states(non_queued_ids, manager_getter)
+
     for task_row in all_tasks:
         task_id = task_row["task_id"]
         username = task_row["username"]
 
         if task_id in queued_map:
-            summary = _build_queued_task_summary(
+            summary = _main_build_queued_task_summary(
                 task_id, username, queued_map[task_id], queue_positions
             )
         else:
-            summary = _build_task_summary(task_id, username, manager_getter)
+            summary = _build_task_summary(
+                task_id, username, manager_getter, state_map=state_map
+            )
 
         if summary is not None:
             if status_filter and summary.derived_status != status_filter:
@@ -466,68 +528,19 @@ def get_all_task_summaries(
     return summaries
 
 
-def _build_queued_task_summary(
-    task_id: str,
-    username: str,
-    queue_entry: dict,
-    queue_positions: Dict[str, int],
-) -> TaskSummary:
-    """Build a TaskSummary for a task still in the waiting queue."""
-    meta = qdyndb.get_task_metadata(task_id) or {}
-
-    created_at: float = _time.time()
-    try:
-        dt = datetime.strptime(
-            queue_entry["created_at"], "%Y-%m-%d %H:%M:%S"
-        ).replace(tzinfo=timezone.utc)
-        created_at = dt.timestamp()
-    except Exception:
-        pass
-
-    queue_status = queue_entry["status"]
-    _QUEUE_DERIVED_STATUS = {
-        "QUEUED": "QUEUED",
-        "DISPATCHING": "DISPATCHING",
-        "FAILED": "FAILED",
-        "CANCELLED": "CANCELLED",
-    }
-    derived_status = _QUEUE_DERIVED_STATUS.get(queue_status, queue_status)
-
-    return TaskSummary(
-        task_id=task_id,
-        owner=username,
-        created_at=created_at,
-        raw_status_counts={},
-        derived_status=derived_status,
-        total_jobs=0,
-        failed_job_names=[],
-        steps=[],
-        completed_steps=[],
-        formula=meta.get("formula"),
-        num_atoms=meta.get("num_atoms"),
-        prev_task_id=meta.get("prev_task_id"),
-        worker=meta.get("worker"),
-        resume_next_step=None,
-        resume_eligible=False,
-        queue_status=queue_status,
-        queue_position=queue_positions.get(task_id),
-        pool_name=queue_entry.get("pool_name") or meta.get("pool_name"),
-        runtime_worker=None,
-    )
-
-
 def _build_task_summary(
     task_id: str,
     username: str,
     manager_getter: Callable[[], MainWorkflow],
+    *,
+    state_map: dict[str, str] | None = None,
 ) -> TaskSummary | None:
     """Build a TaskSummary for a submitted task.
 
-    Mirrors frontend_api/service.py::_build_task_summary() but takes an
-    explicit username (from task_owners) instead of querying for it.
+    Mirrors frontend_api/task_status.py::_build_task_summary() but takes
+    an explicit username (from task_owners) instead of querying for it.
+    Supports a pre-fetched ``state_map`` to avoid per-job Mongo round-trips.
     """
-    from ..frontend_api.service import derive_task_status
-
     job_ids = qdyndb.get_task_job_ids(task_id)
 
     raw_status_counts: Dict[str, int] = {}
@@ -540,8 +553,11 @@ def _build_task_summary(
         for idx, job_uuid in enumerate(uuid_list):
             total_jobs += 1
             try:
-                manager = manager_getter()
-                raw_state = manager.get_job_status(job_uuid)
+                if state_map is not None:
+                    raw_state = state_map.get(job_uuid, "ERROR")
+                else:
+                    manager = manager_getter()
+                    raw_state = manager.get_job_status(job_uuid)
                 raw_status_counts[raw_state] = (
                     raw_status_counts.get(raw_state, 0) + 1
                 )
@@ -557,7 +573,8 @@ def _build_task_summary(
 
         step_all_completed[step_name] = all_completed_for_step
 
-    steps = [s for s in _STEP_ORDER if s in job_ids]
+    step_order = _get_step_order(job_ids)
+    steps = [s for s in step_order if s in job_ids]
 
     completed_steps: List[str] = []
     for s in steps:
@@ -567,17 +584,23 @@ def _build_task_summary(
             break
 
     resume_next_step: str | None = None
+    resume_earliest_step: str | None = None
     if completed_steps:
+        first_completed = completed_steps[0]
+        first_idx = step_order.index(first_completed)
+        if first_idx + 1 < len(step_order):
+            resume_earliest_step = step_order[first_idx + 1]
+
         last_completed = completed_steps[-1]
-        last_idx = _STEP_ORDER.index(last_completed)
-        if last_idx + 1 < len(_STEP_ORDER):
-            resume_next_step = _STEP_ORDER[last_idx + 1]
+        last_idx = step_order.index(last_completed)
+        if last_idx + 1 < len(step_order):
+            resume_next_step = step_order[last_idx + 1]
 
     created_at = _get_task_created_at(task_id)
     derived_status = derive_task_status(raw_status_counts)
 
     resume_eligible = (
-        resume_next_step is not None
+        resume_earliest_step is not None
         and derived_status in ("COMPLETED", "FAILED")
     )
 
@@ -593,11 +616,13 @@ def _build_task_summary(
         failed_job_names=failed_job_names,
         steps=steps,
         completed_steps=completed_steps,
+        task_name=meta.get("task_name"),
         formula=meta.get("formula"),
         num_atoms=meta.get("num_atoms"),
         prev_task_id=meta.get("prev_task_id"),
         worker=meta.get("worker"),
         resume_next_step=resume_next_step,
+        resume_earliest_step=resume_earliest_step,
         resume_eligible=resume_eligible,
         pool_name=meta.get("pool_name"),
         runtime_worker=meta.get("worker"),
@@ -640,7 +665,8 @@ def get_task_work_dir(
         return None
 
     # Get the first job UUID (first step, first job)
-    for step in _STEP_ORDER:
+    step_order = _get_step_order(job_ids)
+    for step in step_order:
         if step in job_ids and job_ids[step]:
             first_uuid = job_ids[step][0]
             break
@@ -909,8 +935,11 @@ def admin_delete_task(
 
     manager = manager_getter()
 
-    # Resolve work_dir_base for safety validation
-    _, _, pool_cfg = manager._resolve_pool_context()
+    # Resolve work_dir_base for safety validation, using the pool the task
+    # belongs to (not the active pool) so multi-pool setups delete from the
+    # correct location. Mirrors frontend_api/_common.py's pool resolution.
+    pool = manager.get_task_pool(task_id)
+    pool_cfg = pool.pool_cfg
     work_dir_base = pool_cfg.get("work_dir_base", "")
     work_dir_base_resolved = (
         Path(work_dir_base).resolve() if work_dir_base else None
