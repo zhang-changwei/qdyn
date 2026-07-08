@@ -7,8 +7,8 @@
       </div>
       <el-menu
         :default-active="activeMenu"
-        router
         class="admin-menu"
+        @select="handleMenuSelect"
       >
         <el-menu-item index="/admin">
           <el-icon><DataAnalysis /></el-icon>
@@ -94,6 +94,12 @@ const activeMenu = computed((): string => {
 
 function goBack(): void {
   router.push({ name: 'task-list' })
+}
+
+function handleMenuSelect(index: string): void {
+  // Navigate manually instead of relying on el-menu's `router` mode, which
+  // conflicts with default-active and leaves the active highlight stuck.
+  router.push(index)
 }
 
 function handleLogout(): void {
