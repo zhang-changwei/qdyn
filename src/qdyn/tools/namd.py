@@ -63,7 +63,7 @@ def qdyn_namd(
             bot = bmin - bmin_stored
             top = bmax - bmin_stored + 1
             deph = deph[bot:top, bot:top]
-            if np.any(deph <= 0):
+            if np.any(deph < 0):
                 raise ValueError("Dephasing times must be positive.")
             elif np.any(deph > 1000):
                 logging.warning(
