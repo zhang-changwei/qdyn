@@ -72,10 +72,31 @@ def select_orbitals(software: str, category: str | int) -> dict[str, str]:
     return orbital_basis
 
 
+# Whitelist of Atoms.todict() keys kept for jobflow serialization.
+# ``info`` is excluded because it can hold arbitrary objects (e.g. the
+# ``ase.spacegroup.Spacegroup`` attached when reading CIF files) that lack
+# the ``as_dict`` method monty's ``jsanitize(strict=True)`` requires.
+_STRU_TODICT_KEYS = (
+    "numbers",
+    "positions",
+    "cell",
+    "pbc",
+    "momenta",
+    "constraints",
+)
+
+
 def stru_todict(stru: Atoms) -> dict[str, Any]:
-    structure = stru.todict()
-    if structure.get('constraints') is not None:
-        structure['constraints'] = [i.todict() for i in structure['constraints']]  # type: ignore[index]
+    """Convert *stru* to a jobflow-serializable dict.
+
+    Only the structural fields in ``_STRU_TODICT_KEYS`` are kept; ``info``
+    and other ASE metadata are stripped to avoid ``jsanitize`` failures on
+    non-MSONable objects (notably CIF-sourced ``Spacegroup``).
+    """
+    raw = stru.todict()
+    structure = {k: raw[k] for k in _STRU_TODICT_KEYS if k in raw}
+    if structure.get("constraints") is not None:
+        structure["constraints"] = [i.todict() for i in structure["constraints"]]  # type: ignore[index]
     return structure
 
 
