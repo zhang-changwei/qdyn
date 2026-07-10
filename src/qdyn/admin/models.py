@@ -22,7 +22,7 @@ class AdminUserItem(BaseModel):
 
     username: str
     is_admin: bool
-    created_at: str
+    created_at: float | None  # Unix timestamp (UTC), same as TaskSummary
     task_count: int
 
 

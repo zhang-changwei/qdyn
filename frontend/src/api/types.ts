@@ -514,7 +514,7 @@ export interface AdminStatsResponse {
 export interface AdminUserItem {
   username: string
   is_admin: boolean
-  created_at: string
+  created_at: number | null  // Unix timestamp (UTC), same as TaskSummary
   task_count: number
 }
 

@@ -510,14 +510,23 @@ class QdynDB:
     # ------------------------------------------------------------------
 
     def list_users(self) -> list[dict]:
-        """Return all users as a list of dicts."""
+        """Return all users as a list of dicts.
+
+        ``created_at`` is a Unix timestamp (UTC), same convention as
+        task ``created_at``. Unparseable values become ``None``.
+        """
         conn = self.get_db()
         with self._lock:
             rows = conn.execute(
                 "SELECT username, is_admin, created_at FROM users "
                 "ORDER BY created_at ASC"
             ).fetchall()
-        return [dict(row) for row in rows]
+        results: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item["created_at"] = self._parse_utc_timestamp(item.get("created_at"))
+            results.append(item)
+        return results
 
     def set_admin(self, username: str, is_admin: bool) -> None:
         """Set or revoke admin privilege for a user."""

@@ -21,7 +21,11 @@
           <el-tag v-else type="info" size="small" effect="plain">User</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="created_at" label="Created" width="180" />
+      <el-table-column label="Created" width="180">
+        <template #default="{ row }">
+          {{ formatTimestamp(row.created_at) }}
+        </template>
+      </el-table-column>
       <el-table-column prop="task_count" label="Tasks" width="100" align="center" />
       <el-table-column label="Actions" width="220" fixed="right">
         <template #default="{ row }">
@@ -151,6 +155,18 @@ async function loadUsers(): Promise<void> {
 
 function goToUserTasks(username: string): void {
   router.push({ name: 'admin-tasks', query: { owner: username } })
+}
+
+function formatTimestamp(ts: number | null): string {
+  if (ts === null || Number.isNaN(ts)) return '—'
+  return new Date(ts * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 function openResetPasswordDialog(username: string): void {
