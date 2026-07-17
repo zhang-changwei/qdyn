@@ -180,6 +180,7 @@ export type RegisterResponse = LoginResponse
  */
 export interface UserInfo {
   username: string
+  is_admin: boolean
 }
 
 // ============================================
@@ -486,6 +487,207 @@ export interface JobMdTimeseriesResponse {
   references: MDReferenceLines | null
   stats: MDTimeseriesStats | null
   warning: string | null
+}
+
+// ============================================
+// Admin Types
+// ============================================
+
+/**
+ * Dashboard statistics for the admin panel
+ * Returned by GET /api/admin/stats
+ */
+export interface AdminStatsResponse {
+  total_users: number
+  total_tasks: number
+  running_tasks: number
+  queued_tasks: number
+  storage_bytes: number | null
+  traj_storage_bytes: number | null
+  traj_file_count: number
+}
+
+/**
+ * Single user entry for the admin user list
+ * Returned by GET /api/admin/users
+ */
+export interface AdminUserItem {
+  username: string
+  is_admin: boolean
+  created_at: number | null  // Unix timestamp (UTC), same as TaskSummary
+  task_count: number
+}
+
+/**
+ * Admin task list response reusing TaskSummary
+ * Returned by GET /api/admin/tasks
+ */
+export interface AdminTaskListResponse {
+  total: number
+  items: TaskSummary[]
+}
+
+/**
+ * Single worker entry for the admin worker list
+ * Returned by GET /api/admin/pool/workers
+ */
+export interface AdminWorkerItem {
+  name: string
+  status: string
+  current_user: string | null
+  active_jobs: number
+}
+
+export interface FileSummaryItem {
+  name: string
+  size: number
+}
+
+export interface AdminFileEntry {
+  path: string
+  abs_path: string
+  size_bytes: number | null
+  job_uuid: string
+  task_id: string | null
+  owner: string | null
+  orphan: boolean
+  file_count: number | null
+  file_summary_ready: boolean
+  /** Optional in stage 1+: the list endpoint no longer returns per-file details.
+   *  Use getLeafFileSummary() to lazily fetch the file summary for an expanded row. */
+  file_summary?: FileSummaryItem[] | null
+}
+
+export interface AdminFilesResponse {
+  work_dir_base: string
+  total_entries: number
+  orphan_count: number
+  entries: AdminFileEntry[]
+  index_status: string  // 'building' | 'ready' | 'error'
+}
+
+export interface FileSearchResultItem {
+  leaf_path: string
+  file_name: string
+  basename: string
+  size: number
+}
+
+export interface FileSearchResponse {
+  query: string
+  results: FileSearchResultItem[]
+}
+
+export interface FileTypeStat {
+  name: string
+  totalSize: number
+  count: number
+}
+
+export interface FileStatsResponse {
+  stats: FileTypeStat[]
+}
+
+export interface FileLeafSummaryResponse {
+  path: string
+  file_summary: FileSummaryItem[] | null
+  index_status: string
+}
+
+export interface FileDeleteTarget {
+  abs_path: string
+  task_id?: string | null
+}
+
+export interface FileDeleteRequest {
+  targets: FileDeleteTarget[]
+  delete_associated_tasks?: boolean
+}
+
+export interface FileNameDeleteRequest {
+  filename: string
+  job_dirs: string[]
+}
+
+export interface FileDeleteFailedItem {
+  path: string
+  error: string
+}
+
+export interface FileDeleteResponse {
+  deleted: number
+  failed: FileDeleteFailedItem[]
+}
+
+// ============================================
+// Trajectory Management Types
+// ============================================
+
+/**
+ * A single trajectory file entry
+ * Returned by GET /api/admin/trajectories
+ */
+export interface TrajFileItem {
+  hash: string
+  size_bytes: number
+  created_at: string
+  format: string | null
+  formula: string | null
+  num_atoms: number | null
+  num_frames: number | null
+  ref_count: number
+}
+
+/**
+ * Trajectory list response
+ * Returned by GET /api/admin/trajectories
+ */
+export interface TrajListResponse {
+  total: number
+  total_bytes: number
+  items: TrajFileItem[]
+}
+
+// ============================================
+// Audit Log Types
+// ============================================
+
+/**
+ * A single audit log entry
+ * Returned by GET /api/admin/audit-logs
+ */
+export interface AuditLogItem {
+  id: number
+  timestamp: number | null
+  timestamp_raw: string | null
+  username: string
+  action: string
+  target: string | null
+  detail: string | null
+}
+
+/**
+ * Audit log response
+ * Returned by GET /api/admin/audit-logs
+ */
+export interface AuditLogResponse {
+  total: number
+  items: AuditLogItem[]
+}
+
+// ============================================
+// Log Viewer Types
+// ============================================
+
+/**
+ * Log viewer response
+ * Returned by GET /api/admin/logs
+ */
+export interface LogViewResponse {
+  log_name: string
+  lines: string[]
+  total_lines: number
+  file_size: number
 }
 
 // ============================================

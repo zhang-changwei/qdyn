@@ -235,7 +235,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Download, Edit } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useTasksStore } from '@/stores/tasks'
+import { useAuthStore } from '@/stores/auth'
 import { fetchJobError, stopTask, continueTask, deleteTask, renameTask, getJobFiles, getJobFile, getSubdirFiles, getSubdirFile, getJobProgress, getJobInputParams } from '@/api/tasks'
+import { adminStopTask, adminContinueTask, adminDeleteTask } from '@/api/admin'
 import { getTaskStructurePreview } from '@/api/structures'
 import { getTaskDisplayName } from '@/utils/task-display'
 import { formatFileSize } from '@/utils/format'
@@ -252,6 +254,7 @@ import type { JobStatusItem, JobErrorResponse, JobFilesResponse, JobProgressResp
 const route = useRoute()
 const router = useRouter()
 const tasksStore = useTasksStore()
+const authStore = useAuthStore()
 
 const task = computed(() => tasksStore.currentTask)
 const jobsStatus = computed(() => tasksStore.currentJobsStatus)
@@ -708,7 +711,9 @@ async function handleStop(): Promise<void> {
 
   stopping.value = true
   try {
-    const result = await stopTask(taskId.value)
+    const result = authStore.isAdmin
+      ? await adminStopTask(taskId.value)
+      : await stopTask(taskId.value)
     if (result.failed.length > 0) {
       const failedDetails = result.failed.map(f => `${f.uuid.slice(0, 8)}: ${f.error}`).join(', ')
       ElMessage.warning(`Some jobs failed to stop: ${failedDetails}`)
@@ -742,7 +747,9 @@ async function handleContinue(): Promise<void> {
 
   continuing.value = true
   try {
-    const result = await continueTask(taskId.value)
+    const result = authStore.isAdmin
+      ? await adminContinueTask(taskId.value)
+      : await continueTask(taskId.value)
     if (result.failed.length > 0) {
       const failedDetails = result.failed.map(f => `${f.uuid.slice(0, 8)}: ${f.error}`).join(', ')
       ElMessage.warning(`Some jobs failed to resume: ${failedDetails}`)
@@ -777,9 +784,21 @@ async function handleDelete(): Promise<void> {
 
   deleting.value = true
   try {
-    await deleteTask(taskId.value)
+    if (authStore.isAdmin) {
+      await adminDeleteTask(taskId.value)
+    } else {
+      await deleteTask(taskId.value)
+    }
     ElMessage.success('Task deleted')
-    router.push({ name: 'task-list' })
+    // After deletion, go to the list the user came from (preserving filters
+    // like ?owner=xxx via returnTo). Use push (not back) so we don't return
+    // to the now-deleted task's detail.
+    const returnTo = route.query.returnTo
+    if (typeof returnTo === 'string' && returnTo) {
+      router.push(returnTo)
+    } else {
+      router.push({ name: authStore.isAdmin ? 'admin-tasks' : 'task-list' })
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete task'
     ElMessage.error(message)
@@ -802,7 +821,21 @@ watch(hasRunningJobs, (newValue) => {
 // ============================================
 
 function goBack(): void {
-  router.push({ name: 'task-list' })
+  // Prefer an explicit returnTo query param (set by the calling list page)
+  // so the user returns to the exact list they came from, preserving any
+  // filter such as ?owner=xxx. Fall back to browser history back, then to
+  // the appropriate list route when there is no history (e.g. the detail
+  // page was opened directly via URL).
+  const returnTo = route.query.returnTo
+  if (typeof returnTo === 'string' && returnTo) {
+    router.push(returnTo)
+    return
+  }
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push({ name: authStore.isAdmin ? 'admin-tasks' : 'task-list' })
+  }
 }
 
 function isScfJob(job: JobStatusItem): boolean {

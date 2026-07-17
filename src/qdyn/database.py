@@ -53,9 +53,42 @@ class QdynDB:
             """)
             self._conn.commit()
 
+            # Audit log table
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
+                    username   TEXT NOT NULL,
+                    action     TEXT NOT NULL,
+                    target     TEXT DEFAULT NULL,
+                    detail     TEXT DEFAULT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+                    ON audit_log(timestamp DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_username
+                    ON audit_log(username);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_action
+                    ON audit_log(action, timestamp DESC);
+            """)
+            self._conn.commit()
+
             # Migrate: add optional metadata columns if they don't exist yet
             self._migrate_task_metadata()
 
+            # Migrate: add is_admin column to users if missing
+            self._migrate_users_table()
+
+
+    def _migrate_users_table(self) -> None:
+        """Add is_admin column to users if missing."""
+        assert self._conn is not None
+        cursor = self._conn.execute("PRAGMA table_info(users)")
+        existing = {row["name"] for row in cursor.fetchall()}
+        if "is_admin" not in existing:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"
+            )
+            self._conn.commit()
 
     def _migrate_task_metadata(self) -> None:
         """Add formula, num_atoms, prev_task_id, worker, and pool_name columns
@@ -222,6 +255,27 @@ class QdynDB:
             ).fetchone()
         return dict(row) if row else None
 
+    @staticmethod
+    def _parse_utc_timestamp(value: str | None) -> float | None:
+        """Parse a SQLite ``datetime('now')`` UTC string into a Unix timestamp.
+
+        Handles ``"%Y-%m-%d %H:%M:%S"`` (SQLite default) and ISO 8601. Naive
+        datetimes are assumed UTC, mirroring how task ``created_at`` is parsed.
+        Returns ``None`` if ``value`` is empty or unparseable.
+        """
+        if not value:
+            return None
+        try:
+            dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
     def get_task_created_at(self, task_id: str) -> float | None:
         """Return task creation time as a UTC timestamp, or None if unavailable."""
         conn = self.get_db()
@@ -232,22 +286,7 @@ class QdynDB:
             ).fetchone()
         if row is None:
             return None
-
-        created_at = row["created_at"]
-        if not created_at:
-            return None
-
-        try:
-            dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            try:
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-
-        if dt.tzinfo is None or dt.utcoffset() is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
+        return self._parse_utc_timestamp(row["created_at"])
 
     def get_queued_payload(self, task_id: str) -> str | None:
         """Return the payload_json for a queued task, or None if not found."""
@@ -466,6 +505,100 @@ class QdynDB:
             conn.commit()
             return count
 
+    # ------------------------------------------------------------------
+    # Admin user management helpers
+    # ------------------------------------------------------------------
+
+    def list_users(self) -> list[dict]:
+        """Return all users as a list of dicts.
+
+        ``created_at`` is a Unix timestamp (UTC), same convention as
+        task ``created_at``. Unparseable values become ``None``.
+        """
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT username, is_admin, created_at FROM users "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+        results: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item["created_at"] = self._parse_utc_timestamp(item.get("created_at"))
+            results.append(item)
+        return results
+
+    def set_admin(self, username: str, is_admin: bool) -> None:
+        """Set or revoke admin privilege for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE users SET is_admin = ? WHERE username = ?",
+                (1 if is_admin else 0, username),
+            )
+            conn.commit()
+
+    def update_password(self, username: str, hashed_pw: str) -> None:
+        """Update the hashed password for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "UPDATE users SET hashed_pw = ? WHERE username = ?",
+                (hashed_pw, username),
+            )
+            conn.commit()
+
+    def delete_user_record(self, username: str) -> None:
+        """Delete the user row from the users table.
+
+        Foreign-key cascades (task_owners, queued_submissions) must be
+        handled by the caller before invoking this method.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute("DELETE FROM users WHERE username = ?", (username,))
+            conn.commit()
+
+    def get_all_task_owners(self) -> list[dict]:
+        """Return all task_owners rows (task_id, username, job_ids, created_at, etc.)."""
+        conn = self.get_db()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT task_id, username, job_ids, created_at, formula, "
+                "num_atoms, prev_task_id, worker, pool_name "
+                "FROM task_owners ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_user_tasks(self, username: str) -> int:
+        """Return the number of tasks owned by a user."""
+        conn = self.get_db()
+        with self._lock:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM task_owners WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row["cnt"] if row else 0
+
+    def delete_user_tasks(self, username: str) -> None:
+        """Delete all task_owners rows for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "DELETE FROM task_owners WHERE username = ?", (username,)
+            )
+            conn.commit()
+
+    def delete_user_queued(self, username: str) -> None:
+        """Delete all queued_submissions rows for a user."""
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "DELETE FROM queued_submissions WHERE username = ?",
+                (username,),
+            )
+            conn.commit()
+
     def release_claim(self, task_id: str) -> None:
         """Transition a DISPATCHING task back to QUEUED.
 
@@ -499,6 +632,93 @@ class QdynDB:
                 (json.dumps(job_ids), worker, task_id),
             )
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Audit log
+    # ------------------------------------------------------------------
+
+    def log_audit(
+        self,
+        username: str,
+        action: str,
+        target: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Record an audit log entry.
+
+        Parameters
+        ----------
+        username : str
+            The user performing the action.
+        action : str
+            Action identifier (e.g. "admin_delete_user", "login").
+        target : str, optional
+            The target of the action (e.g. username, task_id, hash).
+        detail : str, optional
+            Additional detail about the action.
+        """
+        conn = self.get_db()
+        with self._lock:
+            conn.execute(
+                "INSERT INTO audit_log (username, action, target, detail) "
+                "VALUES (?, ?, ?, ?)",
+                (username, action, target, detail),
+            )
+            conn.commit()
+
+    def get_audit_logs(
+        self,
+        limit: int = 200,
+        username: str | None = None,
+        action: str | None = None,
+    ) -> list[dict]:
+        """Retrieve audit log entries, newest first.
+
+        Parameters
+        ----------
+        limit : int
+            Maximum number of entries to return (default 200).
+        username : str, optional
+            Filter by username.
+        action : str, optional
+            Filter by action type.
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: id, timestamp, username, action, target, detail.
+        """
+        conn = self.get_db()
+        conditions: list[str] = []
+        params: list[str] = []
+        if username:
+            conditions.append("username = ?")
+            params.append(username)
+        if action:
+            conditions.append("action = ?")
+            params.append(action)
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        query = (
+            f"SELECT id, timestamp, username, action, target, detail "
+            f"FROM audit_log {where_clause} "
+            f"ORDER BY timestamp DESC, id DESC LIMIT ?"
+        )
+        params.append(str(limit))
+
+        with self._lock:
+            rows = conn.execute(query, params).fetchall()
+        results: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.get("timestamp")
+            item["timestamp_raw"] = raw
+            item["timestamp"] = self._parse_utc_timestamp(raw)
+            results.append(item)
+        return results
 
 
 qdyndb = QdynDB()

@@ -16,6 +16,8 @@ from pydantic import BaseModel
 
 from qdyn import __version__
 
+from .admin import StorageCache, create_admin_router, FileIndexCache
+from .admin.service import set_storage_cache, set_file_index_cache
 from .auth import auth_router, get_current_user
 from .auth.security import configure as configure_auth
 from .calc_common import extract_structure_metadata
@@ -27,7 +29,7 @@ from .main_workflow import (
     MainWorkflow, ValidationError, ResumeError, QueryError,
 )
 from .pool import WorkerPool
-from .params import HASH_PATTERN as _HASH_PATTERN
+from .params import HASH_PATTERN as _HASH_PATTERN, TERMINAL_STATES
 from .validation import validate_and_fill_runtime_config
 
 # Maximum upload file size: 1 GB.
@@ -69,6 +71,21 @@ async def lifespan(app: FastAPI):
 
     # user_data folders are created on demand when uploading files, if not presented.
     # One user_data for each worker. No longer created at startup.
+
+    # Bootstrap admin users from config
+    admin_usernames = auth_cfg.get("admin_users", [])
+    for au in admin_usernames:
+        user = qdyndb.get_user(au)
+        if user is None:
+            logging.warning(
+                "admin_users config: user '%s' does not exist yet. "
+                "Register this account first, then restart to grant admin.",
+                au,
+            )
+        else:
+            if not user.get("is_admin"):
+                qdyndb.set_admin(au, True)
+                logging.info("Granted admin privileges to user '%s'.", au)
 
     # persist auto-generated key back to config file if it was empty
     if not auth_cfg["secret_key"]:
@@ -113,9 +130,52 @@ async def lifespan(app: FastAPI):
         poll_interval,
     )
 
+    # Start the storage cache background task.
+    work_dir_base = pool_cfg.get("work_dir_base", "")
+    traj_dir = manager.active_pool.get_user_file_path("trajectory")
+
+    storage_cache = StorageCache(
+        work_dir_base=work_dir_base,
+        traj_dir=traj_dir,
+        interval=300,  # 5 minutes
+    )
+    set_storage_cache(storage_cache)
+
+    storage_task: asyncio.Task | None = asyncio.create_task(
+        storage_cache.run_forever(),
+        name="storage-cache",
+    )
+
+    # Start the file index cache background task.
+    file_index_cache = FileIndexCache(
+        work_dir_base=work_dir_base,
+        manager_getter=_manager,
+        interval=300,  # 5 minutes
+    )
+    set_file_index_cache(file_index_cache)
+
+    file_index_task: asyncio.Task | None = asyncio.create_task(
+        file_index_cache.run_forever(),
+        name="file-index-cache",
+    )
+
     yield
 
     # --- shutdown ---
+    if file_index_task is not None:
+        file_index_task.cancel()
+        try:
+            await file_index_task
+        except asyncio.CancelledError:
+            pass
+
+    if storage_task is not None:
+        storage_task.cancel()
+        try:
+            await storage_task
+        except asyncio.CancelledError:
+            pass
+
     if poller_task is not None:
         poller_task.cancel()
         try:
@@ -244,6 +304,10 @@ def get_step_input_schemas() -> dict[str, Any]:
 frontend_router = create_frontend_router(_manager)
 app.include_router(frontend_router)
 
+# Create and mount the admin API router with manager injection
+admin_router = create_admin_router(_manager)
+app.include_router(admin_router)
+
 
 # ---------------------------------------------------------------------------
 # Dispatch lock for pool-based submission
@@ -334,7 +398,7 @@ def _sync_dispatch(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=active_worker,
         pool_name=pool_name,
-        stru_hash=input_obj.stru_hash,
+        stru_hash=input_obj.stru_hash or None,
         stru_format=input_obj.stru_format,
     )
 
@@ -437,6 +501,7 @@ async def submit_task(
         raise HTTPException(status_code=501, detail=f"Not supported: {e}")
 
     if runtime_worker is not None:
+        qdyndb.log_audit(username, "submit_task", target=task_id)
         return SubmitResponse(
             task_id=task_id,
             status="SUBMITTED",
@@ -452,6 +517,7 @@ async def submit_task(
         "pool_name": pool_name,
     }
     qdyndb.enqueue_submission(task_id, username, pool_name, json.dumps(payload))
+    qdyndb.log_audit(username, "submit_task", target=task_id)
 
     # Also create a placeholder in task_owners so the task shows up in
     # the user's task list immediately (with empty job_ids).
@@ -479,7 +545,7 @@ async def submit_task(
         prev_task_id=prev_task_id if resume and prev_task_id else None,
         worker=None,
         pool_name=pool_name,
-        stru_hash=input.stru_hash,
+        stru_hash=input.stru_hash or None,
         stru_format=input.stru_format,
     )
 
@@ -630,14 +696,19 @@ async def upload(
     # upload tmp file to final_path on local/remote worker
     try:
         pool.upload_user_file(
-            file_type=file_type, 
-            file_hash=file_hash, 
+            file_type=file_type,
+            file_hash=file_hash,
             local_path=tmp_path
         )
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+    qdyndb.log_audit(
+        user,
+        f"upload_{file_type}",
+        detail=f"hash={file_hash}, size={total_size}",
+    )
     return {"hash": file_hash, "pool_name": pool.name, **summary}
 
 
@@ -725,7 +796,7 @@ def get_pool_status(username: str = Depends(get_current_user)):
         {
             "$match": {
                 "worker": {"$in": pool_workers},
-                "state": {"$nin": list(WorkerPool._TERMINAL_STATES)},
+                "state": {"$nin": list(TERMINAL_STATES)},
             }
         },
         {"$group": {"_id": "$worker"}},

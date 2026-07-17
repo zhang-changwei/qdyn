@@ -73,6 +73,16 @@
         <!-- Username display -->
         <span class="app-header__username">{{ authStore.username }}</span>
 
+        <!-- Admin panel link (admin-only) -->
+        <el-button
+          v-if="authStore.isAdmin"
+          type="warning"
+          text
+          @click="router.push({ name: 'admin-dashboard' })"
+        >
+          Admin Panel
+        </el-button>
+
         <!-- Logout button -->
         <el-button type="danger" text @click="handleLogout">
           Logout
@@ -84,9 +94,11 @@
 
 <script setup lang="ts">
 import { Moon, Sunny } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 
+const router = useRouter()
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
 

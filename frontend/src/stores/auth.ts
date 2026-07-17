@@ -38,6 +38,10 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = ref(false)
   const username = ref<string | null>(null)
   const token = ref<string | null>(null)
+  const isAdmin = ref(false)
+
+  /** Resolves when init() has finished fetching user info (or immediately if no token). */
+  let _initPromise: Promise<void> | null = null
 
   // ============================================
   // Getters
@@ -58,14 +62,26 @@ export const useAuthStore = defineStore('auth', () => {
     if (storedToken) {
       token.value = storedToken
       isLoggedIn.value = true
-      // Fetch user info to validate token and populate username
-      // Only logout on explicit authentication failures (401), not temporary network issues
-      fetchMe().catch((error) => {
-        console.warn('Failed to fetch user info:', error)
-        // Don't logout immediately for temporary network issues
-        // The token might still be valid, user can still navigate while in a logged-in state
-      })
+      // Fetch user info to validate token and populate username + isAdmin.
+      // Store the promise so router guards can await it before checking isAdmin.
+      _initPromise = fetchMe()
+        .then(() => {})
+        .catch((error) => {
+          console.warn('Failed to fetch user info:', error)
+          // Don't logout immediately for temporary network issues
+          // The token might still be valid, user can still navigate while in a logged-in state
+        })
+    } else {
+      _initPromise = Promise.resolve()
     }
+  }
+
+  /**
+   * Wait for init() to complete (fetchMe resolved or rejected).
+   * Router guards should await this before checking isAdmin.
+   */
+  function whenReady(): Promise<void> {
+    return _initPromise ?? Promise.resolve()
   }
 
   /**
@@ -78,6 +94,8 @@ export const useAuthStore = defineStore('auth', () => {
     saveToken(response.access_token)
     isLoggedIn.value = true
     username.value = user
+    // Immediately fetch user info to determine admin status
+    await fetchMe()
   }
 
   /**
@@ -90,6 +108,8 @@ export const useAuthStore = defineStore('auth', () => {
     saveToken(response.access_token)
     isLoggedIn.value = true
     username.value = user
+    // Immediately fetch user info to determine admin status
+    await fetchMe()
   }
 
   /**
@@ -100,6 +120,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     username.value = null
     isLoggedIn.value = false
+    isAdmin.value = false
     clearToken()
 
     // Redirect to login page (preserve current path for redirect after login)
@@ -116,6 +137,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchMe(): Promise<UserInfo> {
     const userInfo = await getMe()
     username.value = userInfo.username
+    isAdmin.value = userInfo.is_admin ?? false
     return userInfo
   }
 
@@ -124,10 +146,12 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     username,
     token,
+    isAdmin,
     // Getters
     isAuthenticated,
     // Actions
     init,
+    whenReady,
     login,
     logout,
     fetchMe,

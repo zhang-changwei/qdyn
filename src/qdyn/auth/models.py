@@ -9,3 +9,10 @@ class UserCreate(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class UserInfo(BaseModel):
+    """Current user information returned by /auth/me."""
+
+    username: str
+    is_admin: bool
