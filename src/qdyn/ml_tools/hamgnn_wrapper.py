@@ -1,3 +1,5 @@
+from collections import OrderedDict
+from collections.abc import Mapping
 from copy import deepcopy
 from contextlib import contextmanager
 from functools import wraps
@@ -40,6 +42,57 @@ NAO_MAX_SPDF = {
     20: (4, 2, 2),
     26: (3, 2, 2, 1),
 }
+
+
+# Pretrained universal2.0 output names -> HamGNN 2.1 module names.
+_UNIVERSAL20_OUTPUT_RENAMES = (
+    ("output_module.onsitenet_h.", "output_module.onsite_hamiltonian_network."),
+    ("output_module.offsitenet_h.", "output_module.offsite_hamiltonian_network."),
+    ("output_module.cg_cal.", "output_module.cg_calculator."),
+)
+
+
+def _state_dict_for_hamgnn21(
+    state_dict: Mapping[str, Any],
+) -> OrderedDict[str, Any]:
+    """Adapt pretrained universal2.0 names; leave native 2.1 keys unchanged."""
+    needs_rename = any(
+        key.startswith(old)
+        for key in state_dict
+        for old, _ in _UNIVERSAL20_OUTPUT_RENAMES
+    )
+    if not needs_rename:
+        return OrderedDict(state_dict)
+
+    remapped: OrderedDict[str, Any] = OrderedDict()
+    for key, value in state_dict.items():
+        new_key = key
+        for old, new in _UNIVERSAL20_OUTPUT_RENAMES:
+            if key.startswith(old):
+                new_key = new + key[len(old):]
+                break
+        remapped[new_key] = value
+    return remapped
+
+
+def _load_checkpoint_state_dict(
+    model_path: str | os.PathLike[str],
+) -> Mapping[str, Any]:
+    """Load Lightning ``state_dict`` from ``model_path`` on CPU."""
+    ckpt_path = Path(model_path).expanduser().resolve()
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    if not isinstance(checkpoint, Mapping) or "state_dict" not in checkpoint:
+        raise RuntimeError(
+            f"HamGNN checkpoint at {ckpt_path} is not a Lightning checkpoint "
+            "with a 'state_dict' entry."
+        )
+    state_dict = checkpoint["state_dict"]
+    if not isinstance(state_dict, Mapping):
+        raise RuntimeError(
+            f"HamGNN checkpoint state_dict at {ckpt_path} is invalid."
+        )
+    return state_dict
+
 
 def _load_config(config: HamGNNInputT) -> dict[str, Any]:
     """Build HamGNN internal config dict from HamGNNInputT.
@@ -229,29 +282,36 @@ class LMDBDataset(Dataset):
 class HamGNNWrapper:
 
     def __init__(self, config: HamGNNInputT, model_path: str, device: str = 'cpu'):
-        pl.seed_everything(666)
         self.device = device
         self.config = _load_config(config)
         self.nao_max = config.nao_max
-        if self.config['setup']['ignore_warnings']:
-            warnings.filterwarnings('ignore')
 
-        # train_and_eval
-        self.graph_representation, self.output_module, self.post_utility = build_hamgnn_model(self.config)
-        self.graph_representation.to(torch.float32)
-        self.output_module.to(torch.float32)
+        pl.seed_everything(666)
+        with warnings.catch_warnings():
+            if self.config['setup']['ignore_warnings']:
+                warnings.simplefilter('ignore')
 
-        self.model = Model.load_from_checkpoint(checkpoint_path=model_path,
-            strict=False,
-            representation=self.graph_representation,
-            output=self.output_module,
-            post_processing=self.post_utility,
-            losses=self.config['losses_metrics']['losses'],
-            validation_metrics=self.config['losses_metrics']['metrics'],
-            lr=self.config['optim_params']['lr'],
-            lr_decay=self.config['optim_params']['lr_decay'],
-            lr_patience=self.config['optim_params']['lr_patience'],
+            self.graph_representation, self.output_module, self.post_utility = (
+                build_hamgnn_model(self.config)
+            )
+            self.graph_representation.to(torch.float32)
+            self.output_module.to(torch.float32)
+            self.model = Model(
+                representation=self.graph_representation,
+                output=self.output_module,
+                post_processing=self.post_utility,
+                losses=self.config['losses_metrics']['losses'],
+                validation_metrics=self.config['losses_metrics']['metrics'],
+                lr=self.config['optim_params']['lr'],
+                lr_decay=self.config['optim_params']['lr_decay'],
+                lr_patience=self.config['optim_params']['lr_patience'],
+            )
+
+        # universal2.0: rename three output prefixes; require a full match.
+        state_dict = _state_dict_for_hamgnn21(
+            _load_checkpoint_state_dict(model_path)
         )
+        self.model.load_state_dict(state_dict, strict=True)
         self.model.to(self.device)
         self.model.eval()
 
@@ -273,6 +333,8 @@ class HamGNNWrapper:
 
 
 _worker_model: HamGNNWrapper | None = None
+_worker_model_config: HamGNNInputT | None = None
+_worker_model_path: str | None = None
 _worker_software: str | None = None
 _worker_add_H0: bool | None = None
 _worker_eigen_solver: str | None = None
@@ -353,6 +415,8 @@ def init_spawn_worker(
     torch.set_num_interop_threads(1)
 
     global _worker_model
+    global _worker_model_config
+    global _worker_model_path
     global _worker_software
     global _worker_add_H0
     global _worker_eigen_solver
@@ -370,7 +434,10 @@ def init_spawn_worker(
     _worker_bmax = mlh_input.bmax
     ORBITAL_BASIS.clear()
     ORBITAL_BASIS.update(select_orbitals(software, mlh_input.nao_max))
-    _worker_model = HamGNNWrapper(mlh_input, model_path=model_path, device='cpu')
+    # Build lazily in n2amd_workflow so load failures propagate via AsyncResult.
+    _worker_model = None
+    _worker_model_config = mlh_input
+    _worker_model_path = model_path
 
 
 def n2amd_workflow(
@@ -380,11 +447,15 @@ def n2amd_workflow(
     progress_queue: Any,
 ):
     global _worker_model
+    global _worker_model_config
+    global _worker_model_path
     global _worker_bmin
     global _worker_bmax
-    assert _worker_model is not None, (
-        "HamGNN model is not initialized in worker process. "
-        "This workflow requires spawn workers initialized with init_spawn_worker."
+    assert _worker_model_config is not None, (
+        "HamGNN worker model configuration is not initialized."
+    )
+    assert _worker_model_path is not None, (
+        "HamGNN worker model path is not initialized."
     )
     assert _worker_software is not None, (
         "HamGNN worker software configuration is not initialized."
@@ -398,27 +469,33 @@ def n2amd_workflow(
     assert _worker_eigen_dtype is not None, (
         "HamGNN worker eigen dtype configuration is not initialized."
     )
-    worker_model = _worker_model
     software = _worker_software
     add_H0 = _worker_add_H0
     eigen_solver = _worker_eigen_solver
     dtype = _worker_eigen_dtype
     use_shm = (eigen_solver == 'elpa')
-    if not (isinstance(_worker_bmin, int) and isinstance(_worker_bmax, int)):
-        vbm, cbm, nbands = extract_band_edges(
-            software='hamgnn', 
-            dir_path=task_dirs[0]
-        )
-        _worker_bmin = parse_band_index(str(_worker_bmin), vbm, nbands)
-        _worker_bmax = parse_band_index(str(_worker_bmax), vbm, nbands)
-    bmin, bmax = _worker_bmin, _worker_bmax
-
     SKs, H0Ks, HKs, graphs, num_mats = [], [], [], [], []
     SK_handles, HK_handles = [], []
     nao_per_atom = None
     basis_def = None
     idx = -1
     try:
+        if _worker_model is None:
+            _worker_model = HamGNNWrapper(
+                _worker_model_config,
+                model_path=_worker_model_path,
+                device='cpu',
+            )
+        worker_model = _worker_model
+        if not (isinstance(_worker_bmin, int) and isinstance(_worker_bmax, int)):
+            vbm, cbm, nbands = extract_band_edges(
+                software='hamgnn',
+                dir_path=task_dirs[0],
+            )
+            _worker_bmin = parse_band_index(str(_worker_bmin), vbm, nbands)
+            _worker_bmax = parse_band_index(str(_worker_bmax), vbm, nbands)
+        bmin, bmax = _worker_bmin, _worker_bmax
+
         threads = torch.get_num_threads()
         for idx, (stru, task_dir) in enumerate(zip(strus, task_dirs)):
             # 0. openmx postprocess
