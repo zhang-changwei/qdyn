@@ -44,6 +44,10 @@ NAO_MAX_SPDF = {
 }
 
 
+# Match DFT_interfaces.openmx.utils.au2ev / au2ang.
+HAMGNN_HARTREE_TO_EV = 27.211324570273
+HAMGNN_ANGSTROM_TO_BOHR = 1.0 / 0.5291772490000065
+
 # Pretrained universal2.0 output names -> HamGNN 2.1 module names.
 _UNIVERSAL20_OUTPUT_RENAMES = (
     ("output_module.onsitenet_h.", "output_module.onsite_hamiltonian_network."),
@@ -92,6 +96,25 @@ def _load_checkpoint_state_dict(
             f"HamGNN checkpoint state_dict at {ckpt_path} is invalid."
         )
     return state_dict
+
+
+def _save_hamgnn_eigenvalues_ev(
+    eigen_path: str | os.PathLike[str],
+    eigenvalues_hartree: npt.ArrayLike,
+) -> None:
+    """Write generalized eigenvalues as eV."""
+    eigenvalues = np.asarray(eigenvalues_hartree)
+    np.save(
+        eigen_path,
+        eigenvalues * np.asarray(HAMGNN_HARTREE_TO_EV, dtype=eigenvalues.dtype),
+    )
+
+
+def _convert_hamgnn_eigenvalue_file_to_ev(
+    eigen_path: str | os.PathLike[str],
+) -> None:
+    """Convert an on-disk Hartree eigenvalue file to eV in place."""
+    _save_hamgnn_eigenvalues_ev(eigen_path, np.load(eigen_path))
 
 
 def _load_config(config: HamGNNInputT) -> dict[str, Any]:
@@ -160,8 +183,10 @@ def gen_hamgnn_graph(software: str, stru: Atoms, scfout: Any) -> tuple[int, Data
         edge_index = scfout['edge_index']
         inv_edge_idx = scfout['inv_edge_idx']
         z = stru.numbers
-        cell = stru.cell.array
-        pos = stru.positions
+        # ASE positions/cell are Angstrom; OpenMX nbr_shift and HamGNN training
+        # graphs use Bohr. Convert only cell/pos so units match nbr_shift.
+        cell = stru.cell.array * HAMGNN_ANGSTROM_TO_BOHR
+        pos = stru.positions * HAMGNN_ANGSTROM_TO_BOHR
         f32 = torch.float32
         i64 = torch.long
 
@@ -573,9 +598,9 @@ def n2amd_workflow(
         for idx, (HK, HK_handle, SK, SK_handle, graph) in enumerate(zip(HKs, HK_handles, SKs, SK_handles, graphs)):
             if eigen_solver == 'scipy':
                 eigvals, eigvecs = eigh(HK, SK, overwrite_a=True, overwrite_b=True)
-                np.save(
+                _save_hamgnn_eigenvalues_ev(
                     os.path.join(task_dirs[idx], 'eigen.npy'),
-                    eigvals
+                    eigvals,
                 )
                 np.save(
                     os.path.join(task_dirs[idx], f'wfc_{bmin}_{bmax}.npy'),
@@ -585,6 +610,7 @@ def n2amd_workflow(
                 n = SK.shape[-1]
                 itemsize = dtype.itemsize
                 mat_bytes = n * n * itemsize
+                eigen_path = os.path.join(task_dirs[idx], 'eigen.npy')
 
                 args = {
                     'n': n,
@@ -597,7 +623,7 @@ def n2amd_workflow(
                     "nev": n,
                     "bmin": bmin - 1,
                     "bmax": bmax,
-                    "eigen-path": os.path.join(task_dirs[idx], 'eigen.npy'),
+                    "eigen-path": eigen_path,
                     "wfc-path": os.path.join(task_dirs[idx], f'wfc_{bmin}_{bmax}.npy'),
                 }
                 with ELPAMonitor(shm_a=HK_handle, shm_b=SK_handle) as m:
@@ -609,6 +635,7 @@ def n2amd_workflow(
                         args=args,
                         omp=1,
                     )
+                _convert_hamgnn_eigenvalue_file_to_ev(eigen_path)
             else:
                 raise NotImplementedError
             # logging

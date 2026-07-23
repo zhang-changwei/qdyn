@@ -1171,3 +1171,81 @@ def test_n2amd_workflow_propagates_lazy_model_load_failure(
         "task_dir": "/tmp/scf_7",
         "error": "incompatible checkpoint",
     }
+
+
+def test_save_hamgnn_eigenvalues_converts_hartree_to_ev(
+    tmp_path: Path,
+    hamgnn_wrapper_module,
+):
+    eigen_path = tmp_path / "eigen.npy"
+    eigenvalues_hartree = np.array([-0.5, 0.25], dtype=np.float32)
+
+    hamgnn_wrapper_module._save_hamgnn_eigenvalues_ev(
+        eigen_path,
+        eigenvalues_hartree,
+    )
+
+    np.testing.assert_allclose(
+        np.load(eigen_path),
+        eigenvalues_hartree * hamgnn_wrapper_module.HAMGNN_HARTREE_TO_EV,
+        rtol=1e-7,
+    )
+
+
+def test_convert_elpa_eigenvalue_file_converts_hartree_to_ev(
+    tmp_path: Path,
+    hamgnn_wrapper_module,
+):
+    eigen_path = tmp_path / "eigen.npy"
+    eigenvalues_hartree = np.array([-1.0, 0.125], dtype=np.float64)
+    np.save(eigen_path, eigenvalues_hartree)
+
+    hamgnn_wrapper_module._convert_hamgnn_eigenvalue_file_to_ev(eigen_path)
+
+    np.testing.assert_allclose(
+        np.load(eigen_path),
+        eigenvalues_hartree * hamgnn_wrapper_module.HAMGNN_HARTREE_TO_EV,
+        rtol=1e-14,
+    )
+
+
+def test_gen_hamgnn_graph_converts_cell_and_pos_to_bohr(
+    hamgnn_wrapper_module,
+):
+    class DummyAtoms:
+        numbers = np.array([14, 8], dtype=np.int64)
+        cell = SimpleNamespace(array=np.eye(3, dtype=np.float64) * 10.0)
+        positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
+
+        def __len__(self):
+            return 2
+
+    # Capture Data kwargs via fake Data constructor
+    captured = {}
+
+    def fake_data(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    hamgnn_wrapper_module.Data = fake_data
+    hamgnn_wrapper_module.torch.tensor = lambda x, dtype=None: np.asarray(x)
+    hamgnn_wrapper_module.torch.float32 = np.float32
+    hamgnn_wrapper_module.torch.long = np.int64
+
+    scfout = {
+        "nbr_shift": np.array([[0.1, 0.0, 0.0]], dtype=np.float64),
+        "cell_shift": np.array([[0, 0, 0]], dtype=np.int64),
+        "edge_index": np.array([[0], [1]], dtype=np.int64),
+        "inv_edge_idx": np.array([0], dtype=np.int64),
+    }
+
+    num_mat, graph = hamgnn_wrapper_module.gen_hamgnn_graph(
+        "openmx", DummyAtoms(), scfout
+    )
+
+    scale = hamgnn_wrapper_module.HAMGNN_ANGSTROM_TO_BOHR
+    np.testing.assert_allclose(captured["pos"][1, 0], 1.0 * scale)
+    np.testing.assert_allclose(captured["cell"][0, 0], 10.0 * scale)
+    # nbr_shift is not re-scaled
+    np.testing.assert_allclose(captured["nbr_shift"][0, 0], 0.1)
+    assert num_mat == 3
