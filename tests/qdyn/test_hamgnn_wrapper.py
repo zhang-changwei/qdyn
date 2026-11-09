@@ -7,6 +7,7 @@ from pathlib import Path
 from queue import Queue
 from types import ModuleType, SimpleNamespace
 
+import numpy as np
 import pytest
 
 
@@ -15,6 +16,10 @@ def _make_hamgnn_input(batch_size: int = 4):
         batch_size=batch_size,
         add_H0=False,
         nao_max=13,
+        eigen_solver="scipy",
+        eigen_dtype="float32",
+        bmin="LOWEST",
+        bmax="HIGHEST",
         adv=SimpleNamespace(eigen_dtype="float32"),
     )
 
@@ -75,11 +80,15 @@ def hamgnn_wrapper_module(monkeypatch):
 
     calc_common.change_dir = change_dir
     calc_common.select_orbitals = lambda software, nao_max: {"S": [0]}
+    calc_common.parse_band_index = lambda value, vbm, nbands: 1
+    calc_common.get_shared_memory_handle = lambda nbytes: None
+    calc_common.close_and_unlink_shared_memory = lambda handle: None
     monkeypatch.setitem(sys.modules, "qdyn.calc_common", calc_common)
 
     output_postprocess = ModuleType("qdyn.output_postprocess")
     output_postprocess.read_scfout = lambda path: {}
     output_postprocess.calc_openmx_HK_SK_gamma = lambda data, tdt=False: None
+    output_postprocess.extract_band_edges = lambda **kwargs: (1, 2, 10)
     monkeypatch.setitem(sys.modules, "qdyn.output_postprocess", output_postprocess)
 
     input_module = ModuleType("qdyn.input")
@@ -88,6 +97,7 @@ def hamgnn_wrapper_module(monkeypatch):
 
     run_software_module = ModuleType("qdyn.tools.run_software")
     run_software_module.run_software = lambda *args, **kwargs: None
+    run_software_module.ELPAMonitor = type("ELPAMonitor", (), {})
     monkeypatch.setitem(sys.modules, "qdyn.tools.run_software", run_software_module)
 
     scf_module = ModuleType("qdyn.tools.scf")
@@ -753,6 +763,7 @@ def test_init_spawn_worker_populates_orbital_basis(
         nproc=1,
         threads_per_proc=1,
         batch_per_proc=2,
+        eigen_solver="scipy",
         eigen_dtype=hamgnn_wrapper_module.np.float32,
     )
 
@@ -1025,3 +1036,216 @@ def test_mlscfsolver_run_error_terminates_pool_and_shutdowns_manager(
     assert dummy_ctx.pool.terminate_calls == 1
     assert dummy_ctx.pool.join_calls == 1
     assert dummy_ctx.manager.shutdown_calls == 1
+
+
+def test_state_dict_for_hamgnn21_renames_universal20_output_prefixes(
+    hamgnn_wrapper_module,
+):
+    raw = {
+        "representation.convolutions.0.weight": object(),
+        "output_module.onsitenet_h.linear_transform.weight": object(),
+        "output_module.offsitenet_h.linear_transform.weight": object(),
+        "output_module.cg_cal.cg_0_0_0": object(),
+    }
+
+    prepared = hamgnn_wrapper_module._state_dict_for_hamgnn21(raw)
+
+    assert list(prepared) == [
+        "representation.convolutions.0.weight",
+        "output_module.onsite_hamiltonian_network.linear_transform.weight",
+        "output_module.offsite_hamiltonian_network.linear_transform.weight",
+        "output_module.cg_calculator.cg_0_0_0",
+    ]
+    assert prepared[
+        "output_module.onsite_hamiltonian_network.linear_transform.weight"
+    ] is raw["output_module.onsitenet_h.linear_transform.weight"]
+
+
+def test_state_dict_for_hamgnn21_leaves_native_21_keys_unchanged(
+    hamgnn_wrapper_module,
+):
+    raw = {
+        "output_module.onsite_hamiltonian_network.weight": object(),
+        "representation.convolutions.0.weight": object(),
+    }
+    prepared = hamgnn_wrapper_module._state_dict_for_hamgnn21(raw)
+    assert list(prepared) == list(raw)
+
+
+def test_hamgnn_wrapper_strict_loads_after_universal20_rename(
+    monkeypatch,
+    hamgnn_wrapper_module,
+):
+    checkpoint_state = {
+        "representation.convolutions.0.weight": object(),
+        "output_module.onsitenet_h.weight": object(),
+        "output_module.offsitenet_h.weight": object(),
+        "output_module.cg_cal.cg_0_0_0": object(),
+    }
+    load_calls = []
+
+    class DummyComponent:
+        def to(self, dtype):
+            return self
+
+    class DummyModel:
+        def load_state_dict(self, state_dict, strict):
+            load_calls.append((dict(state_dict), strict))
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    generated_config = {
+        "setup": {"ignore_warnings": False},
+        "losses_metrics": {"losses": [], "metrics": []},
+        "optim_params": {"lr": 0.01, "lr_decay": 0.5, "lr_patience": 5},
+    }
+
+    monkeypatch.setattr(
+        hamgnn_wrapper_module,
+        "_load_checkpoint_state_dict",
+        lambda model_path: checkpoint_state,
+    )
+    monkeypatch.setattr(
+        hamgnn_wrapper_module,
+        "_load_config",
+        lambda config: generated_config,
+    )
+    monkeypatch.setattr(
+        hamgnn_wrapper_module,
+        "build_hamgnn_model",
+        lambda config: (DummyComponent(), DummyComponent(), None),
+    )
+    monkeypatch.setattr(
+        hamgnn_wrapper_module,
+        "Model",
+        lambda **kwargs: DummyModel(),
+    )
+
+    hamgnn_wrapper_module.HamGNNWrapper(
+        _make_hamgnn_input(),
+        "/tmp/universal2.0.ckpt",
+    )
+
+    assert len(load_calls) == 1
+    prepared, strict = load_calls[0]
+    assert strict is True
+    assert "output_module.onsite_hamiltonian_network.weight" in prepared
+    assert "output_module.onsitenet_h.weight" not in prepared
+
+
+def test_n2amd_workflow_propagates_lazy_model_load_failure(
+    monkeypatch,
+    hamgnn_wrapper_module,
+):
+    progress_queue = Queue()
+    hamgnn_wrapper_module._worker_model = None
+    hamgnn_wrapper_module._worker_model_config = _make_hamgnn_input()
+    hamgnn_wrapper_module._worker_model_path = "/tmp/incompatible.ckpt"
+    hamgnn_wrapper_module._worker_software = "openmx"
+    hamgnn_wrapper_module._worker_add_H0 = False
+    hamgnn_wrapper_module._worker_eigen_solver = "scipy"
+    hamgnn_wrapper_module._worker_eigen_dtype = np.dtype("float32")
+    hamgnn_wrapper_module._worker_bmin = 1
+    hamgnn_wrapper_module._worker_bmax = 2
+
+    def fail_to_load(*args, **kwargs):
+        raise RuntimeError("incompatible checkpoint")
+
+    monkeypatch.setattr(hamgnn_wrapper_module, "HamGNNWrapper", fail_to_load)
+
+    with pytest.raises(RuntimeError, match="incompatible checkpoint"):
+        hamgnn_wrapper_module.n2amd_workflow(
+            steps=[7],
+            strus=[object()],
+            task_dirs=["/tmp/scf_7"],
+            progress_queue=progress_queue,
+        )
+
+    assert progress_queue.get_nowait() == {
+        "type": "step_failed",
+        "step": 7,
+        "task_dir": "/tmp/scf_7",
+        "error": "incompatible checkpoint",
+    }
+
+
+def test_save_hamgnn_eigenvalues_converts_hartree_to_ev(
+    tmp_path: Path,
+    hamgnn_wrapper_module,
+):
+    eigen_path = tmp_path / "eigen.npy"
+    eigenvalues_hartree = np.array([-0.5, 0.25], dtype=np.float32)
+
+    hamgnn_wrapper_module._save_hamgnn_eigenvalues_ev(
+        eigen_path,
+        eigenvalues_hartree,
+    )
+
+    np.testing.assert_allclose(
+        np.load(eigen_path),
+        eigenvalues_hartree * hamgnn_wrapper_module.HAMGNN_HARTREE_TO_EV,
+        rtol=1e-7,
+    )
+
+
+def test_convert_elpa_eigenvalue_file_converts_hartree_to_ev(
+    tmp_path: Path,
+    hamgnn_wrapper_module,
+):
+    eigen_path = tmp_path / "eigen.npy"
+    eigenvalues_hartree = np.array([-1.0, 0.125], dtype=np.float64)
+    np.save(eigen_path, eigenvalues_hartree)
+
+    hamgnn_wrapper_module._convert_hamgnn_eigenvalue_file_to_ev(eigen_path)
+
+    np.testing.assert_allclose(
+        np.load(eigen_path),
+        eigenvalues_hartree * hamgnn_wrapper_module.HAMGNN_HARTREE_TO_EV,
+        rtol=1e-14,
+    )
+
+
+def test_gen_hamgnn_graph_converts_cell_and_pos_to_bohr(
+    hamgnn_wrapper_module,
+):
+    class DummyAtoms:
+        numbers = np.array([14, 8], dtype=np.int64)
+        cell = SimpleNamespace(array=np.eye(3, dtype=np.float64) * 10.0)
+        positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
+
+        def __len__(self):
+            return 2
+
+    # Capture Data kwargs via fake Data constructor
+    captured = {}
+
+    def fake_data(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    hamgnn_wrapper_module.Data = fake_data
+    hamgnn_wrapper_module.torch.tensor = lambda x, dtype=None: np.asarray(x)
+    hamgnn_wrapper_module.torch.float32 = np.float32
+    hamgnn_wrapper_module.torch.long = np.int64
+
+    scfout = {
+        "nbr_shift": np.array([[0.1, 0.0, 0.0]], dtype=np.float64),
+        "cell_shift": np.array([[0, 0, 0]], dtype=np.int64),
+        "edge_index": np.array([[0], [1]], dtype=np.int64),
+        "inv_edge_idx": np.array([0], dtype=np.int64),
+    }
+
+    num_mat, graph = hamgnn_wrapper_module.gen_hamgnn_graph(
+        "openmx", DummyAtoms(), scfout
+    )
+
+    scale = hamgnn_wrapper_module.HAMGNN_ANGSTROM_TO_BOHR
+    np.testing.assert_allclose(captured["pos"][1, 0], 1.0 * scale)
+    np.testing.assert_allclose(captured["cell"][0, 0], 10.0 * scale)
+    # nbr_shift is not re-scaled
+    np.testing.assert_allclose(captured["nbr_shift"][0, 0], 0.1)
+    assert num_mat == 3
