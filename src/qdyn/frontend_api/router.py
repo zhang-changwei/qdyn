@@ -86,9 +86,13 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         except Exception:
             return False
 
-    def verify_task_ownership_local(task_id: str, username: str) -> None:
-        """Verify that the task belongs to the user, raising HTTPException if not."""
-        api_verify_task_ownership(task_id, username)
+    def verify_task_ownership_local(task_id: str, username: str) -> str:
+        """Verify task ownership and return the verified owner string.
+
+        Wraps :func:`api_common.verify_task_ownership` so call sites can
+        reuse the owner without a second SQLite lookup.
+        """
+        return api_verify_task_ownership(task_id, username)
 
     def verify_job_belongs_to_task(task_id: str, job_uuid: str) -> None:
         """Verify that job_uuid belongs to the given task.
@@ -129,6 +133,47 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
                 status_code=404,
                 detail=f"Job '{job_uuid}' not found in task '{task_id}'",
             )
+
+    def verify_jobs_belong_to_task(task_id: str, job_uuids: list[str]) -> None:
+        """Verify that all job_uuids belong to the given task in one pass.
+
+        Calls ``list_task_jobs`` once and checks every UUID against the
+        resulting set.  Raises HTTPException(404) on the first UUID that
+        is not part of the task.
+
+        Args:
+            task_id: The task identifier.
+            job_uuids: The job UUIDs to validate.
+
+        Raises:
+            HTTPException: 404 if any job is not part of the task.
+        """
+        if not job_uuids:
+            return
+        manager = manager_getter()
+        try:
+            jobs_by_step = manager.list_task_jobs(task_id)
+        except (QueryError, ValidationError) as exc:
+            logger.warning(
+                "Task %s not found when verifying jobs: %s",
+                task_id, exc,
+            )
+            raise HTTPException(status_code=404, detail=str(exc))
+
+        all_uuids = {
+            uuid
+            for uuid_list in jobs_by_step.values()
+            for uuid in uuid_list
+        }
+        for job_uuid in job_uuids:
+            if job_uuid not in all_uuids:
+                logger.warning(
+                    "Job %s does not belong to task %s", job_uuid, task_id,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Job '{job_uuid}' not found in task '{task_id}'",
+                )
 
     def handle_query_errors(func):
         """Decorator to convert QueryError to HTTP 404 and ValidationError to HTTP 422."""
@@ -194,9 +239,8 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         Returns:
             A unified response containing the task's job status information.
         """
-        verify_task_ownership_local(task_id, username)
-
-        detail = service.get_task_detail(task_id, manager_getter)
+        owner = verify_task_ownership_local(task_id, username)
+        detail = service.get_task_detail(task_id, manager_getter, owner=owner)
         return detail
 
     # -------------------------------------------------------------------------
@@ -267,9 +311,8 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         Returns:
             A unified response containing job status summary.
         """
-        verify_task_ownership_local(task_id, username)
-
-        detail = service.get_task_detail(task_id, manager_getter)
+        owner = verify_task_ownership_local(task_id, username)
+        detail = service.get_task_detail(task_id, manager_getter, owner=owner)
         return success_response(detail.model_dump())
 
     # -------------------------------------------------------------------------
@@ -811,8 +854,9 @@ def create_frontend_router(manager_getter: Callable[[], MainWorkflow]) -> APIRou
         """Download selected files from one task as a zip archive."""
         verify_task_ownership_local(task_id, username)
 
-        for item in request.files:
-            verify_job_belongs_to_task(task_id, item.job_uuid)
+        verify_jobs_belong_to_task(
+            task_id, [item.job_uuid for item in request.files]
+        )
 
         manager = manager_getter()
 

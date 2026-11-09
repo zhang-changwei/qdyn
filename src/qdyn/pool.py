@@ -305,7 +305,14 @@ class WorkerPool:
     # ------------------------------------------------------------------
 
     def build_run_dir_access(self, job_uuid: str) -> RunDirAccess | None:
-        """Return a local or remote run-directory accessor for a job UUID."""
+        """Return a local or remote run-directory accessor for a job UUID.
+
+        Returns ``None`` only when job info cannot be retrieved or the
+        job has no ``run_dir``.  The returned accessor is **not** probed
+        for availability -- callers that need a preflight check should
+        invoke ``access.is_available()`` explicitly, otherwise the first
+        file operation will surface any missing-directory error.
+        """
         try:
             job_info = self.jc.get_job_info(job_id=job_uuid)
         except Exception:
@@ -320,8 +327,7 @@ class WorkerPool:
         if self.remote:
             try:
                 host = self._get_shared_host(self.jc.project, worker_name)
-                access = RemoteRunDirAccess(run_dir, host)
-                return access if access.is_available() else None
+                return RemoteRunDirAccess(run_dir, host)
             except Exception:
                 logger.warning(
                     "Failed to create remote access for worker %s, job %s",
@@ -335,6 +341,72 @@ class WorkerPool:
         if local_dir.is_dir():
             return LocalRunDirAccess(local_dir)
         return None
+
+    def build_run_dir_access_batch(
+        self, job_uuids: list[str]
+    ) -> dict[str, RunDirAccess | None]:
+        """Build run-dir accessors for many job UUIDs in one Mongo query.
+
+        For each UUID the highest-index job document is selected (matching
+        the single-UUID ``get_job_info`` semantics).  Remote accessors are
+        constructed without an ``is_available`` probe -- see
+        :meth:`build_run_dir_access`.
+
+        Args:
+            job_uuids: Job UUIDs to look up.  Duplicate UUIDs are folded
+                into a single result entry.
+
+        Returns:
+            A dict mapping each input UUID to a ``RunDirAccess`` (or
+            ``None`` when the job is missing, has no ``run_dir``, or the
+            remote host cannot be reached).  UUIDs not found in Mongo are
+            omitted from the result.
+        """
+        unique_uuids = list(dict.fromkeys(job_uuids))
+        if not unique_uuids:
+            return {}
+
+        # Fetch all job docs for the given UUIDs in one query, then pick
+        # the highest index per UUID locally (mirrors the single-UUID
+        # ``sort=[["index", DESCENDING]], limit=1`` behaviour).
+        cursor = self.jc.jobs.find(
+            {"uuid": {"$in": unique_uuids}},
+            projection=["uuid", "index", "worker", "run_dir"],
+        )
+
+        latest_by_uuid: dict[str, object] = {}
+        for doc in cursor:
+            uid = doc.get("uuid")
+            idx = doc.get("index", 0)
+            prev = latest_by_uuid.get(uid)
+            if prev is None or idx >= prev.get("index", 0):
+                latest_by_uuid[uid] = doc
+
+        result: dict[str, RunDirAccess | None] = {}
+        for uid, doc in latest_by_uuid.items():
+            run_dir = doc.get("run_dir")
+            if not run_dir:
+                result[uid] = None
+                continue
+            worker_name = doc.get("worker")
+            if self.remote:
+                try:
+                    host = self._get_shared_host(self.jc.project, worker_name)
+                    result[uid] = RemoteRunDirAccess(str(run_dir), host)
+                except Exception:
+                    logger.warning(
+                        "Failed to create remote access for worker %s, job %s",
+                        worker_name, uid, exc_info=True,
+                    )
+                    result[uid] = None
+            else:
+                local_dir = Path(str(run_dir))
+                result[uid] = (
+                    LocalRunDirAccess(local_dir)
+                    if local_dir.is_dir()
+                    else None
+                )
+        return result
 
 
     def _get_remote_host(self, worker_name: str):

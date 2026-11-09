@@ -1013,11 +1013,17 @@ class MainWorkflow:
             raise QueryError(f"Job '{job_uuid}' not found.")
         return job_info
 
-    def get_job_output(self, job_uuid: str):
-        """Retrieve a completed job's output from the jobstore."""
+    def get_job_output(self, job_uuid: str, *, confirmed_state: str | None = None):
+        """Retrieve a completed job's output from the jobstore.
+
+        Args:
+            confirmed_state: If the caller has already queried the job state
+                (e.g. via get_job_status), pass it here to skip the redundant
+                status lookup. When None, the state is queried again.
+        """
         jc = self._ensure_job_controller()
 
-        status = self.get_job_status(job_uuid)
+        status = confirmed_state if confirmed_state is not None else self.get_job_status(job_uuid)
         if status != 'COMPLETED':
             raise QueryError(
                 f"Job '{job_uuid}' is not completed. Current status: {status}"
