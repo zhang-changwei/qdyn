@@ -66,10 +66,10 @@ def extract_tdolaps(
     indices = np.arange(nstep) # from 0
 
     if dtype == np.float64:
-        olapT = np.complex128 if software == 'vasp' and not is_gamma_ver else np.float64
+        olapT = np.complex128 if not is_gamma_ver else np.float64
         evT = np.float64
     else:
-        olapT = np.complex64 if software == 'vasp' and not is_gamma_ver else np.float32
+        olapT = np.complex64 if not is_gamma_ver else np.float32
         evT = np.float32
 
     # resume
@@ -112,6 +112,7 @@ def extract_tdolaps(
                             'dirA': run_dirs[idx],
                             'dirB': run_dirs[idx + 1],
                             'software': software,
+                            'is_gamma_ver': is_gamma_ver,
                             'bmin': bmin,
                             'bmax': bmax,
                             'ikpt': ikpt,
@@ -147,6 +148,7 @@ def extract_tdolaps(
                         'dirA': run_dirs[idx],
                         'dirB': run_dirs[idx + 1],
                         'software': software,
+                        'is_gamma_ver': is_gamma_ver,
                         'bmin': bmin,
                         'bmax': bmax,
                         'ikpt': ikpt,
@@ -334,6 +336,7 @@ def calc_tdolap_wrapper(
     is_alle: bool = False,
     paw_info: aeolap.PawProj_info | None = None,
     sysname: str = 'qdyn',
+    is_gamma_ver: bool = False,
 ):
     # file checking and loading
     waveA_mapping = {
@@ -361,8 +364,8 @@ def calc_tdolap_wrapper(
         if not f_normalcarA.is_file() or not f_normalcarB.is_file():
             success = False
             return success, index, None, None
-    wfc_A = load_wfc(software, str(f_waveA))
-    wfc_B = load_wfc(software, str(f_waveB))
+    wfc_A = load_wfc(software, str(f_waveA), is_gamma_ver=is_gamma_ver)
+    wfc_B = load_wfc(software, str(f_waveB), is_gamma_ver=is_gamma_ver)
 
     S = None
     if software in ['hamgnn', 'siesta', 'abacus', 'openmx']:
@@ -408,7 +411,11 @@ def calc_tdolap_wrapper(
         cic_tdt = wfc_B.readBandCoeffs(slice(bmin-1, bmax)) # type: ignore
 
     # calculate tdolap
-    tdolap = calc_tdolap(software, cic_t, cic_tdt, S)
+    # Keep the coefficients aligned with the original PAW projectors.
+    tdolap = calc_tdolap(
+        software, cic_t, cic_tdt, S,
+        orthogon=False, is_gamma_ver=is_gamma_ver,
+    )
 
     if is_alle:
         from spinorb import read_cproj_NormalCar
